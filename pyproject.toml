@@ -1,0 +1,43 @@
+[project]
+name = "spektr"
+version = "0.1.0"
+description = "RAG-as-MCP-Server: S3 document sync to Qdrant + Neo4j with MCP search tools"
+requires-python = ">=3.13"
+dependencies = [
+    "cocoindex",
+    "qdrant-client",
+    "neo4j",
+    "httpx",
+    "fastmcp",
+    "pydantic-ai",
+    "pydantic-settings",
+    "pdf2image",
+    "boto3",
+    "uvicorn",
+    "fastapi",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "ruff",
+    "mypy",
+]
+
+[tool.ruff]
+line-length = 95
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+markers = [
+    "integration: tests requiring Docker services",
+]

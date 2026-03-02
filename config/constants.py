@@ -1,0 +1,25 @@
+DENSE_COLLECTION = "documents_dense"
+MULTIVEC_COLLECTION = "documents_multivec"
+DENSE_DIM = 2048
+MULTIVEC_DIM = 128
+
+ENTITY_TYPES = [
+    "PERSON",
+    "ORGANIZATION",
+    "PRODUCT",
+    "TECHNOLOGY",
+    "LOCATION",
+    "CONCEPT",
+    "EVENT",
+]
+
+RELATIONSHIP_TYPES = [
+    "WORKS_AT",
+    "PARTNERS_WITH",
+    "PRODUCES",
+    "USES_TECHNOLOGY",
+    "LOCATED_IN",
+    "ACQUIRED",
+    "COMPETES_WITH",
+    "REFERENCES",
+]
