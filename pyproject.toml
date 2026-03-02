@@ -4,11 +4,13 @@ version = "0.1.0"
 description = "RAG-as-MCP-Server: S3 document sync to Qdrant + Neo4j with MCP search tools"
 requires-python = ">=3.13"
 dependencies = [
+    "anthropic",
     "cocoindex",
     "qdrant-client",
     "neo4j",
     "httpx",
     "fastmcp",
+    "openai",
     "pydantic-ai",
     "pydantic-settings",
     "pdf2image",
