@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import base64
+import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
-from ingestion.embedder import JinaV4Embedder
+from ingestion.embedder import JinaV4Embedder, _TokenBucket
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -56,7 +58,7 @@ class TestEmbedText:
         ) as mock_post:
             await embedder.embed_text(["test"])
 
-        assert mock_post.call_args.args[0] == JinaV4Embedder.JINA_API_URL
+        assert mock_post.call_args.args[0] == embedder._embeddings_url
 
 
 class TestEmbedTextQuery:
@@ -157,6 +159,79 @@ class TestErrorHandling:
         ):
             with pytest.raises(httpx.HTTPStatusError):
                 await embedder.embed_text(["fail"])
+
+    async def test_retry_exhaustion_on_429(
+        self, embedder: JinaV4Embedder,
+    ) -> None:
+        """EC-01: Repeated 429s exhaust retries and raise RetryError."""
+        from tenacity import RetryError
+
+        mock_resp = MagicMock(spec=httpx.Response)
+        mock_resp.status_code = 429
+        mock_resp.text = "Too Many Requests"
+        mock_resp.request = MagicMock()
+        with patch.object(
+            embedder._client,
+            "post",
+            new_callable=AsyncMock,
+            return_value=mock_resp,
+        ):
+            with pytest.raises(RetryError):
+                await embedder.embed_text(["overloaded"])
+
+
+class TestRateLimiter:
+    async def test_rpm_throttling(self, embedder: JinaV4Embedder) -> None:
+        """Requests beyond RPM limit are delayed."""
+        embedder._rpm_limiter = _TokenBucket(tokens_per_sec=2 / 60, burst=2)
+        mock_resp = _mock_response([{"embedding": [0.1] * 2048}])
+
+        with patch.object(
+            embedder._client, "post",
+            new_callable=AsyncMock, return_value=mock_resp,
+        ):
+            # First 2 should be instant (burst)
+            t0 = time.monotonic()
+            await embedder.embed_text(["a"])
+            await embedder.embed_text(["b"])
+            fast_elapsed = time.monotonic() - t0
+
+            # Third should be delayed
+            t1 = time.monotonic()
+            await embedder.embed_text(["c"])
+            slow_elapsed = time.monotonic() - t1
+
+        assert fast_elapsed < 1.0
+        assert slow_elapsed >= 0.5  # had to wait for token refill
+
+    async def test_concurrent_requests_respect_semaphore(
+        self, embedder: JinaV4Embedder,
+    ) -> None:
+        """Concurrency semaphore limits parallel requests."""
+        call_count = 0
+        max_concurrent = 0
+
+        async def slow_post(*args, **kwargs):
+            nonlocal call_count, max_concurrent
+            call_count += 1
+            current = call_count
+            if current > max_concurrent:
+                max_concurrent = current
+            await asyncio.sleep(0.1)
+            call_count -= 1
+            return _mock_response([{"embedding": [0.1] * 2048}])
+
+        embedder._semaphore = asyncio.Semaphore(2)
+        with patch.object(
+            embedder._client, "post", side_effect=slow_post,
+        ):
+            await asyncio.gather(
+                embedder.embed_text(["a"]),
+                embedder.embed_text(["b"]),
+                embedder.embed_text(["c"]),
+            )
+
+        assert max_concurrent <= 2
 
 
 @pytest.mark.integration
