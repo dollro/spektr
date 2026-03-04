@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+import os
+
+# Set required env vars before any config imports trigger Settings validation.
+os.environ.setdefault("JINA_API_KEY", "test-jina-key")
+os.environ.setdefault("JINA_MODEL", "jina-clip-v4")
+os.environ.setdefault("NEO4J_PASSWORD", "test-neo4j-password")
+
 import pathlib
 from unittest.mock import AsyncMock, MagicMock
 
@@ -170,3 +177,23 @@ async def neo4j_driver():  # type: ignore[no-untyped-def]
     async with driver.session() as session:
         await session.run("MATCH (n) DETACH DELETE n")
     await driver.close()
+
+
+# --- Agent fixtures ---
+
+
+@pytest.fixture
+async def rag_agent():  # type: ignore[no-untyped-def]
+    """Create a RAG agent with a dummy API key for testing.
+
+    Returns (agent, server) tuple. Use agent.override() to
+    swap model and toolsets in tests.
+    """
+    import os
+
+    os.environ.setdefault("ANTHROPIC_API_KEY", "test-key-not-real")
+
+    from agent.agent import create_rag_agent
+
+    agent, server = await create_rag_agent()
+    return agent, server

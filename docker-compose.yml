@@ -26,7 +26,7 @@ services:
     environment:
       POSTGRES_DB: cocoindex
       POSTGRES_USER: cocoindex
-      POSTGRES_PASSWORD: cocoindex
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cocoindex}
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
