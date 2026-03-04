@@ -83,7 +83,6 @@ def _make_point_id(key: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, key))
 
 
-
 def _build_page_tasks(
     page,  # type: ignore[no-untyped-def]
     source_file: str,
@@ -96,51 +95,102 @@ def _build_page_tasks(
     tasks = []
 
     if page.content_type == "text":
-        tasks.append(_async_process_text_page(
-            source_file, page.text, page.page_number,
-            mime, now, qdrant, graphiti_writer,
-        ))
+        tasks.append(
+            _async_process_text_page(
+                source_file,
+                page.text,
+                page.page_number,
+                mime,
+                now,
+                qdrant,
+                graphiti_writer,
+            )
+        )
     elif page.content_type == "pdf":
         if page.text.strip():
-            tasks.append(_async_process_text_page(
-                source_file, page.text, page.page_number,
-                mime, now, qdrant, graphiti_writer,
-            ))
-        tasks.append(_async_process_visual_page(
-            source_file, page.image_bytes, page.page_number,
-            "pdf_page", mime, now, qdrant,
-        ))
+            tasks.append(
+                _async_process_text_page(
+                    source_file,
+                    page.text,
+                    page.page_number,
+                    mime,
+                    now,
+                    qdrant,
+                    graphiti_writer,
+                )
+            )
+        tasks.append(
+            _async_process_visual_page(
+                source_file,
+                page.image_bytes,
+                page.page_number,
+                "pdf_page",
+                mime,
+                now,
+                qdrant,
+            )
+        )
     else:
-        tasks.append(_async_process_visual_page(
-            source_file, page.image_bytes, page.page_number,
-            "image", mime, now, qdrant,
-        ))
+        tasks.append(
+            _async_process_visual_page(
+                source_file,
+                page.image_bytes,
+                page.page_number,
+                "image",
+                mime,
+                now,
+                qdrant,
+            )
+        )
 
     return tasks
 
 
 async def _async_process_text_page(
-    source_file: str, text: str, page_number: int,
-    mime: str, now: str, qdrant: QdrantClient,
+    source_file: str,
+    text: str,
+    page_number: int,
+    mime: str,
+    now: str,
+    qdrant: QdrantClient,
     graphiti_writer: GraphitiWriter | None,
 ) -> None:
     """Async wrapper for _process_text_page."""
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(
-        None, _process_text_page,
-        source_file, text, page_number, mime, now, qdrant, graphiti_writer,
+        None,
+        _process_text_page,
+        source_file,
+        text,
+        page_number,
+        mime,
+        now,
+        qdrant,
+        graphiti_writer,
     )
 
 
 async def _async_process_visual_page(
-    source_file: str, image_bytes: bytes, page_number: int,
-    content_type: str, mime: str, now: str, qdrant: QdrantClient,
+    source_file: str,
+    image_bytes: bytes,
+    page_number: int,
+    content_type: str,
+    mime: str,
+    now: str,
+    qdrant: QdrantClient,
 ) -> None:
     """Async wrapper for _process_visual_page."""
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(
-        None, _process_visual_page,
-        source_file, image_bytes, page_number, content_type, mime, now, qdrant,
+        None,
+        _process_visual_page,
+        source_file,
+        image_bytes,
+        page_number,
+        content_type,
+        mime,
+        now,
+        qdrant,
     )
 
 
@@ -363,7 +413,12 @@ def ingest_file(content: bytes, filename: str) -> str:
             for page in pages:
                 tasks.extend(
                     _build_page_tasks(
-                        page, filename, mime, now, qdrant, graphiti_writer,
+                        page,
+                        filename,
+                        mime,
+                        now,
+                        qdrant,
+                        graphiti_writer,
                     )
                 )
             if tasks:
@@ -459,6 +514,7 @@ def handle_s3_delete(s3_key: str) -> None:
     # Graphiti doesn't expose bulk invalidation by source, so we
     # search for matching episodes and mark them individually.
     try:
+
         async def _invalidate_graph() -> None:
             from ingestion.graphiti_client import (
                 close_graphiti,
@@ -561,9 +617,11 @@ def run_pipeline() -> None:
 
     # Setup and run pipeline
     cocoindex.setup_all_flows()
-    run_async(cocoindex.update_all_flows_async(
-        cocoindex.FlowLiveUpdaterOptions(live_mode=False, print_stats=True),
-    ))
+    run_async(
+        cocoindex.update_all_flows_async(
+            cocoindex.FlowLiveUpdaterOptions(live_mode=False, print_stats=True),
+        )
+    )
 
     duration_ms = round((time.monotonic() - t0) * 1000)
     logger.info(

@@ -161,7 +161,8 @@ class TestErrorHandling:
                 await embedder.embed_text(["fail"])
 
     async def test_retry_exhaustion_on_429(
-        self, embedder: JinaV4Embedder,
+        self,
+        embedder: JinaV4Embedder,
     ) -> None:
         """EC-01: Repeated 429s exhaust retries and raise RetryError."""
         from tenacity import RetryError
@@ -187,8 +188,10 @@ class TestRateLimiter:
         mock_resp = _mock_response([{"embedding": [0.1] * 2048}])
 
         with patch.object(
-            embedder._client, "post",
-            new_callable=AsyncMock, return_value=mock_resp,
+            embedder._client,
+            "post",
+            new_callable=AsyncMock,
+            return_value=mock_resp,
         ):
             # First 2 should be instant (burst)
             t0 = time.monotonic()
@@ -205,7 +208,8 @@ class TestRateLimiter:
         assert slow_elapsed >= 0.5  # had to wait for token refill
 
     async def test_concurrent_requests_respect_semaphore(
-        self, embedder: JinaV4Embedder,
+        self,
+        embedder: JinaV4Embedder,
     ) -> None:
         """Concurrency semaphore limits parallel requests."""
         call_count = 0
@@ -223,7 +227,9 @@ class TestRateLimiter:
 
         embedder._semaphore = asyncio.Semaphore(2)
         with patch.object(
-            embedder._client, "post", side_effect=slow_post,
+            embedder._client,
+            "post",
+            side_effect=slow_post,
         ):
             await asyncio.gather(
                 embedder.embed_text(["a"]),
