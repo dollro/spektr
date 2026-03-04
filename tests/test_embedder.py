@@ -9,14 +9,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from ingestion.embedder import JinaV4Embedder, _TokenBucket
+from ingestion.embedder import Embedder, TokenBucket, create_embedder
+from ingestion.embedders.jina import JinaV4Embedder
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
 @pytest.fixture
-def embedder() -> JinaV4Embedder:
-    return JinaV4Embedder(api_key="test-key")
+async def embedder() -> JinaV4Embedder:
+    e = JinaV4Embedder(api_key="test-key")
+    e._ensure_loop_resources()
+    return e
 
 
 def _mock_response(data: list[dict]) -> httpx.Response:  # type: ignore[type-arg]
@@ -25,6 +28,23 @@ def _mock_response(data: list[dict]) -> httpx.Response:  # type: ignore[type-arg
     resp.status_code = 200
     resp.json.return_value = {"data": data}
     return resp
+
+
+class TestEmbedderProtocol:
+    def test_jina_implements_protocol(self) -> None:
+        assert isinstance(JinaV4Embedder(api_key="k"), Embedder)
+
+    def test_factory_returns_jina(self) -> None:
+        emb = create_embedder(api_key="k")
+        assert isinstance(emb, JinaV4Embedder)
+
+    def test_factory_unknown_provider(self) -> None:
+        with patch(
+            "ingestion.embedder.settings",
+        ) as mock_settings:
+            mock_settings.embedding_provider = "nope"
+            with pytest.raises(ValueError, match="Unknown embedding provider"):
+                create_embedder()
 
 
 class TestEmbedText:
@@ -184,7 +204,7 @@ class TestErrorHandling:
 class TestRateLimiter:
     async def test_rpm_throttling(self, embedder: JinaV4Embedder) -> None:
         """Requests beyond RPM limit are delayed."""
-        embedder._rpm_limiter = _TokenBucket(tokens_per_sec=2 / 60, burst=2)
+        embedder._rpm_limiter = TokenBucket(tokens_per_sec=2 / 60, burst=2)
         mock_resp = _mock_response([{"embedding": [0.1] * 2048}])
 
         with patch.object(
@@ -215,7 +235,7 @@ class TestRateLimiter:
         call_count = 0
         max_concurrent = 0
 
-        async def slow_post(*args, **kwargs):
+        async def slow_post(*args, **kwargs):  # type: ignore[no-untyped-def]
             nonlocal call_count, max_concurrent
             call_count += 1
             current = call_count
@@ -263,6 +283,10 @@ class TestEmbedderIntegration:
         result = await live_embedder.embed_image(png)
         assert len(result) == 2048
 
+    @pytest.mark.skipif(
+        not __import__("config.settings", fromlist=["settings"]).settings.multivec_enabled,
+        reason="multivec_enabled=False (requires jina-colbert-v2)",
+    )
     async def test_embed_multi_vector_returns_128d(
         self, live_embedder: JinaV4Embedder
     ) -> None:
@@ -271,6 +295,10 @@ class TestEmbedderIntegration:
         assert len(result) > 0
         assert all(len(v) == 128 for v in result)
 
+    @pytest.mark.skipif(
+        not __import__("config.settings", fromlist=["settings"]).settings.multivec_enabled,
+        reason="multivec_enabled=False (requires jina-colbert-v2)",
+    )
     async def test_embed_query_multi_vector_structure(
         self, live_embedder: JinaV4Embedder
     ) -> None:
