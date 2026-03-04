@@ -89,6 +89,9 @@ async def test_entity_name_normalization() -> None:
     assert _normalize_entity_name("  google LLC ") == "Google Llc"
     assert _normalize_entity_name("APPLE") == "Apple"
     assert _normalize_entity_name("  sam altman  ") == "Sam Altman"
+    assert _normalize_entity_name("  ACME CORP  ") == "Acme Corp"
+    assert _normalize_entity_name("google") == "Google"
+    assert _normalize_entity_name("  hello WORLD  ") == "Hello World"
 
 
 async def test_prompt_contains_text() -> None:

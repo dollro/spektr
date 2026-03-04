@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any, Literal, Protocol
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
+from config.constants import RELATIONSHIP_TYPES
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
+
 
 EntityType = Literal[
     "PERSON",
@@ -18,16 +21,6 @@ EntityType = Literal[
     "LOCATION",
     "CONCEPT",
     "EVENT",
-]
-RelationType = Literal[
-    "WORKS_AT",
-    "PARTNERS_WITH",
-    "PRODUCES",
-    "USES_TECHNOLOGY",
-    "LOCATED_IN",
-    "ACQUIRED",
-    "COMPETES_WITH",
-    "REFERENCES",
 ]
 
 
@@ -40,8 +33,15 @@ class Entity(BaseModel):
 class Relationship(BaseModel):
     source: str
     target: str
-    relation: RelationType
+    relation: str
     properties: dict[str, Any] = {}
+
+    @field_validator("relation")
+    @classmethod
+    def warn_unknown_relation(cls, v: str) -> str:
+        if v not in RELATIONSHIP_TYPES:
+            logger.warning("Unknown relationship type: %s", v)
+        return v
 
 
 class ExtractionResult(BaseModel):
@@ -116,7 +116,7 @@ class OpenAIClient:
 
 
 def get_llm_client() -> LLMClient:
-    """Factory: create LLM client based on settings.llm_provider."""
+    """Factory: create LLM client based on settings."""
     provider = settings.llm_provider.lower()
     if provider == "anthropic":
         return AnthropicClient(model=settings.llm_model)
@@ -132,21 +132,22 @@ Extract entities and relationships from the following text.
 Return JSON with this exact structure:
 {{
   "entities": [
-    {{"name": "...", "type": "PERSON|ORGANIZATION|PRODUCT|TECHNOLOGY|\
-LOCATION|CONCEPT|EVENT", "description": "..."}}
+    {{"name": "...", "type": "...", "description": "..."}}
   ],
   "relationships": [
     {{"source": "entity_name", "target": "entity_name", \
-"relation": "WORKS_AT|PARTNERS_WITH|PRODUCES|USES_TECHNOLOGY|\
-LOCATED_IN|ACQUIRED|COMPETES_WITH|REFERENCES", "properties": {{}}}}
+"relation": "...", "properties": {{}}}}
   ]
 }}
 
 Rules:
+- Entity types MUST be one of: PERSON, ORGANIZATION, PRODUCT, \
+TECHNOLOGY, LOCATION, CONCEPT, EVENT
+- Relationship types should be SCREAMING_SNAKE_CASE (e.g. \
+WORKS_AT, PARTNERS_WITH, USES_TECHNOLOGY, LOCATED_IN)
 - Normalize entity names (strip whitespace, title case)
 - Only extract clearly stated relationships, don't infer
 - Keep descriptions brief (1 sentence max)
-- Use CONCEPT type for abstract topics, methodologies, standards
 
 Text:
 {text}
@@ -186,36 +187,54 @@ async def extract_entities(text: str, llm_client: LLMClient) -> ExtractionResult
     """Extract entities and relationships from text via LLM.
 
     Retries once on parse failure. Returns empty result after
-    max retries.
+    max retries. Applies asyncio.timeout for overall time bound.
     """
     prompt = EXTRACTION_PROMPT.format(text=text)
     messages = [{"role": "user", "content": prompt}]
 
     last_error: Exception | None = None
-    for attempt in range(MAX_RETRIES):
-        try:
-            raw = await llm_client.chat(messages)
-            return _parse_extraction(raw)
-        except (json.JSONDecodeError, ValueError, KeyError) as exc:
-            last_error = exc
-            logger.warning(
-                "Entity extraction parse failure (attempt %d): %s",
-                attempt + 1,
-                exc,
-            )
-            # On first failure, add error feedback for retry
-            if attempt == 0:
-                messages.append({"role": "assistant", "content": raw})
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": (
-                            f"Your response was not valid JSON: {exc}. "
-                            "Please return only valid JSON matching the "
-                            "schema above."
-                        ),
-                    }
-                )
+    try:
+        async with asyncio.timeout(settings.extraction_timeout):
+            for attempt in range(MAX_RETRIES):
+                try:
+                    raw = await llm_client.chat(messages)
+                    return _parse_extraction(raw)
+                except (
+                    json.JSONDecodeError,
+                    ValueError,
+                    KeyError,
+                ) as exc:
+                    last_error = exc
+                    logger.warning(
+                        "Entity extraction parse failure (attempt %d): %s",
+                        attempt + 1,
+                        exc,
+                    )
+                    if attempt == 0:
+                        messages.append(
+                            {
+                                "role": "assistant",
+                                "content": raw,
+                            }
+                        )
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": (
+                                    f"Your response was not "
+                                    f"valid JSON: {exc}. "
+                                    "Please return only valid "
+                                    "JSON matching the schema "
+                                    "above."
+                                ),
+                            }
+                        )
+    except TimeoutError:
+        logger.warning(
+            "Entity extraction timed out after %ds",
+            settings.extraction_timeout,
+        )
+        return ExtractionResult()
 
     logger.warning(
         "Entity extraction failed after %d attempts: %s",
