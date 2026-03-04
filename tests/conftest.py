@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import os
 
-# Set required env vars before any config imports trigger Settings validation.
+import dotenv
+
+# Load .env so real credentials are available for integration tests.
+# setdefault fills in dummy values only for vars not in .env (unit tests).
+dotenv.load_dotenv()
 os.environ.setdefault("JINA_API_KEY", "test-jina-key")
 os.environ.setdefault("JINA_MODEL", "jina-embeddings-v4")
 os.environ.setdefault("NEO4J_PASSWORD", "test-neo4j-password")
@@ -63,7 +67,7 @@ def sample_png_name() -> str:
 
 @pytest.fixture
 def mock_embedder() -> MagicMock:
-    """Mock JinaV4Embedder returning deterministic vectors."""
+    """Mock embedder returning deterministic vectors."""
     embedder = MagicMock()
     embedder.embed_text = AsyncMock(
         return_value=[[0.1] * DENSE_DIM],
@@ -132,10 +136,14 @@ def qdrant_client():  # type: ignore[no-untyped-def]
         if client.collection_exists(name):
             client.delete_collection(name)
 
-    # Provision fresh collections
-    from ingestion.qdrant_setup import ensure_collections
+    # Provision fresh collections (always create both for test coverage)
+    from ingestion.qdrant_setup import (
+        create_dense_collection,
+        create_multivec_collection,
+    )
 
-    ensure_collections(client)
+    create_dense_collection(client)
+    create_multivec_collection(client)
 
     yield client
 

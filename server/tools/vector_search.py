@@ -1,6 +1,6 @@
 """Dense vector search tool for MCP server.
 
-Embeds a query via Jina v4 and searches the Qdrant dense collection.
+Embeds a query and searches the Qdrant dense collection.
 """
 
 from __future__ import annotations
@@ -11,13 +11,13 @@ from qdrant_client import QdrantClient, models
 
 from config.constants import DENSE_COLLECTION
 from config.settings import settings
-from ingestion.embedder import JinaV4Embedder
+from ingestion.embedder import Embedder, create_embedder
 from server.models import SearchResult
 
 logger = logging.getLogger(__name__)
 
 _qdrant_client: QdrantClient | None = None
-_embedder: JinaV4Embedder | None = None
+_embedder: Embedder | None = None
 
 
 def _get_qdrant_client() -> QdrantClient:
@@ -27,10 +27,10 @@ def _get_qdrant_client() -> QdrantClient:
     return _qdrant_client
 
 
-def _get_embedder() -> JinaV4Embedder:
+def _get_embedder() -> Embedder:
     global _embedder  # noqa: PLW0603
     if _embedder is None:
-        _embedder = JinaV4Embedder()
+        _embedder = create_embedder()
     return _embedder
 
 
@@ -44,7 +44,7 @@ async def vector_search(
 ) -> list[dict]:  # type: ignore[type-arg]
     """Search documents by semantic similarity.
 
-    Embeds the query with Jina v4 and performs nearest-neighbor
+    Embeds the query and performs nearest-neighbor
     search against the Qdrant dense collection. Supports filtering
     by content type and source file name.
 

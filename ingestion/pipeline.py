@@ -21,17 +21,13 @@ from config.constants import DENSE_COLLECTION, MULTIVEC_COLLECTION
 from config.logging import get_logger
 from config.settings import settings
 from ingestion._utils import run_async
+from ingestion.embedder import Embedder, create_embedder
 from ingestion.file_processor import (
     TextChunk,
     file_to_pages,
     semantic_chunk,
 )
 from ingestion.graph_writer import GraphitiWriter
-from ingestion.jina_cocoindex_ops import (
-    jina_embed_image,
-    jina_embed_image_multivec,
-    jina_embed_text,
-)
 from ingestion.neo4j_setup import create_neo4j_schema, get_driver
 from ingestion.qdrant_setup import ensure_collections
 
@@ -89,6 +85,7 @@ def _build_page_tasks(
     mime: str,
     now: str,
     qdrant: QdrantClient,
+    embedder: Embedder,
     graphiti_writer: GraphitiWriter | None,
 ) -> list:  # type: ignore[type-arg]
     """Return a list of async coroutines for processing one page."""
@@ -96,31 +93,33 @@ def _build_page_tasks(
 
     if page.content_type == "text":
         tasks.append(
-            _async_process_text_page(
+            _process_text_page(
                 source_file,
                 page.text,
                 page.page_number,
                 mime,
                 now,
                 qdrant,
+                embedder,
                 graphiti_writer,
             )
         )
     elif page.content_type == "pdf":
         if page.text.strip():
             tasks.append(
-                _async_process_text_page(
+                _process_text_page(
                     source_file,
                     page.text,
                     page.page_number,
                     mime,
                     now,
                     qdrant,
+                    embedder,
                     graphiti_writer,
                 )
             )
         tasks.append(
-            _async_process_visual_page(
+            _process_visual_page(
                 source_file,
                 page.image_bytes,
                 page.page_number,
@@ -128,11 +127,12 @@ def _build_page_tasks(
                 mime,
                 now,
                 qdrant,
+                embedder,
             )
         )
     else:
         tasks.append(
-            _async_process_visual_page(
+            _process_visual_page(
                 source_file,
                 page.image_bytes,
                 page.page_number,
@@ -140,67 +140,21 @@ def _build_page_tasks(
                 mime,
                 now,
                 qdrant,
+                embedder,
             )
         )
 
     return tasks
 
 
-async def _async_process_text_page(
+async def _process_text_page(
     source_file: str,
     text: str,
     page_number: int,
     mime: str,
     now: str,
     qdrant: QdrantClient,
-    graphiti_writer: GraphitiWriter | None,
-) -> None:
-    """Async wrapper for _process_text_page."""
-    loop = asyncio.get_running_loop()
-    await loop.run_in_executor(
-        None,
-        _process_text_page,
-        source_file,
-        text,
-        page_number,
-        mime,
-        now,
-        qdrant,
-        graphiti_writer,
-    )
-
-
-async def _async_process_visual_page(
-    source_file: str,
-    image_bytes: bytes,
-    page_number: int,
-    content_type: str,
-    mime: str,
-    now: str,
-    qdrant: QdrantClient,
-) -> None:
-    """Async wrapper for _process_visual_page."""
-    loop = asyncio.get_running_loop()
-    await loop.run_in_executor(
-        None,
-        _process_visual_page,
-        source_file,
-        image_bytes,
-        page_number,
-        content_type,
-        mime,
-        now,
-        qdrant,
-    )
-
-
-def _process_text_page(
-    source_file: str,
-    text: str,
-    page_number: int,
-    mime: str,
-    now: str,
-    qdrant: QdrantClient,
+    embedder: Embedder,
     graphiti_writer: GraphitiWriter | None,
 ) -> None:
     """Process a text page: chunk, embed, store dense, ingest to Graphiti."""
@@ -217,7 +171,8 @@ def _process_text_page(
             chunk.chunk_index,
         )
         try:
-            vector = jina_embed_text(chunk.text)
+            vectors = await embedder.embed_text([chunk.text])
+            vector = vectors[0]
         except Exception:
             logger.exception(
                 "Text embedding failed for %s chunk %d",
@@ -241,7 +196,7 @@ def _process_text_page(
                     "metadata": {
                         "mime_type": mime,
                         "ingested_at": now,
-                        "s3_key": source_file,
+                        "source_key": source_file,
                     },
                 },
             ),
@@ -255,10 +210,10 @@ def _process_text_page(
 
     # Graphiti episode ingestion (handles entity extraction internally)
     if graphiti_writer is not None:
-        _ingest_to_graphiti(source_file, chunks, graphiti_writer)
+        await _ingest_to_graphiti(source_file, chunks, graphiti_writer)
 
 
-def _process_visual_page(
+async def _process_visual_page(
     source_file: str,
     image_bytes: bytes,
     page_number: int,
@@ -266,13 +221,14 @@ def _process_visual_page(
     mime: str,
     now: str,
     qdrant: QdrantClient,
+    embedder: Embedder,
 ) -> None:
     """Process an image/PDF page: dense + multivec embedding."""
     page_key = f"{source_file}::p{page_number}"
 
     # Dense embedding
     try:
-        vector = jina_embed_image(image_bytes)
+        vector = await embedder.embed_image(image_bytes)
         qdrant.upsert(
             collection_name=DENSE_COLLECTION,
             points=[
@@ -288,7 +244,7 @@ def _process_visual_page(
                         "metadata": {
                             "mime_type": mime,
                             "ingested_at": now,
-                            "s3_key": source_file,
+                            "source_key": source_file,
                         },
                     },
                 ),
@@ -301,66 +257,63 @@ def _process_visual_page(
             page_number,
         )
 
-    # ColBERT multi-vector
-    try:
-        vectors = jina_embed_image_multivec(image_bytes)
-        img = Image.open(io.BytesIO(image_bytes))
-        img_width, img_height = img.size
-        qdrant.upsert(
-            collection_name=MULTIVEC_COLLECTION,
-            points=[
-                models.PointStruct(
-                    id=_make_point_id(f"mv::{page_key}"),
-                    vector={"colbert": vectors},
-                    payload={
-                        "source_file": source_file,
-                        "content_type": content_type,
-                        "page_number": page_number,
-                        "image_width": img_width,
-                        "image_height": img_height,
-                        "metadata": {
-                            "mime_type": mime,
-                            "ingested_at": now,
-                            "s3_key": source_file,
+    # ColBERT multi-vector (requires jina-colbert-v2)
+    if settings.multivec_enabled:
+        try:
+            vectors = await embedder.embed_multi_vector(image_bytes)
+            img = Image.open(io.BytesIO(image_bytes))
+            img_width, img_height = img.size
+            qdrant.upsert(
+                collection_name=MULTIVEC_COLLECTION,
+                points=[
+                    models.PointStruct(
+                        id=_make_point_id(f"mv::{page_key}"),
+                        vector={"colbert": vectors},
+                        payload={
+                            "source_file": source_file,
+                            "content_type": content_type,
+                            "page_number": page_number,
+                            "image_width": img_width,
+                            "image_height": img_height,
+                            "metadata": {
+                                "mime_type": mime,
+                                "ingested_at": now,
+                                "source_key": source_file,
+                            },
                         },
-                    },
-                ),
-            ],
-        )
-    except Exception:
-        logger.exception(
-            "Multivec embedding failed for %s page %d",
-            source_file,
-            page_number,
-        )
+                    ),
+                ],
+            )
+        except Exception:
+            logger.exception(
+                "Multivec embedding failed for %s page %d",
+                source_file,
+                page_number,
+            )
 
 
-def _ingest_to_graphiti(
+async def _ingest_to_graphiti(
     source_file: str,
     chunks: list[TextChunk],
     graphiti_writer: GraphitiWriter,
 ) -> None:
     """Ingest chunks as Graphiti episodes (entity extraction is automatic)."""
-
-    async def _do_ingest() -> None:
-        ref_time = datetime.now(tz=UTC)
-        for chunk in chunks:
-            try:
-                await graphiti_writer.ingest_chunk(
-                    chunk_text=chunk.text,
-                    source_key=source_file,
-                    page_number=chunk.page_number,
-                    chunk_index=chunk.chunk_index,
-                    reference_time=ref_time,
-                )
-            except Exception:
-                logger.exception(
-                    "Graphiti ingestion failed for %s chunk %d",
-                    source_file,
-                    chunk.chunk_index,
-                )
-
-    run_async(_do_ingest())
+    ref_time = datetime.now(tz=UTC)
+    for chunk in chunks:
+        try:
+            await graphiti_writer.ingest_chunk(
+                chunk_text=chunk.text,
+                source_key=source_file,
+                page_number=chunk.page_number,
+                chunk_index=chunk.chunk_index,
+                reference_time=ref_time,
+            )
+        except Exception:
+            logger.exception(
+                "Graphiti ingestion failed for %s chunk %d",
+                source_file,
+                chunk.chunk_index,
+            )
 
 
 @cocoindex.op.function()
@@ -409,20 +362,25 @@ def ingest_file(content: bytes, filename: str) -> str:
             graphiti_writer = GraphitiWriter()
 
         async def _process_all_pages() -> None:
-            tasks = []
-            for page in pages:
-                tasks.extend(
-                    _build_page_tasks(
-                        page,
-                        filename,
-                        mime,
-                        now,
-                        qdrant,
-                        graphiti_writer,
+            embedder = create_embedder()
+            try:
+                tasks = []
+                for page in pages:
+                    tasks.extend(
+                        _build_page_tasks(
+                            page,
+                            filename,
+                            mime,
+                            now,
+                            qdrant,
+                            embedder,
+                            graphiti_writer,
+                        )
                     )
-                )
-            if tasks:
-                await asyncio.gather(*tasks)
+                if tasks:
+                    await asyncio.gather(*tasks)
+            finally:
+                await embedder.close()
 
         run_async(_process_all_pages())
     except Exception:
@@ -485,19 +443,20 @@ def handle_s3_delete(s3_key: str) -> None:
             ),
         )
         # Delete multivec collection points by source_file
-        qdrant.delete(
-            collection_name=MULTIVEC_COLLECTION,
-            points_selector=models.FilterSelector(
-                filter=models.Filter(
-                    must=[
-                        models.FieldCondition(
-                            key="source_file",
-                            match=models.MatchValue(value=s3_key),
-                        ),
-                    ],
+        if settings.multivec_enabled:
+            qdrant.delete(
+                collection_name=MULTIVEC_COLLECTION,
+                points_selector=models.FilterSelector(
+                    filter=models.Filter(
+                        must=[
+                            models.FieldCondition(
+                                key="source_file",
+                                match=models.MatchValue(value=s3_key),
+                            ),
+                        ],
+                    ),
                 ),
-            ),
-        )
+            )
         logger.info(
             "Deleted Qdrant points for %s",
             s3_key,

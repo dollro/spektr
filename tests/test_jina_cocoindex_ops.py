@@ -4,17 +4,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ingestion.jina_cocoindex_ops import (
-    jina_embed_image,
-    jina_embed_image_multivec,
-    jina_embed_text,
+from ingestion.cocoindex_ops import (
+    op_embed_image,
+    op_embed_image_multivec,
+    op_embed_text,
 )
 
 
 @pytest.fixture(autouse=True)
 def _reset_embedder() -> None:  # type: ignore[misc]
     """Reset the module-level embedder singleton between tests."""
-    import ingestion.jina_cocoindex_ops as mod
+    import ingestion.cocoindex_ops as mod
 
     mod._embedder = None
     yield  # type: ignore[misc]
@@ -30,47 +30,47 @@ def mock_embedder() -> MagicMock:
     return embedder
 
 
-class TestJinaEmbedText:
+class TestEmbedText:
     def test_calls_embed_text(self, mock_embedder: MagicMock) -> None:
         with patch(
-            "ingestion.jina_cocoindex_ops._get_embedder",
+            "ingestion.cocoindex_ops._get_embedder",
             return_value=mock_embedder,
         ):
-            result = jina_embed_text("hello world")
+            result = op_embed_text("hello world")
 
         mock_embedder.embed_text.assert_called_once_with(["hello world"])
         assert len(result) == 2048
 
     def test_returns_single_vector(self, mock_embedder: MagicMock) -> None:
         with patch(
-            "ingestion.jina_cocoindex_ops._get_embedder",
+            "ingestion.cocoindex_ops._get_embedder",
             return_value=mock_embedder,
         ):
-            result = jina_embed_text("test")
+            result = op_embed_text("test")
 
         assert isinstance(result, list)
         assert all(isinstance(v, float) for v in result)
 
 
-class TestJinaEmbedImage:
+class TestEmbedImage:
     def test_calls_embed_image(self, mock_embedder: MagicMock) -> None:
         with patch(
-            "ingestion.jina_cocoindex_ops._get_embedder",
+            "ingestion.cocoindex_ops._get_embedder",
             return_value=mock_embedder,
         ):
-            result = jina_embed_image(b"fake_image")
+            result = op_embed_image(b"fake_image")
 
         mock_embedder.embed_image.assert_called_once_with(b"fake_image")
         assert len(result) == 2048
 
 
-class TestJinaEmbedImageMultivec:
+class TestEmbedImageMultivec:
     def test_calls_embed_multi_vector(self, mock_embedder: MagicMock) -> None:
         with patch(
-            "ingestion.jina_cocoindex_ops._get_embedder",
+            "ingestion.cocoindex_ops._get_embedder",
             return_value=mock_embedder,
         ):
-            result = jina_embed_image_multivec(b"fake_image")
+            result = op_embed_image_multivec(b"fake_image")
 
         mock_embedder.embed_multi_vector.assert_called_once_with(b"fake_image")
         assert len(result) == 2

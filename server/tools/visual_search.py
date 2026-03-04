@@ -1,7 +1,7 @@
-"""ColBERT multi-vector visual search tool for MCP server.
+"""Multi-vector visual search tool for MCP server.
 
-Embeds a query via Jina v4 ColBERT and searches the Qdrant
-multi-vector collection for visually similar document pages.
+Embeds a query and searches the Qdrant multi-vector collection
+for visually similar document pages.
 """
 
 from __future__ import annotations
@@ -12,13 +12,13 @@ from qdrant_client import QdrantClient
 
 from config.constants import MULTIVEC_COLLECTION
 from config.settings import settings
-from ingestion.embedder import JinaV4Embedder
+from ingestion.embedder import Embedder, create_embedder
 from server.models import VisualSearchResult
 
 logger = logging.getLogger(__name__)
 
 _qdrant_client: QdrantClient | None = None
-_embedder: JinaV4Embedder | None = None
+_embedder: Embedder | None = None
 
 
 def _get_qdrant_client() -> QdrantClient:
@@ -28,10 +28,10 @@ def _get_qdrant_client() -> QdrantClient:
     return _qdrant_client
 
 
-def _get_embedder() -> JinaV4Embedder:
+def _get_embedder() -> Embedder:
     global _embedder  # noqa: PLW0603
     if _embedder is None:
-        _embedder = JinaV4Embedder()
+        _embedder = create_embedder()
     return _embedder
 
 
@@ -50,7 +50,7 @@ async def visual_search(
 
     Returns:
         List of visual search results with score,
-        source_file, page_number, content_type, s3_key,
+        source_file, page_number, content_type, source_key,
         and metadata.
     """
     if not query or not query.strip():
@@ -77,7 +77,7 @@ async def visual_search(
                     source_file=payload.get("source_file", ""),
                     page_number=payload.get("page_number", 0),
                     content_type=payload.get("content_type", ""),
-                    s3_key=payload.get("s3_key", ""),
+                    source_key=payload.get("source_key", ""),
                     metadata=payload.get("metadata", {}),
                 ).model_dump()
             )
