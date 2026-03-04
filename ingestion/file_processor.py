@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 import mimetypes
+import os
+import tempfile
 from dataclasses import dataclass
 
 import pymupdf
@@ -89,6 +91,45 @@ def semantic_chunk(
     return chunks
 
 
+_docling_converter = None
+_docling_checked = False
+
+
+def _get_docling_converter():  # type: ignore[no-untyped-def]
+    """Lazily initialize Docling converter, or return None if not installed."""
+    global _docling_converter, _docling_checked  # noqa: PLW0603
+    if _docling_checked:
+        return _docling_converter
+    _docling_checked = True
+    try:
+        from docling.document_converter import DocumentConverter
+
+        _docling_converter = DocumentConverter()
+        logger.info("Docling available for scanned PDF fallback")
+    except ImportError:
+        logger.info("Docling not installed, scanned PDF OCR disabled")
+    return _docling_converter
+
+
+def _extract_text_docling(image_bytes: bytes) -> str:
+    """Extract text from image bytes using Docling. Returns '' if unavailable."""
+    converter = _get_docling_converter()
+    if converter is None:
+        return ""
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+            f.write(image_bytes)
+            tmp_path = f.name
+        try:
+            result = converter.convert(tmp_path)
+            return result.document.export_to_markdown()
+        finally:
+            os.unlink(tmp_path)
+    except Exception:
+        logger.exception("Docling extraction failed")
+        return ""
+
+
 def _pdf_to_pages(content: bytes) -> list[Page]:
     """Convert PDF to Pages with text extraction (PyMuPDF) + image rendering (150 DPI).
 
@@ -105,6 +146,10 @@ def _pdf_to_pages(content: bytes) -> list[Page]:
         mat = pymupdf.Matrix(150 / 72, 150 / 72)
         pix = fitz_page.get_pixmap(matrix=mat)
         image_bytes = pix.tobytes("png")
+
+        # Docling fallback for scanned pages
+        if not text:
+            text = _extract_text_docling(image_bytes)
 
         pages.append(
             Page(
