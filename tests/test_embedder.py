@@ -47,6 +47,29 @@ class TestEmbedderProtocol:
                 create_embedder()
 
 
+class TestProtocolCompliance:
+    def test_jina_satisfies_protocol(self) -> None:
+        """JinaV4Embedder is a valid Embedder."""
+        assert isinstance(JinaV4Embedder.__new__(JinaV4Embedder), Embedder)
+
+    def test_voyage_satisfies_protocol(self) -> None:
+        """VoyageEmbedder is a valid Embedder."""
+        from ingestion.embedders.voyage import VoyageEmbedder
+
+        assert isinstance(VoyageEmbedder.__new__(VoyageEmbedder), Embedder)
+
+    def test_mock_embedder_satisfies_protocol(self) -> None:
+        """The test mock_embedder fixture satisfies the protocol."""
+        mock = MagicMock()
+        mock.embed_text = AsyncMock()
+        mock.embed_text_query = AsyncMock()
+        mock.embed_image = AsyncMock()
+        mock.embed_multi_vector = AsyncMock()
+        mock.embed_query_multi_vector = AsyncMock()
+        mock.close = AsyncMock()
+        assert isinstance(mock, Embedder)
+
+
 class TestEmbedText:
     async def test_correct_payload(self, embedder: JinaV4Embedder) -> None:
         mock_resp = _mock_response([{"embedding": [0.1] * 2048}, {"embedding": [0.2] * 2048}])
