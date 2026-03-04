@@ -6,6 +6,7 @@ requires-python = ">=3.13"
 dependencies = [
     "anthropic",
     "cocoindex",
+    "graphiti-core",
     "qdrant-client",
     "neo4j",
     "httpx",
@@ -13,10 +14,12 @@ dependencies = [
     "openai",
     "pydantic-ai",
     "pydantic-settings",
-    "pdf2image",
+    "pymupdf",
+    "docling",
     "boto3",
     "uvicorn",
     "fastapi",
+    "tenacity",
 ]
 
 [dependency-groups]
@@ -25,6 +28,8 @@ dev = [
     "pytest-asyncio",
     "ruff",
     "mypy",
+    "mkdocs>=1.6,<2",
+    "mkdocs-material>=9.5,<9.7",
 ]
 
 [tool.ruff]

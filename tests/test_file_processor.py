@@ -40,7 +40,8 @@ class TestFileToPages:
         assert pages[0].content_type == "text"
         assert pages[0].text == "# Hello"
 
-    def test_pdf_returns_multiple_pages(self) -> None:
+    def test_pdf_extracts_text_and_image(self) -> None:
+        """PDF pages with text layer have both text and image_bytes."""
         content = (FIXTURES / "sample.pdf").read_bytes()
         pages = file_to_pages("doc.pdf", content)
 
@@ -49,9 +50,17 @@ class TestFileToPages:
             assert page.content_type == "pdf"
             assert page.page_number == i + 1
             assert len(page.image_bytes) > 0
-            assert page.text == ""
-            # Verify PNG signature
             assert page.image_bytes[:4] == b"\x89PNG"
+            # PyMuPDF should extract text from the text layer
+            assert len(page.text) > 0
+
+    def test_pdf_image_at_150dpi(self) -> None:
+        """PDF pages rendered at 150 DPI are smaller than 300 DPI."""
+        content = (FIXTURES / "sample.pdf").read_bytes()
+        pages = file_to_pages("doc.pdf", content)
+
+        for page in pages:
+            assert len(page.image_bytes) < 1_500_000
 
     def test_unknown_type_returns_empty(self) -> None:
         pages = file_to_pages("data.xyz123", b"mystery")

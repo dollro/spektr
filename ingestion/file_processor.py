@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-import io
 import logging
 import mimetypes
 from dataclasses import dataclass
 
-from pdf2image import convert_from_bytes
+import pymupdf
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +56,11 @@ def file_to_pages(filename: str, content: bytes) -> list[Page]:
     return []
 
 
-def semantic_chunk(text: str, max_chunk_size: int = 512) -> list[TextChunk]:
+def semantic_chunk(
+    text: str,
+    max_chunk_size: int = 512,
+    page_number: int = 1,
+) -> list[TextChunk]:
     """Split text into chunks preserving paragraph boundaries."""
     paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
     chunks: list[TextChunk] = []
@@ -70,37 +73,49 @@ def semantic_chunk(text: str, max_chunk_size: int = 512) -> list[TextChunk]:
         elif len(current) + len(para) + 2 <= max_chunk_size:
             current = current + "\n\n" + para
         else:
-            chunks.append(TextChunk(text=current, chunk_index=idx, page_number=1))
+            chunks.append(TextChunk(text=current, chunk_index=idx, page_number=page_number))
             idx += 1
             current = para
 
     # Handle remaining text and paragraphs exceeding max_chunk_size
     if current:
         if len(current) <= max_chunk_size:
-            chunks.append(TextChunk(text=current, chunk_index=idx, page_number=1))
+            chunks.append(TextChunk(text=current, chunk_index=idx, page_number=page_number))
         else:
             for sub in _split_long_text(current, max_chunk_size):
-                chunks.append(TextChunk(text=sub, chunk_index=idx, page_number=1))
+                chunks.append(TextChunk(text=sub, chunk_index=idx, page_number=page_number))
                 idx += 1
 
     return chunks
 
 
 def _pdf_to_pages(content: bytes) -> list[Page]:
-    """Convert PDF bytes to list of Pages with PNG image bytes."""
-    images = convert_from_bytes(content, dpi=300, fmt="png")
+    """Convert PDF to Pages with text extraction (PyMuPDF) + image rendering (150 DPI).
+
+    Each page gets:
+    - text: extracted from PDF text layer (empty if scanned)
+    - image_bytes: PNG rendered at 150 DPI for visual embeddings
+    """
+    doc = pymupdf.open(stream=content, filetype="pdf")
     pages: list[Page] = []
-    for i, img in enumerate(images):
-        buf = io.BytesIO()
-        img.save(buf, format="PNG")
+
+    for i, fitz_page in enumerate(doc):
+        text = fitz_page.get_text("text").strip()
+
+        mat = pymupdf.Matrix(150 / 72, 150 / 72)
+        pix = fitz_page.get_pixmap(matrix=mat)
+        image_bytes = pix.tobytes("png")
+
         pages.append(
             Page(
-                image_bytes=buf.getvalue(),
-                text="",
+                image_bytes=image_bytes,
+                text=text,
                 page_number=i + 1,
                 content_type="pdf",
             )
         )
+
+    doc.close()
     return pages
 
 
