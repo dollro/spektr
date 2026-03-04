@@ -1,0 +1,738 @@
+"""Integration tests for MCP search tools.
+
+Tests verify tool functions directly (not via MCP protocol) against
+seeded Qdrant and Neo4j instances.
+"""
+
+from __future__ import annotations
+
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from config.constants import (
+    DENSE_COLLECTION,
+    DENSE_DIM,
+    MULTIVEC_COLLECTION,
+    MULTIVEC_DIM,
+)
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_dense_point(
+    idx: int,
+    text: str = "sample text",
+    source_file: str = "doc.pdf",
+    page_number: int = 1,
+    content_type: str = "pdf",
+) -> dict:
+    """Build a Qdrant point payload dict for the dense collection."""
+    return {
+        "id": idx,
+        "vector": [0.1 * (idx + 1)] * DENSE_DIM,
+        "payload": {
+            "text": text,
+            "source_file": source_file,
+            "page_number": page_number,
+            "content_type": content_type,
+            "metadata": {},
+        },
+    }
+
+
+def _make_multivec_point(
+    idx: int,
+    source_file: str = "doc.pdf",
+    page_number: int = 1,
+    content_type: str = "pdf",
+    s3_key: str = "documents/doc.pdf",
+) -> dict:
+    """Build a Qdrant point payload dict for the multivec collection."""
+    return {
+        "id": idx,
+        "vector": {"colbert": [[0.2 * (idx + 1)] * MULTIVEC_DIM] * 5},
+        "payload": {
+            "source_file": source_file,
+            "page_number": page_number,
+            "content_type": content_type,
+            "s3_key": s3_key,
+            "metadata": {},
+        },
+    }
+
+
+def _seed_dense(client, points: list[dict]) -> None:  # type: ignore[no-untyped-def]
+    """Upsert points into the dense collection."""
+    from qdrant_client.models import PointStruct
+
+    client.upsert(
+        collection_name=DENSE_COLLECTION,
+        points=[
+            PointStruct(
+                id=p["id"], vector=p["vector"], payload=p["payload"]
+            )
+            for p in points
+        ],
+    )
+
+
+def _seed_multivec(client, points: list[dict]) -> None:  # type: ignore[no-untyped-def]
+    """Upsert points into the multivec collection."""
+    from qdrant_client.models import PointStruct
+
+    client.upsert(
+        collection_name=MULTIVEC_COLLECTION,
+        points=[
+            PointStruct(
+                id=p["id"], vector=p["vector"], payload=p["payload"]
+            )
+            for p in points
+        ],
+    )
+
+
+# ---------------------------------------------------------------------------
+# vector_search tests
+# ---------------------------------------------------------------------------
+
+
+class TestVectorSearch:
+    """Tests for the vector_search tool."""
+
+    @pytest.mark.integration
+    async def test_returns_sorted_results(
+        self, qdrant_client, mock_embedder
+    ):
+        """Results are returned sorted by score descending."""
+        _seed_dense(
+            qdrant_client,
+            [
+                _make_dense_point(1, text="first"),
+                _make_dense_point(2, text="second"),
+            ],
+        )
+
+        with (
+            patch(
+                "server.tools.vector_search._get_qdrant_client",
+                qdrant_client,
+            ),
+            patch(
+                "server.tools.vector_search._get_embedder",
+                mock_embedder,
+            ),
+        ):
+            from server.tools.vector_search import vector_search
+
+            results = await vector_search("test query", limit=10)
+
+        assert len(results) == 2
+        assert results[0]["score"] >= results[1]["score"]
+
+    @pytest.mark.integration
+    async def test_content_type_filter(
+        self, qdrant_client, mock_embedder
+    ):
+        """content_type filter restricts results."""
+        _seed_dense(
+            qdrant_client,
+            [
+                _make_dense_point(1, content_type="pdf"),
+                _make_dense_point(2, content_type="text"),
+            ],
+        )
+
+        with (
+            patch(
+                "server.tools.vector_search._get_qdrant_client",
+                qdrant_client,
+            ),
+            patch(
+                "server.tools.vector_search._get_embedder",
+                mock_embedder,
+            ),
+        ):
+            from server.tools.vector_search import vector_search
+
+            results = await vector_search(
+                "test", content_type="text"
+            )
+
+        assert len(results) == 1
+        assert results[0]["content_type"] == "text"
+
+    @pytest.mark.integration
+    async def test_source_file_filter(
+        self, qdrant_client, mock_embedder
+    ):
+        """source_file filter restricts results."""
+        _seed_dense(
+            qdrant_client,
+            [
+                _make_dense_point(1, source_file="a.pdf"),
+                _make_dense_point(2, source_file="b.pdf"),
+            ],
+        )
+
+        with (
+            patch(
+                "server.tools.vector_search._get_qdrant_client",
+                qdrant_client,
+            ),
+            patch(
+                "server.tools.vector_search._get_embedder",
+                mock_embedder,
+            ),
+        ):
+            from server.tools.vector_search import vector_search
+
+            results = await vector_search(
+                "test", source_file="b.pdf"
+            )
+
+        assert len(results) == 1
+        assert results[0]["source_file"] == "b.pdf"
+
+    @pytest.mark.integration
+    async def test_empty_results(
+        self, qdrant_client, mock_embedder
+    ):
+        """Empty collection returns empty list."""
+        with (
+            patch(
+                "server.tools.vector_search._get_qdrant_client",
+                qdrant_client,
+            ),
+            patch(
+                "server.tools.vector_search._get_embedder",
+                mock_embedder,
+            ),
+        ):
+            from server.tools.vector_search import vector_search
+
+            results = await vector_search("unrelated query")
+
+        assert results == []
+
+
+# ---------------------------------------------------------------------------
+# visual_search tests
+# ---------------------------------------------------------------------------
+
+
+class TestVisualSearch:
+    """Tests for the visual_search tool."""
+
+    @pytest.mark.integration
+    async def test_returns_multivec_results(
+        self, qdrant_client, mock_embedder
+    ):
+        """Returns results from the multivec collection."""
+        _seed_multivec(
+            qdrant_client,
+            [_make_multivec_point(1, s3_key="docs/page.pdf")],
+        )
+
+        with (
+            patch(
+                "server.tools.visual_search._get_qdrant_client",
+                qdrant_client,
+            ),
+            patch(
+                "server.tools.visual_search._get_embedder",
+                mock_embedder,
+            ),
+        ):
+            from server.tools.visual_search import visual_search
+
+            results = await visual_search("chart diagram")
+
+        assert len(results) == 1
+        assert results[0]["s3_key"] == "docs/page.pdf"
+        assert "text" not in results[0]
+
+
+# ---------------------------------------------------------------------------
+# graph_search tests
+# ---------------------------------------------------------------------------
+
+
+class TestGraphSearch:
+    """Tests for the Graphiti-based graph_search tool."""
+
+    async def test_entity_search_returns_facts(self):
+        """Graph search returns fact-based results from Graphiti."""
+        mock_edge = MagicMock()
+        mock_edge.fact = "Python is a programming language"
+        mock_edge.source_description = "doc1.pdf"
+        mock_edge.created_at = "2025-01-01T00:00:00"
+        mock_edge.expired_at = None
+
+        mock_graphiti = AsyncMock()
+        mock_graphiti.search = AsyncMock(return_value=[mock_edge])
+
+        with patch(
+            "server.tools.graph_search.get_graphiti",
+            return_value=mock_graphiti,
+        ):
+            from server.tools.graph_search import graph_search
+
+            results = await graph_search("Python")
+
+        assert len(results) == 1
+        assert results[0]["fact"] == "Python is a programming language"
+        assert results[0]["source"] == "doc1.pdf"
+        assert results[0]["created_at"] is not None
+
+    async def test_entity_search_respects_limit(self):
+        """Graph search respects the limit parameter."""
+        edges = []
+        for i in range(5):
+            edge = MagicMock()
+            edge.fact = f"Fact {i}"
+            edge.source_description = f"doc{i}.pdf"
+            edge.created_at = "2025-01-01"
+            edge.expired_at = None
+            edges.append(edge)
+
+        mock_graphiti = AsyncMock()
+        mock_graphiti.search = AsyncMock(return_value=edges)
+
+        with patch(
+            "server.tools.graph_search.get_graphiti",
+            return_value=mock_graphiti,
+        ):
+            from server.tools.graph_search import graph_search
+
+            results = await graph_search("test", limit=3)
+
+        assert len(results) == 3
+
+    async def test_unsupported_search_type_raises(self):
+        """Unsupported search_type raises ValueError."""
+        from server.tools.graph_search import graph_search
+
+        with pytest.raises(ValueError, match="not yet implemented"):
+            await graph_search("test", search_type="path")
+
+    async def test_graph_search_handles_error(self):
+        """Graph search returns error dict on failure."""
+        with patch(
+            "server.tools.graph_search.get_graphiti",
+            side_effect=RuntimeError("connection failed"),
+        ):
+            from server.tools.graph_search import graph_search
+
+            results = await graph_search("test")
+
+        assert len(results) == 1
+        assert "error" in results[0]
+
+
+# ---------------------------------------------------------------------------
+# hybrid_search tests
+# ---------------------------------------------------------------------------
+
+
+class TestHybridSearch:
+    """Tests for the hybrid_search tool."""
+
+    async def test_returns_both_results(self):
+        """Returns both vector_results and graph_results."""
+        mock_vector = AsyncMock(
+            return_value=[{"score": 0.9, "text": "result"}]
+        )
+        mock_graph = AsyncMock(
+            return_value=[{"entity": "X", "type": "CONCEPT"}]
+        )
+
+        with (
+            patch(
+                "server.tools.hybrid_search.vector_search",
+                mock_vector,
+            ),
+            patch(
+                "server.tools.hybrid_search.graph_search",
+                mock_graph,
+            ),
+        ):
+            from server.tools.hybrid_search import hybrid_search
+
+            result = await hybrid_search("test query")
+
+        assert len(result["vector_results"]) == 1
+        assert len(result["graph_results"]) == 1
+        assert result["query"] == "test query"
+        assert result["strategy"] == "parallel"
+
+    async def test_partial_failure_vector(self):
+        """If vector search fails, graph results still returned."""
+        mock_vector = AsyncMock(
+            side_effect=RuntimeError("Qdrant down")
+        )
+        mock_graph = AsyncMock(
+            return_value=[{"entity": "X"}]
+        )
+
+        with (
+            patch(
+                "server.tools.hybrid_search.vector_search",
+                mock_vector,
+            ),
+            patch(
+                "server.tools.hybrid_search.graph_search",
+                mock_graph,
+            ),
+        ):
+            from server.tools.hybrid_search import hybrid_search
+
+            result = await hybrid_search("test")
+
+        assert result["vector_results"][0]["error"]
+        assert len(result["graph_results"]) == 1
+
+    async def test_partial_failure_graph(self):
+        """If graph search fails, vector results still returned."""
+        mock_vector = AsyncMock(
+            return_value=[{"score": 0.9}]
+        )
+        mock_graph = AsyncMock(
+            side_effect=RuntimeError("Neo4j down")
+        )
+
+        with (
+            patch(
+                "server.tools.hybrid_search.vector_search",
+                mock_vector,
+            ),
+            patch(
+                "server.tools.hybrid_search.graph_search",
+                mock_graph,
+            ),
+        ):
+            from server.tools.hybrid_search import hybrid_search
+
+            result = await hybrid_search("test")
+
+        assert len(result["vector_results"]) == 1
+        assert result["graph_results"][0]["error"]
+
+
+# ---------------------------------------------------------------------------
+# MCP server registration test
+# ---------------------------------------------------------------------------
+
+
+class TestMCPServer:
+    """Tests for MCP server tool registration."""
+
+    async def test_all_tools_registered(self):
+        """All four search tools are discoverable."""
+        from server.mcp_server import mcp
+
+        tools = await mcp.list_tools()
+        tool_names = {t.name for t in tools}
+        assert tool_names == {
+            "vector_search",
+            "visual_search",
+            "graph_search",
+            "hybrid_search",
+        }
+
+
+# ---------------------------------------------------------------------------
+# Edge case tests
+# ---------------------------------------------------------------------------
+
+
+class TestEdgeCases:
+    """Edge case tests from spec §13."""
+
+    @pytest.mark.integration
+    async def test_empty_corpus_returns_empty_list(
+        self, qdrant_client, mock_embedder,
+    ):
+        """EC-05: Empty collection returns empty list, not an error."""
+        with (
+            patch(
+                "server.tools.vector_search._get_qdrant_client",
+                qdrant_client,
+            ),
+            patch(
+                "server.tools.vector_search._get_embedder",
+                mock_embedder,
+            ),
+        ):
+            from server.tools.vector_search import vector_search
+
+            results = await vector_search("anything at all")
+
+        assert results == []
+
+    async def test_graph_search_failure_returns_error_dict(self):
+        """EC-03: Graph search failure returns error, doesn't crash."""
+        with patch(
+            "server.tools.graph_search.get_graphiti",
+            side_effect=RuntimeError("Neo4j down"),
+        ):
+            from server.tools.graph_search import graph_search
+
+            results = await graph_search("test")
+
+        assert len(results) == 1
+        assert "error" in results[0]
+
+
+class TestBearerAuth:
+    """EC-08: MCP Bearer token authentication tests."""
+
+    async def test_bearer_auth_middleware_rejects_missing_token(self):
+        """Requests without Bearer token are rejected."""
+        from unittest.mock import MagicMock
+
+        from server.mcp_server import BearerAuthMiddleware
+
+        middleware = BearerAuthMiddleware()
+
+        # Build a mock context for tools/call with no auth header
+        mock_request = MagicMock()
+        mock_request.headers = {}
+        mock_req_ctx = MagicMock()
+        mock_req_ctx.request = mock_request
+        mock_fastmcp_ctx = MagicMock()
+        mock_fastmcp_ctx.request_context = mock_req_ctx
+
+        context = MagicMock()
+        context.method = "tools/call"
+        context.fastmcp_context = mock_fastmcp_ctx
+
+        call_next = AsyncMock()
+
+        with patch("server.mcp_server.settings") as mock_settings:
+            mock_settings.mcp_api_key = "secret-key"
+            with pytest.raises(PermissionError, match="Authentication"):
+                await middleware(context, call_next)
+
+    async def test_bearer_auth_middleware_rejects_wrong_token(self):
+        """Requests with wrong Bearer token are rejected."""
+        from unittest.mock import MagicMock
+
+        from server.mcp_server import BearerAuthMiddleware
+
+        middleware = BearerAuthMiddleware()
+
+        mock_request = MagicMock()
+        mock_request.headers = {"Authorization": "Bearer wrong-key"}
+        mock_req_ctx = MagicMock()
+        mock_req_ctx.request = mock_request
+        mock_fastmcp_ctx = MagicMock()
+        mock_fastmcp_ctx.request_context = mock_req_ctx
+
+        context = MagicMock()
+        context.method = "tools/call"
+        context.fastmcp_context = mock_fastmcp_ctx
+
+        call_next = AsyncMock()
+
+        with patch("server.mcp_server.settings") as mock_settings:
+            mock_settings.mcp_api_key = "secret-key"
+            with pytest.raises(PermissionError, match="Invalid token"):
+                await middleware(context, call_next)
+
+    async def test_bearer_auth_middleware_passes_valid_token(self):
+        """Requests with correct Bearer token pass through."""
+        from unittest.mock import MagicMock
+
+        from server.mcp_server import BearerAuthMiddleware
+
+        middleware = BearerAuthMiddleware()
+
+        mock_request = MagicMock()
+        mock_request.headers = {"Authorization": "Bearer secret-key"}
+        mock_req_ctx = MagicMock()
+        mock_req_ctx.request = mock_request
+        mock_fastmcp_ctx = MagicMock()
+        mock_fastmcp_ctx.request_context = mock_req_ctx
+
+        context = MagicMock()
+        context.method = "tools/call"
+        context.fastmcp_context = mock_fastmcp_ctx
+
+        call_next = AsyncMock(return_value="ok")
+
+        with patch("server.mcp_server.settings") as mock_settings:
+            mock_settings.mcp_api_key = "secret-key"
+            result = await middleware(context, call_next)
+
+        assert result == "ok"
+        call_next.assert_awaited_once()
+
+    async def test_bearer_auth_skipped_when_no_key_configured(self):
+        """When mcp_api_key is empty, all requests pass through."""
+        from unittest.mock import MagicMock
+
+        from server.mcp_server import BearerAuthMiddleware
+
+        middleware = BearerAuthMiddleware()
+
+        context = MagicMock()
+        context.method = "tools/call"
+
+        call_next = AsyncMock(return_value="ok")
+
+        with patch("server.mcp_server.settings") as mock_settings:
+            mock_settings.mcp_api_key = ""
+            result = await middleware(context, call_next)
+
+        assert result == "ok"
+
+
+# ---------------------------------------------------------------------------
+# Input validation tests
+# ---------------------------------------------------------------------------
+
+
+class TestInputValidation:
+    """Tests for tool input validation (empty query, limit clamping)."""
+
+    async def test_vector_search_empty_query_returns_empty(self):
+        """Empty query string returns empty list."""
+        from server.tools.vector_search import vector_search
+
+        results = await vector_search("")
+        assert results == []
+
+    async def test_graph_search_empty_query_returns_empty(self):
+        """Empty query string returns empty list."""
+        from server.tools.graph_search import graph_search
+
+        results = await graph_search("")
+        assert results == []
+
+    async def test_hybrid_search_empty_query_returns_empty(self):
+        """Empty query returns empty hybrid response."""
+        from server.tools.hybrid_search import hybrid_search
+
+        result = await hybrid_search("")
+        assert result["vector_results"] == []
+        assert result["graph_results"] == []
+
+
+# ---------------------------------------------------------------------------
+# Reranker tests
+# ---------------------------------------------------------------------------
+
+
+class TestReranker:
+    """Unit tests for the Jina Reranker with mocked HTTP."""
+
+    async def test_rerank_returns_reordered_results(self):
+        """Reranker re-scores and reorders results."""
+        results = [
+            {"score": 0.5, "text": "first doc"},
+            {"score": 0.3, "text": "second doc"},
+        ]
+        mock_api_results = [
+            {"index": 1, "relevance_score": 0.9},
+            {"index": 0, "relevance_score": 0.7},
+        ]
+
+        with patch(
+            "server.tools.reranker._rerank_request",
+            new_callable=AsyncMock,
+            return_value=mock_api_results,
+        ):
+            from server.tools.reranker import rerank
+
+            reranked = await rerank("query", results, top_k=2)
+
+        assert len(reranked) == 2
+        assert reranked[0]["score"] == 0.9
+        assert reranked[0]["text"] == "second doc"
+        assert reranked[0]["original_score"] == 0.3
+
+    async def test_rerank_empty_results(self):
+        """Empty input returns empty output."""
+        from server.tools.reranker import rerank
+
+        result = await rerank("query", [], top_k=5)
+        assert result == []
+
+    async def test_rerank_fallback_on_failure(self):
+        """On API failure, returns original results truncated."""
+        results = [
+            {"score": 0.5, "text": "doc"},
+            {"score": 0.3, "text": "doc2"},
+        ]
+
+        with patch(
+            "server.tools.reranker._rerank_request",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("API down"),
+        ):
+            from server.tools.reranker import rerank
+
+            reranked = await rerank("query", results, top_k=1)
+
+        assert len(reranked) == 1
+        assert reranked[0]["text"] == "doc"
+
+
+# ---------------------------------------------------------------------------
+# VLM Generator tests
+# ---------------------------------------------------------------------------
+
+
+class TestVLMGenerator:
+    """Unit tests for VLM visual answer generation with mocked deps."""
+
+    async def test_generate_returns_answer(self):
+        """VLM generates answer from S3 images."""
+        results = [{"s3_key": "docs/chart.pdf"}]
+
+        with (
+            patch(
+                "server.tools.vlm_generator._fetch_s3_image",
+                return_value=(b"fake-png", "image/png"),
+            ),
+            patch(
+                "server.tools.vlm_generator._ask_vlm",
+                new_callable=AsyncMock,
+                return_value="The chart shows growth.",
+            ),
+        ):
+            from server.tools.vlm_generator import (
+                generate_visual_answer,
+            )
+
+            answer = await generate_visual_answer(
+                "What does the chart show?", results,
+            )
+
+        assert answer == "The chart shows growth."
+
+    async def test_generate_returns_none_on_no_s3_keys(self):
+        """Returns None when no results have s3_key."""
+        from server.tools.vlm_generator import generate_visual_answer
+
+        answer = await generate_visual_answer("query", [{"score": 0.5}])
+        assert answer is None
+
+    async def test_generate_returns_none_on_s3_error(self):
+        """Returns None when S3 fetch fails."""
+        results = [{"s3_key": "docs/missing.pdf"}]
+
+        with patch(
+            "server.tools.vlm_generator._fetch_s3_image",
+            side_effect=OSError("S3 unreachable"),
+        ):
+            from server.tools.vlm_generator import (
+                generate_visual_answer,
+            )
+
+            answer = await generate_visual_answer("query", results)
+
+        assert answer is None

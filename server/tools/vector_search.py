@@ -16,8 +16,22 @@ from server.models import SearchResult
 
 logger = logging.getLogger(__name__)
 
-_qdrant_client = QdrantClient(url=settings.qdrant_url)
-_embedder = JinaV4Embedder()
+_qdrant_client: QdrantClient | None = None
+_embedder: JinaV4Embedder | None = None
+
+
+def _get_qdrant_client() -> QdrantClient:
+    global _qdrant_client  # noqa: PLW0603
+    if _qdrant_client is None:
+        _qdrant_client = QdrantClient(url=settings.qdrant_url)
+    return _qdrant_client
+
+
+def _get_embedder() -> JinaV4Embedder:
+    global _embedder  # noqa: PLW0603
+    if _embedder is None:
+        _embedder = JinaV4Embedder()
+    return _embedder
 
 
 async def vector_search(
@@ -51,7 +65,7 @@ async def vector_search(
     limit = max(1, min(limit, 100))
 
     try:
-        query_vector = await _embedder.embed_text_query(query)
+        query_vector = await _get_embedder().embed_text_query(query)
 
         conditions: list[models.FieldCondition] = []
         if content_type is not None:
@@ -71,7 +85,7 @@ async def vector_search(
 
         query_filter = models.Filter(must=conditions) if conditions else None
 
-        response = _qdrant_client.query_points(
+        response = _get_qdrant_client().query_points(
             collection_name=DENSE_COLLECTION,
             query=query_vector,
             query_filter=query_filter,
