@@ -5,12 +5,16 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
+        extra="ignore",
     )
 
     # Jina v4
     jina_api_key: str
+    jina_api_url: str = "https://api.jina.ai"
     jina_model: str = "jina-clip-v4"
     jina_dense_dimensions: int = 2048
+    jina_rpm: int = 100  # requests per minute (free=100, paid=500, premium=5000)
+    jina_tpm: int = 100_000  # tokens per minute (free=100K, paid=2M, premium=50M)
 
     # Qdrant
     qdrant_url: str = "http://localhost:6333"
@@ -38,9 +42,10 @@ class Settings(BaseSettings):
     s3_sqs_queue_url: str = ""
 
     # LLM
-    llm_provider: str = "anthropic"
+    llm_api_type: str = "anthropic"
     llm_model: str = "claude-sonnet-4-20250514"
     llm_api_key: str | None = None
+    llm_base_url: str = ""
 
     # MCP
     mcp_transport: str = "sse"
