@@ -40,7 +40,7 @@ class TestEmbedText:
 
         call_kwargs = mock_post.call_args
         payload = call_kwargs.kwargs["json"]
-        assert payload["model"] == "jina-clip-v4"
+        assert payload["model"] == "jina-embeddings-v4"
         assert payload["task"] == "retrieval.passage"
         assert payload["dimensions"] == 2048
         assert payload["normalized"] is True

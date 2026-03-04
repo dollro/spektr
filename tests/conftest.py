@@ -6,7 +6,7 @@ import os
 
 # Set required env vars before any config imports trigger Settings validation.
 os.environ.setdefault("JINA_API_KEY", "test-jina-key")
-os.environ.setdefault("JINA_MODEL", "jina-clip-v4")
+os.environ.setdefault("JINA_MODEL", "jina-embeddings-v4")
 os.environ.setdefault("NEO4J_PASSWORD", "test-neo4j-password")
 
 import pathlib

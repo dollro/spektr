@@ -1,0 +1,94 @@
+# Environment Variables
+
+All configuration is loaded from a `.env` file (or real environment variables) via Pydantic Settings in `config/settings.py`. Copy `.env.example` to `.env` and fill in the required values.
+
+```bash
+cp .env.example .env
+```
+
+## Jina v4
+
+| Variable | Default | Required | Description |
+|-|-|-|-|
+| `JINA_API_KEY` | — | Yes | API key for Jina v4 embedding service |
+| `JINA_MODEL` | `jina-embeddings-v4` | No | Jina embedding model name |
+| `JINA_DENSE_DIMENSIONS` | `2048` | No | Dimensionality of dense embeddings |
+
+## Qdrant
+
+| Variable | Default | Required | Description |
+|-|-|-|-|
+| `QDRANT_URL` | `http://localhost:6333` | No | Qdrant server URL |
+| `QDRANT_DENSE_COLLECTION` | `documents_dense` | No | Collection name for dense vectors |
+| `QDRANT_MULTIVEC_COLLECTION` | `documents_multivec` | No | Collection name for ColBERT multi-vectors |
+
+## Neo4j
+
+| Variable | Default | Required | Description |
+|-|-|-|-|
+| `NEO4J_URI` | `bolt://localhost:7687` | No | Neo4j Bolt connection URI |
+| `NEO4J_USER` | `neo4j` | No | Neo4j username |
+| `NEO4J_PASSWORD` | — | Yes | Neo4j password |
+
+## PostgreSQL
+
+| Variable | Default | Required | Description |
+|-|-|-|-|
+| `DATABASE_URL` | `postgresql://cocoindex:cocoindex@localhost:5432/cocoindex` | No | PostgreSQL connection URL for CocoIndex pipeline state |
+
+## AWS
+
+| Variable | Default | Required | Description |
+|-|-|-|-|
+| `S3_BUCKET_NAME` | — | Yes | S3 bucket containing source documents |
+| `S3_SQS_QUEUE_URL` | — | Yes | SQS queue URL for S3 event notifications |
+| `AWS_REGION` | `us-east-1` | No | AWS region for S3 and SQS |
+
+AWS credentials (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`) are loaded from the standard AWS credential chain. See [AWS Setup](../deployment/aws-setup.md) for IAM permissions.
+
+## LLM
+
+| Variable | Default | Required | Description |
+|-|-|-|-|
+| `LLM_API_TYPE` | `anthropic` | No | LLM API type (`anthropic`, `openai`) |
+| `LLM_MODEL` | `claude-sonnet-4-20250514` | No | Model identifier for entity extraction and generation |
+| `LLM_API_KEY` | — | Yes | API key for the configured LLM provider |
+| `LLM_BASE_URL` | — | No | Custom base URL for OpenAI-compatible servers (OpenRouter, Ollama, vLLM, LiteLLM) |
+
+When `LLM_BASE_URL` is set, the **agent** uses an OpenAI-compatible client regardless of `LLM_API_TYPE`. The ingestion and VLM components still use `LLM_API_TYPE` to select the Anthropic or OpenAI SDK, but pass `LLM_BASE_URL` to the client constructor.
+
+## MCP
+
+| Variable | Default | Required | Description |
+|-|-|-|-|
+| `MCP_TRANSPORT` | `sse` | No | MCP transport protocol (`sse` or `stdio`) |
+| `MCP_PORT` | `8000` | No | Port for the MCP SSE server |
+
+## Auth
+
+| Variable | Default | Required | Description |
+|-|-|-|-|
+| `MCP_API_KEY` | — | Yes | Bearer token for MCP server authentication |
+
+## Resilience
+
+| Variable | Default | Required | Description |
+|-|-|-|-|
+| `JINA_MAX_CONCURRENT` | `5` | No | Max concurrent requests to Jina API |
+| `EXTRACTION_TIMEOUT` | `30` | No | Timeout in seconds for entity extraction |
+| `TOOL_TIMEOUT` | `30` | No | Timeout in seconds for MCP tool execution |
+| `MAX_RETRIES` | `3` | No | Max retry attempts for transient failures |
+
+## Feature Flags
+
+| Variable | Default | Required | Description |
+|-|-|-|-|
+| `RERANK_ENABLED` | `false` | No | Enable Jina reranker for search results |
+| `VLM_GENERATION_ENABLED` | `false` | No | Enable VLM-based generation for visual search |
+
+## Observability
+
+| Variable | Default | Required | Description |
+|-|-|-|-|
+| `LOG_LEVEL` | `INFO` | No | Python logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
+| `LOG_FORMAT` | `json` | No | Log output format (`json` or `text`) |

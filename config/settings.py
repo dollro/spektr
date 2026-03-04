@@ -11,10 +11,10 @@ class Settings(BaseSettings):
     # Jina v4
     jina_api_key: str
     jina_api_url: str = "https://api.jina.ai"
-    jina_model: str = "jina-clip-v4"
+    jina_model: str = "jina-embeddings-v4"
     jina_dense_dimensions: int = 2048
-    jina_rpm: int = 100  # requests per minute (free=100, paid=500, premium=5000)
-    jina_tpm: int = 100_000  # tokens per minute (free=100K, paid=2M, premium=50M)
+    jina_rpm: int = 500  # requests per minute (free=500, tier1=500, tier2=5000)
+    jina_tpm: int = 1_000_000  # tokens per minute (free=1M, tier1=10M, tier2=100M)
 
     # Qdrant
     qdrant_url: str = "http://localhost:6333"
