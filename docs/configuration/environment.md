@@ -6,13 +6,32 @@ All configuration is loaded from a `.env` file (or real environment variables) v
 cp .env.example .env
 ```
 
-## Jina v4
+## Embedding Provider
 
 | Variable | Default | Required | Description |
 |-|-|-|-|
-| `JINA_API_KEY` | — | Yes | API key for Jina v4 embedding service |
+| `EMBEDDING_PROVIDER` | `jina` | No | Which embedding provider to use (`jina` or `voyage`) |
+
+Set this to choose the active provider, then configure the corresponding section below. See [Embeddings](../ingestion/embeddings.md) for details on switching providers.
+
+## Jina v4 (when `EMBEDDING_PROVIDER=jina`)
+
+| Variable | Default | Required | Description |
+|-|-|-|-|
+| `JINA_API_KEY` | — | If jina | API key for Jina v4 embedding service |
+| `JINA_API_URL` | `https://api.jina.ai` | No | Base URL (change for proxy/self-hosted) |
 | `JINA_MODEL` | `jina-embeddings-v4` | No | Jina embedding model name |
 | `JINA_DENSE_DIMENSIONS` | `2048` | No | Dimensionality of dense embeddings |
+
+## Voyage AI (when `EMBEDDING_PROVIDER=voyage`)
+
+| Variable | Default | Required | Description |
+|-|-|-|-|
+| `VOYAGE_API_KEY` | — | If voyage | API key for Voyage AI |
+| `VOYAGE_API_URL` | `https://api.voyageai.com` | No | Base URL |
+| `VOYAGE_TEXT_MODEL` | `voyage-4-large` | No | Text embedding model |
+| `VOYAGE_MULTIMODAL_MODEL` | `voyage-multimodal-3.5` | No | Image embedding model |
+| `VOYAGE_DENSE_DIMENSIONS` | `1024` | No | Output dimensions (256, 512, 1024, 2048) |
 
 ## Qdrant
 
@@ -75,6 +94,9 @@ When `LLM_BASE_URL` is set, the **agent** uses an OpenAI-compatible client regar
 | Variable | Default | Required | Description |
 |-|-|-|-|
 | `JINA_MAX_CONCURRENT` | `5` | No | Max concurrent requests to Jina API |
+| `JINA_RPM` | `500` | No | Jina requests per minute limit |
+| `VOYAGE_MAX_CONCURRENT` | `10` | No | Max concurrent requests to Voyage API |
+| `VOYAGE_RPM` | `300` | No | Voyage requests per minute limit |
 | `EXTRACTION_TIMEOUT` | `30` | No | Timeout in seconds for entity extraction |
 | `TOOL_TIMEOUT` | `30` | No | Timeout in seconds for MCP tool execution |
 | `MAX_RETRIES` | `3` | No | Max retry attempts for transient failures |
