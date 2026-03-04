@@ -8,17 +8,20 @@ then exports to Qdrant (dense + multivec) and Neo4j.
 from __future__ import annotations
 
 import asyncio
+import io
 import mimetypes
 import time
 import uuid
 from datetime import UTC, datetime
 
 import cocoindex
+from PIL import Image
 from qdrant_client import QdrantClient, models
 
 from config.constants import DENSE_COLLECTION, MULTIVEC_COLLECTION
 from config.logging import get_logger
 from config.settings import settings
+from ingestion._utils import run_async
 from ingestion.file_processor import (
     TextChunk,
     file_to_pages,
@@ -80,17 +83,6 @@ def _make_point_id(key: str) -> str:
     """Deterministic UUID from a string key."""
     return str(uuid.uuid5(uuid.NAMESPACE_URL, key))
 
-
-def _run_async(coro):  # type: ignore[no-untyped-def]
-    """Run an async coroutine from a sync context."""
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(coro)
-    import concurrent.futures
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        return pool.submit(asyncio.run, coro).result()
 
 
 def _process_text_page(
@@ -203,6 +195,8 @@ def _process_visual_page(
     # ColBERT multi-vector
     try:
         vectors = jina_embed_image_multivec(image_bytes)
+        img = Image.open(io.BytesIO(image_bytes))
+        img_width, img_height = img.size
         qdrant.upsert(
             collection_name=MULTIVEC_COLLECTION,
             points=[
@@ -213,6 +207,8 @@ def _process_visual_page(
                         "source_file": source_file,
                         "content_type": content_type,
                         "page_number": page_number,
+                        "image_width": img_width,
+                        "image_height": img_height,
                         "metadata": {
                             "mime_type": mime,
                             "ingested_at": now,
@@ -255,7 +251,7 @@ def _ingest_to_graphiti(
                     chunk.chunk_index,
                 )
 
-    _run_async(_do_ingest())
+    run_async(_do_ingest())
 
 
 @cocoindex.op.function()
@@ -332,7 +328,7 @@ def ingest_file(content: bytes, filename: str) -> str:
         )
     finally:
         if graphiti_writer is not None:
-            _run_async(graphiti_writer.close())
+            run_async(graphiti_writer.close())
 
     duration_ms = round((time.monotonic() - t0) * 1000)
     logger.info(
@@ -434,7 +430,7 @@ def handle_s3_delete(s3_key: str) -> None:
             )
             await close_graphiti()
 
-        _run_async(_invalidate_graph())
+        run_async(_invalidate_graph())
     except Exception:
         logger.exception(
             "Failed to invalidate Graphiti data for %s",
@@ -504,8 +500,8 @@ def run_pipeline() -> None:
     ensure_collections(_get_qdrant_client())
 
     driver = get_driver()
-    _run_async(create_neo4j_schema(driver))
-    _run_async(driver.close())
+    run_async(create_neo4j_schema(driver))
+    run_async(driver.close())
 
     # Open and run pipeline
     flow = cocoindex.open_flow("RagIngestion", rag_ingestion_flow)

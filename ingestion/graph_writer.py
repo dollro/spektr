@@ -1,17 +1,99 @@
+"""Knowledge graph writers for Neo4j.
+
+GraphitiWriter — primary writer using Graphiti for temporal
+    knowledge graph with automatic entity/relationship extraction.
+_LegacyGraphWriter — deprecated raw-Cypher writer kept for
+    backward compatibility during transition.
+"""
+
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 
-from neo4j import AsyncGraphDatabase
-
-from config.settings import settings
-from ingestion.entity_extractor import Entity, ExtractionResult
+from ingestion.graphiti_client import get_graphiti
 
 logger = logging.getLogger(__name__)
 
 
-class GraphWriter:
-    """Upsert documents, chunks, entities, and relationships to Neo4j."""
+class GraphitiWriter:
+    """Ingest text chunks as Graphiti episodes.
+
+    Graphiti handles entity extraction, relationship discovery,
+    and temporal metadata internally via its LLM pipeline.
+    """
+
+    async def ingest_chunk(
+        self,
+        chunk_text: str,
+        source_key: str,
+        page_number: int,
+        chunk_index: int,
+        reference_time: datetime | None = None,
+    ) -> None:
+        """Add a text chunk as a Graphiti episode."""
+        client = await get_graphiti()
+        episode_name = f"{source_key}:p{page_number}:c{chunk_index}"
+        ref_time = reference_time or datetime.now()
+
+        logger.debug(
+            "Ingesting episode %s",
+            episode_name,
+            extra={"source_key": source_key},
+        )
+        await client.add_episode(
+            name=episode_name,
+            episode_body=chunk_text,
+            source_description=source_key,
+            reference_time=ref_time,
+        )
+
+    async def close(self) -> None:
+        """Close the underlying Graphiti client."""
+        from ingestion.graphiti_client import close_graphiti
+
+        await close_graphiti()
+
+
+# ------------------------------------------------------------------
+# Legacy writer (deprecated — kept for transition / tests)
+# ------------------------------------------------------------------
+
+from neo4j import AsyncGraphDatabase  # noqa: E402
+from neo4j.exceptions import (  # noqa: E402
+    ServiceUnavailable,
+    TransientError,
+)
+from tenacity import (  # noqa: E402
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
+
+from config.settings import settings  # noqa: E402
+from ingestion.entity_extractor import Entity, ExtractionResult  # noqa: E402
+
+_NEO4J_RETRY = retry(
+    wait=wait_exponential(multiplier=1, min=1, max=15),
+    stop=stop_after_attempt(settings.max_retries),
+    retry=retry_if_exception_type(
+        (ServiceUnavailable, TransientError, OSError),
+    ),
+    before_sleep=lambda rs: logger.warning(
+        "Neo4j retry attempt %d after %s",
+        rs.attempt_number,
+        rs.outcome.exception(),
+    ),
+)
+
+
+class _LegacyGraphWriter:
+    """Deprecated: raw Cypher upserts to Neo4j.
+
+    Use GraphitiWriter instead. This class is kept temporarily
+    so existing tests continue to work during the migration.
+    """
 
     def __init__(
         self,
@@ -30,8 +112,11 @@ class GraphWriter:
     async def close(self) -> None:
         await self.driver.close()
 
-    async def upsert_document(self, s3_key: str, **properties: object) -> None:
-        """MERGE Document node on s3_key, SET all properties."""
+    @_NEO4J_RETRY
+    async def upsert_document(
+        self, s3_key: str, **properties: object
+    ) -> None:
+        """MERGE Document node on s3_key, SET all props."""
         async with self.driver.session() as session:
             await session.run(
                 "MERGE (d:Document {s3_key: $s3_key}) "
@@ -47,6 +132,7 @@ class GraphWriter:
                 source_bucket=properties.get("source_bucket", ""),
             )
 
+    @_NEO4J_RETRY
     async def upsert_chunk(
         self,
         chunk_id: str,
@@ -54,7 +140,7 @@ class GraphWriter:
         page_number: int,
         s3_key: str,
     ) -> None:
-        """MERGE Chunk node, create HAS_CHUNK rel to Document."""
+        """MERGE Chunk node, create HAS_CHUNK rel."""
         async with self.driver.session() as session:
             await session.run(
                 "MERGE (c:Chunk {id: $chunk_id}) "
@@ -62,15 +148,16 @@ class GraphWriter:
                 "c.page_number = $page_number "
                 "WITH c "
                 "MATCH (d:Document {s3_key: $s3_key}) "
-                "MERGE (d)-[:HAS_CHUNK]->(c)",
+                "MERGE (d)-[:HAS_CHUNK {page_number: $page_number}]->(c)",
                 chunk_id=chunk_id,
                 text_preview=text_preview,
                 page_number=page_number,
                 s3_key=s3_key,
             )
 
+    @_NEO4J_RETRY
     async def upsert_entity(self, entity: Entity) -> None:
-        """MERGE Entity on (name, type), SET description + timestamps."""
+        """MERGE Entity on (name, type), SET description."""
         async with self.driver.session() as session:
             await session.run(
                 "MERGE (e:Entity {name: $name, type: $type}) "
@@ -82,6 +169,7 @@ class GraphWriter:
                 description=entity.description,
             )
 
+    @_NEO4J_RETRY
     async def upsert_relationship(
         self,
         source: str,
@@ -103,13 +191,14 @@ class GraphWriter:
                 props=properties,
             )
 
+    @_NEO4J_RETRY
     async def link_chunk_to_entity(
         self,
         chunk_id: str,
         entity_name: str,
         confidence: float = 1.0,
     ) -> None:
-        """MERGE MENTIONS relationship between Chunk and Entity."""
+        """MERGE MENTIONS relationship."""
         async with self.driver.session() as session:
             await session.run(
                 "MATCH (c:Chunk {id: $chunk_id}) "
@@ -127,7 +216,7 @@ class GraphWriter:
         chunk_id: str,
         extraction_result: ExtractionResult,
     ) -> None:
-        """Orchestrate upserts for one chunk's extraction result."""
+        """Orchestrate upserts for one chunk's extraction."""
         for entity in extraction_result.entities:
             await self.upsert_entity(entity)
 
@@ -141,3 +230,7 @@ class GraphWriter:
 
         for entity in extraction_result.entities:
             await self.link_chunk_to_entity(chunk_id, entity.name)
+
+
+# Backward-compatible alias so existing imports still work
+GraphWriter = _LegacyGraphWriter

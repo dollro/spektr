@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import asyncio
-
 import cocoindex
 
 from config.settings import settings
+from ingestion._utils import run_async
 from ingestion.embedder import JinaV4Embedder
 
 _embedder: JinaV4Embedder | None = None
@@ -18,28 +17,11 @@ def _get_embedder() -> JinaV4Embedder:
     return _embedder
 
 
-def _run_async[T](coro: T) -> T:  # type: ignore[type-var]
-    """Run an async coroutine from a sync context."""
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        return asyncio.run(coro)  # type: ignore[arg-type]
-    # If already in an event loop, create a new one in a thread
-    import concurrent.futures
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        return loop.run_in_executor(  # type: ignore[return-value]
-            pool,
-            asyncio.run,
-            coro,  # type: ignore[arg-type]
-        )
-
-
 @cocoindex.op.function()
 def jina_embed_text(text: str) -> list[float]:
     """CocoIndex op: text -> dense vector (2048d)."""
     embedder = _get_embedder()
-    results = _run_async(embedder.embed_text([text]))
+    results = run_async(embedder.embed_text([text]))
     return results[0]
 
 
@@ -47,11 +29,11 @@ def jina_embed_text(text: str) -> list[float]:
 def jina_embed_image(image_bytes: bytes) -> list[float]:
     """CocoIndex op: image -> dense vector (2048d)."""
     embedder = _get_embedder()
-    return _run_async(embedder.embed_image(image_bytes))
+    return run_async(embedder.embed_image(image_bytes))
 
 
 @cocoindex.op.function()
 def jina_embed_image_multivec(image_bytes: bytes) -> list[list[float]]:
     """CocoIndex op: image -> ColBERT multi-vectors (128d each)."""
     embedder = _get_embedder()
-    return _run_async(embedder.embed_multi_vector(image_bytes))
+    return run_async(embedder.embed_multi_vector(image_bytes))
