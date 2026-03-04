@@ -32,7 +32,7 @@ class TextChunk:
 def file_to_pages(filename: str, content: bytes) -> list[Page]:
     """MIME-classify file and convert to a list of Pages.
 
-    PDF -> multiple Pages with PNG bytes (300 DPI).
+    PDF -> multiple Pages with text extraction + PNG (150 DPI).
     Image -> single Page with original bytes.
     Text -> single Page with text content.
     Unknown -> empty list + log warning.
@@ -95,7 +95,7 @@ _docling_converter = None
 _docling_checked = False
 
 
-def _get_docling_converter():  # type: ignore[no-untyped-def]
+def _get_docling_converter() -> object | None:
     """Lazily initialize Docling converter, or return None if not installed."""
     global _docling_converter, _docling_checked  # noqa: PLW0603
     if _docling_checked:
@@ -116,18 +116,19 @@ def _extract_text_docling(image_bytes: bytes) -> str:
     converter = _get_docling_converter()
     if converter is None:
         return ""
+    tmp_path = None
     try:
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
             f.write(image_bytes)
             tmp_path = f.name
-        try:
-            result = converter.convert(tmp_path)
-            return result.document.export_to_markdown()
-        finally:
-            os.unlink(tmp_path)
+        result = converter.convert(tmp_path)
+        return result.document.export_to_markdown()
     except Exception:
         logger.exception("Docling extraction failed")
         return ""
+    finally:
+        if tmp_path is not None:
+            os.unlink(tmp_path)
 
 
 def _pdf_to_pages(content: bytes) -> list[Page]:

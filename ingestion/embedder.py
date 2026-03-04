@@ -27,7 +27,10 @@ def _is_retryable_status(exc: BaseException) -> bool:
 
 
 class _TokenBucket:
-    """Simple async token-bucket rate limiter."""
+    """Simple async token-bucket rate limiter.
+
+    Not thread-safe — designed for use within a single asyncio event loop.
+    """
 
     def __init__(self, tokens_per_sec: float, burst: int) -> None:
         self._rate = tokens_per_sec
