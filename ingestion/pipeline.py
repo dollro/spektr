@@ -8,8 +8,8 @@ then exports to Qdrant (dense + multivec) and Neo4j.
 from __future__ import annotations
 
 import asyncio
-import logging
 import mimetypes
+import time
 import uuid
 from datetime import UTC, datetime
 
@@ -17,14 +17,14 @@ import cocoindex
 from qdrant_client import QdrantClient, models
 
 from config.constants import DENSE_COLLECTION, MULTIVEC_COLLECTION
+from config.logging import get_logger
 from config.settings import settings
-from ingestion.entity_extractor import extract_entities, get_llm_client
 from ingestion.file_processor import (
     TextChunk,
     file_to_pages,
     semantic_chunk,
 )
-from ingestion.graph_writer import GraphWriter
+from ingestion.graph_writer import GraphitiWriter
 from ingestion.jina_cocoindex_ops import (
     jina_embed_image,
     jina_embed_image_multivec,
@@ -33,7 +33,18 @@ from ingestion.jina_cocoindex_ops import (
 from ingestion.neo4j_setup import create_neo4j_schema, get_driver
 from ingestion.qdrant_setup import ensure_collections
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
+
+_qdrant_client: QdrantClient | None = None
+
+
+def _get_qdrant_client() -> QdrantClient:
+    """Lazily initialize a shared QdrantClient instance."""
+    global _qdrant_client  # noqa: PLW0603
+    if _qdrant_client is None:
+        _qdrant_client = QdrantClient(url=settings.qdrant_url)
+    return _qdrant_client
+
 
 _SUPPORTED_PATTERNS = [
     "*.pdf",
@@ -89,10 +100,10 @@ def _process_text_page(
     mime: str,
     now: str,
     qdrant: QdrantClient,
-    graph_writer: GraphWriter | None,
+    graphiti_writer: GraphitiWriter | None,
 ) -> None:
-    """Process a text page: chunk, embed, store dense, extract entities."""
-    chunks = semantic_chunk(text)
+    """Process a text page: chunk, embed, store dense, ingest to Graphiti."""
+    chunks = semantic_chunk(text, page_number=page_number)
     if not chunks:
         return
 
@@ -124,6 +135,7 @@ def _process_text_page(
                     "content_type": "text_chunk",
                     "page_number": page_number,
                     "chunk_index": chunk.chunk_index,
+                    "char_count": len(chunk.text),
                     "text_content": chunk.text,
                     "metadata": {
                         "mime_type": mime,
@@ -140,9 +152,9 @@ def _process_text_page(
             points=dense_points,
         )
 
-    # Entity extraction + graph writes
-    if graph_writer is not None:
-        _write_entities(source_file, chunks, graph_writer)
+    # Graphiti episode ingestion (handles entity extraction internally)
+    if graphiti_writer is not None:
+        _ingest_to_graphiti(source_file, chunks, graphiti_writer)
 
 
 def _process_visual_page(
@@ -218,41 +230,32 @@ def _process_visual_page(
         )
 
 
-def _write_entities(
+def _ingest_to_graphiti(
     source_file: str,
     chunks: list[TextChunk],
-    graph_writer: GraphWriter,
+    graphiti_writer: GraphitiWriter,
 ) -> None:
-    """Extract entities from chunks and write to Neo4j."""
-    llm_client = get_llm_client()
+    """Ingest chunks as Graphiti episodes (entity extraction is automatic)."""
 
-    async def _do_write() -> None:
+    async def _do_ingest() -> None:
+        ref_time = datetime.now(tz=UTC)
         for chunk in chunks:
-            chunk_id = _make_chunk_id(
-                source_file,
-                chunk.page_number,
-                chunk.chunk_index,
-            )
-            await graph_writer.upsert_chunk(
-                chunk_id=chunk_id,
-                text_preview=chunk.text[:200],
-                page_number=chunk.page_number,
-                s3_key=source_file,
-            )
             try:
-                result = await extract_entities(chunk.text, llm_client)
-                await graph_writer.write_extraction_result(
-                    s3_key=source_file,
-                    chunk_id=chunk_id,
-                    extraction_result=result,
+                await graphiti_writer.ingest_chunk(
+                    chunk_text=chunk.text,
+                    source_key=source_file,
+                    page_number=chunk.page_number,
+                    chunk_index=chunk.chunk_index,
+                    reference_time=ref_time,
                 )
             except Exception:
                 logger.exception(
-                    "Entity extraction failed for chunk %s",
-                    chunk_id,
+                    "Graphiti ingestion failed for %s chunk %d",
+                    source_file,
+                    chunk.chunk_index,
                 )
 
-    _run_async(_do_write())
+    _run_async(_do_ingest())
 
 
 @cocoindex.op.function()
@@ -261,35 +264,44 @@ def ingest_file(content: bytes, filename: str) -> str:
 
     Returns filename as passthrough for CocoIndex lineage tracking.
     """
+    t0 = time.monotonic()
     try:
         pages = file_to_pages(filename, content)
     except Exception:
-        logger.exception("Failed to process file: %s", filename)
+        logger.exception(
+            "Failed to process file: %s",
+            filename,
+            extra={"file_name": filename},
+        )
         return filename
 
     if not pages:
-        logger.warning("No pages extracted from %s, skipping.", filename)
+        logger.warning(
+            "No pages extracted from %s, skipping.",
+            filename,
+            extra={"file_name": filename},
+        )
         return filename
 
     mime = _guess_mime(filename)
     now = datetime.now(tz=UTC).isoformat()
-    qdrant = QdrantClient(url=settings.qdrant_url)
-    graph_writer: GraphWriter | None = None
+    qdrant = _get_qdrant_client()
+    graphiti_writer: GraphitiWriter | None = None
+
+    logger.info(
+        "Processing file: %s",
+        filename,
+        extra={
+            "file_name": filename,
+            "mime_type": mime,
+            "page_count": len(pages),
+        },
+    )
 
     try:
-        # Upsert document node in Neo4j
         has_text = any(p.content_type == "text" for p in pages)
         if has_text:
-            graph_writer = GraphWriter()
-            _run_async(
-                graph_writer.upsert_document(
-                    s3_key=filename,
-                    filename=filename,
-                    mime_type=mime,
-                    page_count=len(pages),
-                    source_bucket=settings.s3_bucket_name,
-                ),
-            )
+            graphiti_writer = GraphitiWriter()
 
         for page in pages:
             if page.content_type == "text":
@@ -300,7 +312,7 @@ def ingest_file(content: bytes, filename: str) -> str:
                     mime=mime,
                     now=now,
                     qdrant=qdrant,
-                    graph_writer=graph_writer,
+                    graphiti_writer=graphiti_writer,
                 )
             else:
                 _process_visual_page(
@@ -313,18 +325,122 @@ def ingest_file(content: bytes, filename: str) -> str:
                     qdrant=qdrant,
                 )
     except Exception:
-        logger.exception("Pipeline failed for file: %s", filename)
+        logger.exception(
+            "Pipeline failed for file: %s",
+            filename,
+            extra={"file_name": filename},
+        )
     finally:
-        qdrant.close()
-        if graph_writer is not None:
-            _run_async(graph_writer.close())
+        if graphiti_writer is not None:
+            _run_async(graphiti_writer.close())
 
+    duration_ms = round((time.monotonic() - t0) * 1000)
+    logger.info(
+        "Finished file: %s in %dms",
+        filename,
+        duration_ms,
+        extra={
+            "file_name": filename,
+            "mime_type": mime,
+            "page_count": len(pages),
+            "duration_ms": duration_ms,
+        },
+    )
     return filename
 
 
 def _use_s3_source() -> bool:
     """Check if S3 source is configured."""
-    return bool(settings.s3_bucket_name and settings.s3_sqs_queue_url)
+    return settings.document_source == "s3"
+
+
+def handle_s3_delete(s3_key: str) -> None:
+    """Handle S3 object deletion: remove Qdrant points and invalidate graph.
+
+    Called when an s3:ObjectRemoved:* event is received from SQS.
+    Deletes all Qdrant points matching the source_file and invalidates
+    related Graphiti episodes.
+    """
+    logger.info(
+        "Handling S3 delete for %s",
+        s3_key,
+        extra={"file_name": s3_key},
+    )
+    qdrant = _get_qdrant_client()
+
+    try:
+        # Delete dense collection points by source_file
+        qdrant.delete(
+            collection_name=DENSE_COLLECTION,
+            points_selector=models.FilterSelector(
+                filter=models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="source_file",
+                            match=models.MatchValue(value=s3_key),
+                        ),
+                    ],
+                ),
+            ),
+        )
+        # Delete multivec collection points by source_file
+        qdrant.delete(
+            collection_name=MULTIVEC_COLLECTION,
+            points_selector=models.FilterSelector(
+                filter=models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="source_file",
+                            match=models.MatchValue(value=s3_key),
+                        ),
+                    ],
+                ),
+            ),
+        )
+        logger.info(
+            "Deleted Qdrant points for %s",
+            s3_key,
+            extra={"file_name": s3_key},
+        )
+    except Exception:
+        logger.exception(
+            "Failed to delete Qdrant points for %s",
+            s3_key,
+            extra={"file_name": s3_key},
+        )
+
+    # Invalidate Graphiti episodes by source_description
+    # Graphiti doesn't expose bulk invalidation by source, so we
+    # search for matching episodes and mark them individually.
+    try:
+        async def _invalidate_graph() -> None:
+            from ingestion.graphiti_client import (
+                close_graphiti,
+                get_graphiti,
+            )
+
+            client = await get_graphiti()
+            edges = await client.search(s3_key)
+            invalidated = 0
+            for edge in edges:
+                if edge.source_description == s3_key:
+                    edge.expired_at = datetime.now(tz=UTC)
+                    invalidated += 1
+            logger.info(
+                "Invalidated %d Graphiti edges for %s",
+                invalidated,
+                s3_key,
+                extra={"file_name": s3_key},
+            )
+            await close_graphiti()
+
+        _run_async(_invalidate_graph())
+    except Exception:
+        logger.exception(
+            "Failed to invalidate Graphiti data for %s",
+            s3_key,
+            extra={"file_name": s3_key},
+        )
 
 
 @cocoindex.flow_def(name="RagIngestion")
@@ -351,7 +467,7 @@ def rag_ingestion_flow(
     else:
         data_scope["files"] = flow_builder.add_source(
             cocoindex.sources.LocalFile(
-                path="documents",
+                path=settings.local_documents_path,
                 binary=True,
                 included_patterns=_SUPPORTED_PATTERNS,
             ),
@@ -380,12 +496,12 @@ def rag_ingestion_flow(
 
 def run_pipeline() -> None:
     """Initialize and run the ingestion pipeline."""
+    t0 = time.monotonic()
+    logger.info("Pipeline starting")
     cocoindex.init()
 
     # Provision infrastructure
-    qdrant = QdrantClient(url=settings.qdrant_url)
-    ensure_collections(qdrant)
-    qdrant.close()
+    ensure_collections(_get_qdrant_client())
 
     driver = get_driver()
     _run_async(create_neo4j_schema(driver))
@@ -396,12 +512,16 @@ def run_pipeline() -> None:
     flow.setup()
     cocoindex.update_all_flows()
 
-    logger.info("Pipeline completed successfully.")
+    duration_ms = round((time.monotonic() - t0) * 1000)
+    logger.info(
+        "Pipeline completed in %dms",
+        duration_ms,
+        extra={"duration_ms": duration_ms},
+    )
 
 
 if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(name)s %(levelname)s %(message)s",
-    )
+    from config.logging import setup_logging
+
+    setup_logging()
     run_pipeline()
