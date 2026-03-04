@@ -5,11 +5,10 @@ MIME classification, chunking, embedding, and entity extraction,
 then exports to Qdrant (dense + multivec) and Neo4j.
 """
 
-from __future__ import annotations
-
 import asyncio
 import io
 import mimetypes
+import os
 import time
 import uuid
 from datetime import UTC, datetime
@@ -83,6 +82,66 @@ def _make_point_id(key: str) -> str:
     """Deterministic UUID from a string key."""
     return str(uuid.uuid5(uuid.NAMESPACE_URL, key))
 
+
+
+def _build_page_tasks(
+    page,  # type: ignore[no-untyped-def]
+    source_file: str,
+    mime: str,
+    now: str,
+    qdrant: QdrantClient,
+    graphiti_writer: GraphitiWriter | None,
+) -> list:  # type: ignore[type-arg]
+    """Return a list of async coroutines for processing one page."""
+    tasks = []
+
+    if page.content_type == "text":
+        tasks.append(_async_process_text_page(
+            source_file, page.text, page.page_number,
+            mime, now, qdrant, graphiti_writer,
+        ))
+    elif page.content_type == "pdf":
+        if page.text.strip():
+            tasks.append(_async_process_text_page(
+                source_file, page.text, page.page_number,
+                mime, now, qdrant, graphiti_writer,
+            ))
+        tasks.append(_async_process_visual_page(
+            source_file, page.image_bytes, page.page_number,
+            "pdf_page", mime, now, qdrant,
+        ))
+    else:
+        tasks.append(_async_process_visual_page(
+            source_file, page.image_bytes, page.page_number,
+            "image", mime, now, qdrant,
+        ))
+
+    return tasks
+
+
+async def _async_process_text_page(
+    source_file: str, text: str, page_number: int,
+    mime: str, now: str, qdrant: QdrantClient,
+    graphiti_writer: GraphitiWriter | None,
+) -> None:
+    """Async wrapper for _process_text_page."""
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(
+        None, _process_text_page,
+        source_file, text, page_number, mime, now, qdrant, graphiti_writer,
+    )
+
+
+async def _async_process_visual_page(
+    source_file: str, image_bytes: bytes, page_number: int,
+    content_type: str, mime: str, now: str, qdrant: QdrantClient,
+) -> None:
+    """Async wrapper for _process_visual_page."""
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(
+        None, _process_visual_page,
+        source_file, image_bytes, page_number, content_type, mime, now, qdrant,
+    )
 
 
 def _process_text_page(
@@ -295,31 +354,22 @@ def ingest_file(content: bytes, filename: str) -> str:
     )
 
     try:
-        has_text = any(p.content_type == "text" for p in pages)
+        has_text = any(p.text.strip() for p in pages)
         if has_text:
             graphiti_writer = GraphitiWriter()
 
-        for page in pages:
-            if page.content_type == "text":
-                _process_text_page(
-                    source_file=filename,
-                    text=page.text,
-                    page_number=page.page_number,
-                    mime=mime,
-                    now=now,
-                    qdrant=qdrant,
-                    graphiti_writer=graphiti_writer,
+        async def _process_all_pages() -> None:
+            tasks = []
+            for page in pages:
+                tasks.extend(
+                    _build_page_tasks(
+                        page, filename, mime, now, qdrant, graphiti_writer,
+                    )
                 )
-            else:
-                _process_visual_page(
-                    source_file=filename,
-                    image_bytes=page.image_bytes,
-                    page_number=page.page_number,
-                    content_type=("pdf_page" if page.content_type == "pdf" else "image"),
-                    mime=mime,
-                    now=now,
-                    qdrant=qdrant,
-                )
+            if tasks:
+                await asyncio.gather(*tasks)
+
+        run_async(_process_all_pages())
     except Exception:
         logger.exception(
             "Pipeline failed for file: %s",
@@ -494,19 +544,26 @@ def run_pipeline() -> None:
     """Initialize and run the ingestion pipeline."""
     t0 = time.monotonic()
     logger.info("Pipeline starting")
+    os.environ.setdefault("COCOINDEX_DATABASE_URL", settings.database_url)
     cocoindex.init()
 
     # Provision infrastructure
     ensure_collections(_get_qdrant_client())
 
-    driver = get_driver()
-    run_async(create_neo4j_schema(driver))
-    run_async(driver.close())
+    async def _setup_neo4j() -> None:
+        driver = get_driver()
+        try:
+            await create_neo4j_schema(driver)
+        finally:
+            await driver.close()
 
-    # Open and run pipeline
-    flow = cocoindex.open_flow("RagIngestion", rag_ingestion_flow)
-    flow.setup()
-    cocoindex.update_all_flows()
+    run_async(_setup_neo4j())
+
+    # Setup and run pipeline
+    cocoindex.setup_all_flows()
+    run_async(cocoindex.update_all_flows_async(
+        cocoindex.FlowLiveUpdaterOptions(live_mode=False, print_stats=True),
+    ))
 
     duration_ms = round((time.monotonic() - t0) * 1000)
     logger.info(
