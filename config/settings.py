@@ -16,6 +16,18 @@ class Settings(BaseSettings):
     jina_rpm: int = 500  # requests per minute (free=500, tier1=500, tier2=5000)
     jina_tpm: int = 1_000_000  # tokens per minute (free=1M, tier1=10M, tier2=100M)
 
+    # Embedding provider selection
+    embedding_provider: str = "jina"  # "jina" | "voyage"
+
+    # Voyage (only needed when embedding_provider = "voyage")
+    voyage_api_key: str = ""
+    voyage_api_url: str = "https://api.voyageai.com"
+    voyage_text_model: str = "voyage-4-large"
+    voyage_multimodal_model: str = "voyage-multimodal-3.5"
+    voyage_dense_dimensions: int = 1024
+    voyage_rpm: int = 300
+    voyage_max_concurrent: int = 10
+
     # Qdrant
     qdrant_url: str = "http://localhost:6333"
     qdrant_dense_collection: str = "documents_dense"
@@ -59,6 +71,7 @@ class Settings(BaseSettings):
     max_retries: int = 3
     rerank_enabled: bool = False
     vlm_generation_enabled: bool = False
+    multivec_enabled: bool = False
 
     # Observability
     log_level: str = "INFO"

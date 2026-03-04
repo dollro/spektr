@@ -88,7 +88,7 @@ def create_embedder(**kwargs: object) -> Embedder:
 
     Extra *kwargs* are forwarded to the provider constructor.
     """
-    provider = getattr(settings, "embedding_provider", "jina")
+    provider = settings.embedding_provider
     if provider == "jina":
         from ingestion.embedders.jina import JinaV4Embedder
 
