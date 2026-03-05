@@ -79,10 +79,33 @@ class TestFileToPages:
         assert result.pages == []
 
     def test_pdf_returns_docling_document(self) -> None:
-        """PDF processing populates docling_document field."""
+        """PDF processing populates docling_document when Docling available."""
         content = (FIXTURES / "sample.pdf").read_bytes()
-        result = file_to_pages("doc.pdf", content)
-        assert hasattr(result, "docling_document")
+        mock_doc = MagicMock()
+        mock_result = MagicMock()
+        mock_result.document = mock_doc
+
+        with patch(
+            "ingestion.file_processor._get_docling_converter"
+        ) as mock_get:
+            mock_converter = MagicMock()
+            mock_converter.convert.return_value = mock_result
+            mock_get.return_value = mock_converter
+
+            result = file_to_pages("doc.pdf", content)
+
+        assert result.docling_document is mock_doc
+
+    def test_pdf_docling_document_none_when_unavailable(self) -> None:
+        """PDF processing returns None docling_document when Docling absent."""
+        content = (FIXTURES / "sample.pdf").read_bytes()
+        with patch(
+            "ingestion.file_processor._get_docling_converter",
+            return_value=None,
+        ):
+            result = file_to_pages("doc.pdf", content)
+
+        assert result.docling_document is None
 
     def test_text_file_has_no_docling_document(self) -> None:
         """Text files don't produce a docling_document."""

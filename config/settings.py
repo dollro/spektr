@@ -78,6 +78,7 @@ class Settings(BaseSettings):
     rerank_enabled: bool = False
     vlm_generation_enabled: bool = False
     multivec_enabled: bool = False
+    image_embed_strategy: str = "smart"  # "smart" | "all"
 
     # Observability
     log_level: str = "INFO"

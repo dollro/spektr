@@ -20,6 +20,7 @@ class Page:
     text: str  # text content for text pages, empty for image
     page_number: int
     content_type: str  # "pdf" | "image" | "text"
+    has_visual_content: bool = False
 
 
 @dataclass
@@ -142,6 +143,29 @@ def _extract_text_docling(image_bytes: bytes) -> str:
             os.unlink(tmp_path)
 
 
+def _convert_pdf_docling(content: bytes) -> object | None:
+    """Convert PDF bytes to a Docling Document for HybridChunker.
+
+    Returns None if Docling is unavailable or conversion fails.
+    """
+    converter = _get_docling_converter()
+    if converter is None:
+        return None
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+            f.write(content)
+            tmp_path = f.name
+        result = converter.convert(tmp_path)
+        return result.document
+    except Exception:
+        logger.exception("Docling PDF conversion failed")
+        return None
+    finally:
+        if tmp_path is not None:
+            os.unlink(tmp_path)
+
+
 def _pdf_to_pages(content: bytes) -> FileProcessingResult:
     """Convert PDF to Pages with text extraction (PyMuPDF) + image rendering (150 DPI).
 
@@ -163,17 +187,23 @@ def _pdf_to_pages(content: bytes) -> FileProcessingResult:
         if not text:
             text = _extract_text_docling(image_bytes)
 
+        has_visual = len(fitz_page.get_images()) > 0
+
         pages.append(
             Page(
                 image_bytes=image_bytes,
                 text=text,
                 page_number=i + 1,
                 content_type="pdf",
+                has_visual_content=has_visual,
             )
         )
 
     doc.close()
-    return FileProcessingResult(pages=pages)
+
+    docling_document = _convert_pdf_docling(content)
+
+    return FileProcessingResult(pages=pages, docling_document=docling_document)
 
 
 def _split_long_text(text: str, max_size: int) -> list[str]:

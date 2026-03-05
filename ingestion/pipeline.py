@@ -132,19 +132,28 @@ def _build_page_tasks(
                     docling_chunks=docling_chunks,
                 )
             )
-        tasks.image.append(
-            _process_visual_page(
-                source_file,
-                page.image_bytes,
-                page.page_number,
-                "pdf_page",
-                mime,
-                now,
-                qdrant,
-                embedder,
-                graphiti_writer,
+
+        should_embed_image = (
+            settings.image_embed_strategy == "all"
+            or (
+                settings.image_embed_strategy == "smart"
+                and page.has_visual_content
             )
         )
+        if should_embed_image:
+            tasks.image.append(
+                _process_visual_page(
+                    source_file,
+                    page.image_bytes,
+                    page.page_number,
+                    "pdf_page",
+                    mime,
+                    now,
+                    qdrant,
+                    embedder,
+                    graphiti_writer,
+                )
+            )
     else:
         tasks.image.append(
             _process_visual_page(
