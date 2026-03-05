@@ -238,13 +238,16 @@ DENSE_DIM = 2048
 
 class TestLateChunking:
     async def test_payload_includes_late_chunking(
-        self, embedder: JinaV4Embedder,
+        self,
+        embedder: JinaV4Embedder,
     ) -> None:
         """When late_chunking=True, payload has 'late_chunking': True."""
-        mock_resp = _mock_response([
-            {"embedding": [0.1] * DENSE_DIM},
-            {"embedding": [0.2] * DENSE_DIM},
-        ])
+        mock_resp = _mock_response(
+            [
+                {"embedding": [0.1] * DENSE_DIM},
+                {"embedding": [0.2] * DENSE_DIM},
+            ]
+        )
         with patch.object(
             embedder._client,
             "post",
@@ -252,14 +255,16 @@ class TestLateChunking:
             return_value=mock_resp,
         ) as mock_post:
             await embedder.embed_text(
-                ["chunk 1", "chunk 2"], late_chunking=True,
+                ["chunk 1", "chunk 2"],
+                late_chunking=True,
             )
 
         payload = mock_post.call_args.kwargs["json"]
         assert payload["late_chunking"] is True
 
     async def test_no_late_chunking_by_default(
-        self, embedder: JinaV4Embedder,
+        self,
+        embedder: JinaV4Embedder,
     ) -> None:
         """Default embed_text does NOT include late_chunking."""
         mock_resp = _mock_response([{"embedding": [0.1] * DENSE_DIM}])
@@ -275,7 +280,8 @@ class TestLateChunking:
         assert "late_chunking" not in payload
 
     async def test_single_batch_when_late_chunking(
-        self, embedder: JinaV4Embedder,
+        self,
+        embedder: JinaV4Embedder,
     ) -> None:
         """late_chunking=True sends all texts in one API call."""
         n_texts = 50

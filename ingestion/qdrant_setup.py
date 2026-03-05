@@ -6,10 +6,10 @@ from qdrant_client import QdrantClient, models
 
 from config.constants import (
     DENSE_COLLECTION,
-    DENSE_DIM,
     MULTIVEC_COLLECTION,
     MULTIVEC_DIM,
 )
+from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 def create_dense_collection(client: QdrantClient) -> None:
     """Create documents_dense collection.
 
-    Vector: size=2048, distance=COSINE.
+    Vector dimensions are read from settings (provider-dependent).
     Payload indexes: source_file (KEYWORD), content_type (KEYWORD).
     Idempotent — skips if collection already exists.
     """
@@ -25,10 +25,11 @@ def create_dense_collection(client: QdrantClient) -> None:
         logger.info("Collection %s already exists, skipping.", DENSE_COLLECTION)
         return
 
+    dim = settings.dense_dimensions
     client.create_collection(
         collection_name=DENSE_COLLECTION,
         vectors_config=models.VectorParams(
-            size=DENSE_DIM,
+            size=dim,
             distance=models.Distance.COSINE,
         ),
     )
@@ -78,8 +79,6 @@ def create_multivec_collection(client: QdrantClient) -> None:
 
 def ensure_collections(client: QdrantClient) -> None:
     """Create dense (and optionally multivec) collections (idempotent)."""
-    from config.settings import settings
-
     create_dense_collection(client)
     if settings.multivec_enabled:
         create_multivec_collection(client)

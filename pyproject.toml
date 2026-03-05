@@ -16,6 +16,7 @@ dependencies = [
     "pydantic-settings",
     "pymupdf",
     "docling",
+    "onnxruntime",
     "boto3",
     "uvicorn",
     "fastapi",

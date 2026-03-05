@@ -43,9 +43,7 @@ async def hybrid_search(
         }
     limit = max(1, min(limit, 100))
 
-    vector_task = asyncio.create_task(
-        vector_search(query, limit=limit, _skip_rerank=True)
-    )
+    vector_task = asyncio.create_task(vector_search(query, limit=limit, _skip_rerank=True))
     graph_task = asyncio.create_task(graph_search(query, limit=limit))
 
     vector_results: list[dict] = []  # type: ignore[type-arg]
@@ -81,15 +79,8 @@ async def hybrid_search(
     has_vector_error = any("error" in r for r in vector_results)
     has_graph_error = any("error" in r for r in graph_results)
     if not has_vector_error and not has_graph_error:
-        vector_sources = {
-            r.get("source_file")
-            for r in vector_results
-            if r.get("source_file")
-        }
-        graph_results = [
-            g for g in graph_results
-            if g.get("source") not in vector_sources
-        ]
+        vector_sources = {r.get("source_file") for r in vector_results if r.get("source_file")}
+        graph_results = [g for g in graph_results if g.get("source") not in vector_sources]
 
     result: dict = {  # type: ignore[type-arg]
         "vector_results": vector_results,

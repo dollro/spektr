@@ -118,7 +118,8 @@ async def generate_visual_answer(
         images: list[tuple[bytes, str]] = []
         for key in s3_keys:
             img_bytes, media_type = await asyncio.to_thread(
-                _fetch_s3_image, key,
+                _fetch_s3_image,
+                key,
             )
             images.append((img_bytes, media_type))
 

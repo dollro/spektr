@@ -72,6 +72,8 @@ flowchart TD
 - **Smart image embedding** -- Docling layout analysis classifies each PDF page. Only pages with figures, tables, or formulas are image-embedded (resized to 400px). Text-only pages store a lightweight thumbnail instead. This reduces embedding cost by ~90% on text-heavy PDFs.
 - **State tracked in PostgreSQL** -- CocoIndex maintains `ingestion_log` for incremental processing.
 - **Text tasks run concurrently, image tasks run sequentially** -- image embeddings consume 50-100k+ tokens each and would blow TPM limits if run in parallel. The pipeline splits tasks by type and processes them accordingly.
+- **Per-file timeout with graceful cancellation** -- each file gets a `PIPELINE_TIMEOUT` (default 3600s). On expiry, `asyncio.wait_for` cancels all in-flight tasks cleanly instead of crashing the executor pool.
+- **Concurrent Graphiti ingestion** -- episode ingestion uses `asyncio.gather` bounded by a semaphore (`GRAPHITI_CONCURRENCY`, default 3), replacing the previous sequential loop. This significantly reduces wall time for large documents with many chunks.
 - **TPM-aware rate limiting** -- a dual TokenBucket system (RPM + TPM) estimates token cost before each API call and throttles accordingly.
 - **Graphiti uses the same Jina embedder** -- a thin adapter (`_JinaGraphitiEmbedder`) delegates graph embedding requests to the project's Jina/Voyage embedder, sharing rate limiters.
 

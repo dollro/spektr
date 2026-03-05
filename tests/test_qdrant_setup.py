@@ -5,7 +5,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 from qdrant_client import models
 
-from config.constants import DENSE_COLLECTION, DENSE_DIM, MULTIVEC_COLLECTION, MULTIVEC_DIM
+from config.constants import DENSE_COLLECTION, MULTIVEC_COLLECTION, MULTIVEC_DIM
+from config.settings import settings
 from ingestion.qdrant_setup import (
     create_dense_collection,
     create_multivec_collection,
@@ -29,7 +30,7 @@ class TestCreateDenseCollection:
         assert call_kwargs.kwargs["collection_name"] == DENSE_COLLECTION
         vec_config = call_kwargs.kwargs["vectors_config"]
         assert isinstance(vec_config, models.VectorParams)
-        assert vec_config.size == DENSE_DIM
+        assert vec_config.size == settings.dense_dimensions
         assert vec_config.distance == models.Distance.COSINE
 
     def test_creates_payload_indexes(self, mock_client: MagicMock) -> None:
@@ -76,11 +77,10 @@ class TestCreateMultivecCollection:
 
 
 class TestEnsureCollections:
-    def test_creates_dense_only_when_multivec_disabled(
-        self, mock_client: MagicMock
-    ) -> None:
-        with patch("config.settings.settings") as mock_settings:
+    def test_creates_dense_only_when_multivec_disabled(self, mock_client: MagicMock) -> None:
+        with patch("ingestion.qdrant_setup.settings") as mock_settings:
             mock_settings.multivec_enabled = False
+            mock_settings.dense_dimensions = settings.dense_dimensions
             ensure_collections(mock_client)
 
         exists_calls = mock_client.collection_exists.call_args_list
@@ -89,11 +89,10 @@ class TestEnsureCollections:
         assert MULTIVEC_COLLECTION not in names
         assert mock_client.create_collection.call_count == 1
 
-    def test_creates_both_when_multivec_enabled(
-        self, mock_client: MagicMock
-    ) -> None:
-        with patch("config.settings.settings") as mock_settings:
+    def test_creates_both_when_multivec_enabled(self, mock_client: MagicMock) -> None:
+        with patch("ingestion.qdrant_setup.settings") as mock_settings:
             mock_settings.multivec_enabled = True
+            mock_settings.dense_dimensions = settings.dense_dimensions
             ensure_collections(mock_client)
 
         exists_calls = mock_client.collection_exists.call_args_list

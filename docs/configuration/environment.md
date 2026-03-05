@@ -93,6 +93,8 @@ When `LLM_BASE_URL` is set, the **agent** uses an OpenAI-compatible client regar
 
 | Variable | Default | Required | Description |
 |-|-|-|-|
+| `PIPELINE_TIMEOUT` | `3600` | No | Per-file processing timeout in seconds (increase for large PDFs with graph ingestion) |
+| `GRAPHITI_CONCURRENCY` | `3` | No | Max concurrent Graphiti episode ingestions per page (bounded by LLM rate limits) |
 | `JINA_MAX_CONCURRENT` | `5` | No | Max concurrent requests to Jina API |
 | `JINA_RPM` | `500` | No | Jina requests per minute limit |
 | `VOYAGE_MAX_CONCURRENT` | `10` | No | Max concurrent requests to Voyage API |
@@ -114,6 +116,9 @@ When `LLM_BASE_URL` is set, the **agent** uses an OpenAI-compatible client regar
 |-|-|-|-|
 | `RERANK_ENABLED` | `false` | No | Enable Jina reranker for search results |
 | `VLM_GENERATION_ENABLED` | `false` | No | Enable VLM-based generation for visual search |
+| `MULTIVEC_ENABLED` | `false` | No | Enable ColBERT multi-vector embeddings (requires `jina-colbert-v2`, Jina only) |
+| `GRAPH_ENABLED` | `true` | No | Enable Neo4j knowledge graph via Graphiti (LLM-heavy) |
+| `GRAPH_SEMAPHORE_LIMIT` | `10` | No | Max concurrent LLM calls within Graphiti's internal pipeline |
 
 ## Observability
 

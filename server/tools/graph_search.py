@@ -29,9 +29,7 @@ async def _search_entities(
                 fact=edge.fact,
                 source=edge.source_description,
                 created_at=str(edge.created_at),
-                expired_at=(
-                    str(edge.expired_at) if edge.expired_at else None
-                ),
+                expired_at=(str(edge.expired_at) if edge.expired_at else None),
             ).model_dump()
         )
     return results
@@ -56,8 +54,7 @@ async def graph_search(
         return []
     if search_type != "entity":
         raise ValueError(
-            f"search_type='{search_type}' is not yet implemented."
-            " Use 'entity' instead."
+            f"search_type='{search_type}' is not yet implemented. Use 'entity' instead."
         )
     limit = max(1, min(limit, 100))
 

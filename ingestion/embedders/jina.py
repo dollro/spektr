@@ -135,7 +135,10 @@ class JinaV4Embedder:
         """
         if late_chunking:
             return await self._embed_text_batch(
-                texts, task, dimensions, late_chunking=True,
+                texts,
+                task,
+                dimensions,
+                late_chunking=True,
             )
 
         batch_size = settings.jina_batch_size

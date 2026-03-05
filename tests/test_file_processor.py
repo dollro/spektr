@@ -85,9 +85,7 @@ class TestFileToPages:
         mock_result = MagicMock()
         mock_result.document = mock_doc
 
-        with patch(
-            "ingestion.file_processor._get_docling_converter"
-        ) as mock_get:
+        with patch("ingestion.file_processor._get_docling_converter") as mock_get:
             mock_converter = MagicMock()
             mock_converter.convert.return_value = mock_result
             mock_get.return_value = mock_converter
@@ -182,9 +180,7 @@ class TestDoclingChunk:
         mock_chunk_2.meta.doc_items = [MagicMock()]
         mock_chunk_2.meta.doc_items[0].prov = [MagicMock(page_no=2)]
 
-        with patch(
-            "ingestion.file_processor._get_hybrid_chunker"
-        ) as mock_chunker_factory:
+        with patch("ingestion.file_processor._get_hybrid_chunker") as mock_chunker_factory:
             mock_chunker = MagicMock()
             mock_chunker.chunk.return_value = [mock_chunk_1, mock_chunk_2]
             mock_chunker.contextualize.side_effect = [
@@ -197,15 +193,11 @@ class TestDoclingChunk:
 
         assert len(chunks) == 2
         assert chunks[0].text == "First heading content"
-        assert chunks[0].contextualized_text == (
-            "Introduction\nFirst heading content"
-        )
+        assert chunks[0].contextualized_text == ("Introduction\nFirst heading content")
         assert chunks[0].page_number == 1
         assert chunks[0].chunk_index == 0
         assert chunks[1].text == "Table content here"
-        assert chunks[1].contextualized_text == (
-            "Results > Table 1\nTable content here"
-        )
+        assert chunks[1].contextualized_text == ("Results > Table 1\nTable content here")
         assert chunks[1].page_number == 2
         assert chunks[1].chunk_index == 1
 
@@ -216,9 +208,7 @@ class TestDoclingChunk:
     def test_falls_back_on_chunker_error(self) -> None:
         """docling_chunk returns empty list if HybridChunker fails."""
         mock_doc = MagicMock()
-        with patch(
-            "ingestion.file_processor._get_hybrid_chunker"
-        ) as mock_factory:
+        with patch("ingestion.file_processor._get_hybrid_chunker") as mock_factory:
             mock_factory.side_effect = Exception("chunker init failed")
             result = docling_chunk(mock_doc)
 
@@ -244,14 +234,10 @@ class TestDoclingChunk:
         mock_chunk.meta.doc_items = [MagicMock()]
         mock_chunk.meta.doc_items[0].prov = [MagicMock(page_no=1)]
 
-        with patch(
-            "ingestion.file_processor._get_hybrid_chunker"
-        ) as mock_chunker_factory:
+        with patch("ingestion.file_processor._get_hybrid_chunker") as mock_chunker_factory:
             mock_chunker = MagicMock()
             mock_chunker.chunk.return_value = [mock_chunk]
-            mock_chunker.contextualize.side_effect = Exception(
-                "contextualize failed"
-            )
+            mock_chunker.contextualize.side_effect = Exception("contextualize failed")
             mock_chunker_factory.return_value = mock_chunker
 
             chunks = docling_chunk(mock_doc)

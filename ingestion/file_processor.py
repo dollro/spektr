@@ -258,15 +258,9 @@ def _get_hybrid_chunker() -> object | None:
             tokenizer=tokenizer,
             merge_peers=True,
         )
-        logger.info(
-            "Docling HybridChunker available"
-            " (jina-v4 tokenizer, 256 max_tokens)"
-        )
+        logger.info("Docling HybridChunker available (jina-v4 tokenizer, 256 max_tokens)")
     except (ImportError, Exception):
-        logger.info(
-            "Docling HybridChunker not available,"
-            " will use paragraph chunker"
-        )
+        logger.info("Docling HybridChunker not available, will use paragraph chunker")
     return _hybrid_chunker
 
 
@@ -304,8 +298,7 @@ def docling_chunk(doc: object | None) -> list[TextChunk]:
                 ctx_text = chunker.contextualize(chunk)
             except Exception:
                 logger.warning(
-                    "contextualize() failed for chunk %d,"
-                    " using raw text",
+                    "contextualize() failed for chunk %d, using raw text",
                     idx,
                 )
 

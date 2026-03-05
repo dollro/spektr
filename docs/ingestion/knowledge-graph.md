@@ -129,13 +129,25 @@ Key differences from `GraphitiWriter`:
 | Graph operations | Raw Cypher + APOC | Graphiti API |
 | Status | Deprecated | Active |
 
+## Concurrency & Tuning
+
+Graphiti episode ingestion is **LLM-heavy** — each chunk triggers entity extraction via the configured LLM. Two settings control concurrency:
+
+| Setting | Env var | Default | Scope |
+|-|-|-|-|
+| `graphiti_concurrency` | `GRAPHITI_CONCURRENCY` | `3` | Max concurrent episode ingestions per page (pipeline level) |
+| `graph_semaphore_limit` | `GRAPH_SEMAPHORE_LIMIT` | `10` | Max concurrent LLM calls within Graphiti's internal pipeline |
+
+For large documents (60k+ tokens), the default `PIPELINE_TIMEOUT=3600` (1 hour) provides headroom. Tune these values based on your LLM provider's rate limits — higher concurrency speeds up ingestion but may trigger throttling.
+
 ## Integration
 
 `GraphitiWriter` is used in `pipeline.py` inside the `ingest_file` op:
 
 1. If any page has `content_type == "text"`, a `GraphitiWriter` is created
 2. For each text page, `semantic_chunk()` produces chunks
-3. Each chunk is ingested via `graphiti_writer.ingest_chunk()`
+3. Chunks are ingested concurrently via `asyncio.gather` bounded by `GRAPHITI_CONCURRENCY`
 4. The writer is closed in a `finally` block
+5. The entire file processing is wrapped in a `PIPELINE_TIMEOUT` — on expiry, in-flight tasks are cancelled gracefully
 
 See also: [Pipeline Overview](overview.md) | [File Processing](file-processing.md) | [Architecture Data Flow](../architecture/data-flow.md)

@@ -71,10 +71,7 @@ def _seed_dense(client, points: list[dict]) -> None:  # type: ignore[no-untyped-
     client.upsert(
         collection_name=DENSE_COLLECTION,
         points=[
-            PointStruct(
-                id=p["id"], vector=p["vector"], payload=p["payload"]
-            )
-            for p in points
+            PointStruct(id=p["id"], vector=p["vector"], payload=p["payload"]) for p in points
         ],
     )
 
@@ -86,10 +83,7 @@ def _seed_multivec(client, points: list[dict]) -> None:  # type: ignore[no-untyp
     client.upsert(
         collection_name=MULTIVEC_COLLECTION,
         points=[
-            PointStruct(
-                id=p["id"], vector=p["vector"], payload=p["payload"]
-            )
-            for p in points
+            PointStruct(id=p["id"], vector=p["vector"], payload=p["payload"]) for p in points
         ],
     )
 
@@ -103,9 +97,7 @@ class TestVectorSearch:
     """Tests for the vector_search tool."""
 
     @pytest.mark.integration
-    async def test_returns_sorted_results(
-        self, qdrant_client, mock_embedder
-    ):
+    async def test_returns_sorted_results(self, qdrant_client, mock_embedder):
         """Results are returned sorted by score descending."""
         _seed_dense(
             qdrant_client,
@@ -133,9 +125,7 @@ class TestVectorSearch:
         assert results[0]["score"] >= results[1]["score"]
 
     @pytest.mark.integration
-    async def test_content_type_filter(
-        self, qdrant_client, mock_embedder
-    ):
+    async def test_content_type_filter(self, qdrant_client, mock_embedder):
         """content_type filter restricts results."""
         _seed_dense(
             qdrant_client,
@@ -157,17 +147,13 @@ class TestVectorSearch:
         ):
             from server.tools.vector_search import vector_search
 
-            results = await vector_search(
-                "test", content_type="text"
-            )
+            results = await vector_search("test", content_type="text")
 
         assert len(results) == 1
         assert results[0]["content_type"] == "text"
 
     @pytest.mark.integration
-    async def test_source_file_filter(
-        self, qdrant_client, mock_embedder
-    ):
+    async def test_source_file_filter(self, qdrant_client, mock_embedder):
         """source_file filter restricts results."""
         _seed_dense(
             qdrant_client,
@@ -189,17 +175,13 @@ class TestVectorSearch:
         ):
             from server.tools.vector_search import vector_search
 
-            results = await vector_search(
-                "test", source_file="b.pdf"
-            )
+            results = await vector_search("test", source_file="b.pdf")
 
         assert len(results) == 1
         assert results[0]["source_file"] == "b.pdf"
 
     @pytest.mark.integration
-    async def test_empty_results(
-        self, qdrant_client, mock_embedder
-    ):
+    async def test_empty_results(self, qdrant_client, mock_embedder):
         """Empty collection returns empty list."""
         with (
             patch(
@@ -227,9 +209,7 @@ class TestVisualSearch:
     """Tests for the visual_search tool."""
 
     @pytest.mark.integration
-    async def test_returns_multivec_results(
-        self, qdrant_client, mock_embedder
-    ):
+    async def test_returns_multivec_results(self, qdrant_client, mock_embedder):
         """Returns results from the multivec collection."""
         _seed_multivec(
             qdrant_client,
@@ -342,12 +322,8 @@ class TestHybridSearch:
 
     async def test_returns_both_results(self):
         """Returns both vector_results and graph_results."""
-        mock_vector = AsyncMock(
-            return_value=[{"score": 0.9, "text": "result"}]
-        )
-        mock_graph = AsyncMock(
-            return_value=[{"entity": "X", "type": "CONCEPT"}]
-        )
+        mock_vector = AsyncMock(return_value=[{"score": 0.9, "text": "result"}])
+        mock_graph = AsyncMock(return_value=[{"entity": "X", "type": "CONCEPT"}])
 
         with (
             patch(
@@ -370,12 +346,8 @@ class TestHybridSearch:
 
     async def test_partial_failure_vector(self):
         """If vector search fails, graph results still returned."""
-        mock_vector = AsyncMock(
-            side_effect=RuntimeError("Qdrant down")
-        )
-        mock_graph = AsyncMock(
-            return_value=[{"entity": "X"}]
-        )
+        mock_vector = AsyncMock(side_effect=RuntimeError("Qdrant down"))
+        mock_graph = AsyncMock(return_value=[{"entity": "X"}])
 
         with (
             patch(
@@ -396,12 +368,8 @@ class TestHybridSearch:
 
     async def test_partial_failure_graph(self):
         """If graph search fails, vector results still returned."""
-        mock_vector = AsyncMock(
-            return_value=[{"score": 0.9}]
-        )
-        mock_graph = AsyncMock(
-            side_effect=RuntimeError("Neo4j down")
-        )
+        mock_vector = AsyncMock(return_value=[{"score": 0.9}])
+        mock_graph = AsyncMock(side_effect=RuntimeError("Neo4j down"))
 
         with (
             patch(
@@ -454,7 +422,9 @@ class TestEdgeCases:
 
     @pytest.mark.integration
     async def test_empty_corpus_returns_empty_list(
-        self, qdrant_client, mock_embedder,
+        self,
+        qdrant_client,
+        mock_embedder,
     ):
         """EC-05: Empty collection returns empty list, not an error."""
         with (
@@ -710,7 +680,8 @@ class TestVLMGenerator:
             )
 
             answer = await generate_visual_answer(
-                "What does the chart show?", results,
+                "What does the chart show?",
+                results,
             )
 
         assert answer == "The chart shows growth."

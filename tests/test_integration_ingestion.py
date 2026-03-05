@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from config.constants import DENSE_COLLECTION, DENSE_DIM, MULTIVEC_COLLECTION
+from config.constants import DENSE_COLLECTION, MULTIVEC_COLLECTION
 from config.settings import settings
 from ingestion.file_processor import file_to_pages, semantic_chunk
 from ingestion.pipeline import (
@@ -103,7 +103,8 @@ class TestTextPageIngestion:
                         source_key=sample_txt_name,
                     )
                     result = await extract_entities(
-                        chunk.text, llm_client,
+                        chunk.text,
+                        llm_client,
                     )
                     await graph_writer.write_extraction_result(
                         source_key=sample_txt_name,
