@@ -25,7 +25,7 @@ async def create_neo4j_schema(driver: AsyncDriver) -> None:
     async with driver.session() as session:
         await session.run(
             "CREATE CONSTRAINT doc_unique IF NOT EXISTS "
-            "FOR (d:Document) REQUIRE d.s3_key IS UNIQUE"
+            "FOR (d:Document) REQUIRE d.source_key IS UNIQUE"
         )
         await session.run(
             "CREATE CONSTRAINT entity_unique IF NOT EXISTS "

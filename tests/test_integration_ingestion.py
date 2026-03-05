@@ -6,16 +6,16 @@ using real Qdrant and Neo4j services (Docker).
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from config.constants import DENSE_COLLECTION, DENSE_DIM, MULTIVEC_COLLECTION
+from config.settings import settings
 from ingestion.file_processor import file_to_pages, semantic_chunk
 from ingestion.pipeline import (
     _process_text_page,
     _process_visual_page,
-    _write_entities,
     ingest_file,
 )
 
@@ -57,7 +57,7 @@ class TestTextPageIngestion:
                 mime="text/plain",
                 now="2025-01-01T00:00:00",
                 qdrant=qdrant_client,
-                graph_writer=None,
+                graphiti_writer=None,
             )
 
         # Verify points in dense collection
@@ -75,7 +75,7 @@ class TestTextPageIngestion:
         assert point.payload["text_content"] != ""
         assert point.payload["metadata"]["mime_type"] == "text/plain"
 
-    def test_text_file_entities_written_to_neo4j(
+    async def test_text_file_entities_written_to_neo4j(
         self,
         neo4j_driver,  # type: ignore[no-untyped-def]
         sample_txt_bytes: bytes,
@@ -88,58 +88,73 @@ class TestTextPageIngestion:
         assert len(chunks) >= 1
 
         graph_writer = GraphWriter()
-        import asyncio
 
-        asyncio.run(
-            graph_writer.upsert_document(
-                s3_key=sample_txt_name,
-                filename=sample_txt_name,
-                mime_type="text/plain",
-                page_count=1,
-                source_bucket="",
-            ),
+        await graph_writer.upsert_document(
+            source_key=sample_txt_name,
+            filename=sample_txt_name,
+            mime_type="text/plain",
+            page_count=1,
+            source_bucket="",
         )
 
         with patch(
-            "ingestion.pipeline.get_llm_client",
-            return_value=mock_llm_client,
+            "ingestion.pipeline.GraphitiWriter",
         ):
-            _write_entities(sample_txt_name, chunks, graph_writer)
+            with patch(
+                "ingestion.entity_extractor.get_llm_client",
+                return_value=mock_llm_client,
+            ):
+                llm_client = mock_llm_client
+                from ingestion.entity_extractor import extract_entities
 
-        asyncio.run(graph_writer.close())
+                for chunk in chunks:
+                    chunk_id = f"{sample_txt_name}::p{chunk.page_number}::c{chunk.chunk_index}"
+                    await graph_writer.upsert_chunk(
+                        chunk_id=chunk_id,
+                        text_preview=chunk.text[:200],
+                        page_number=chunk.page_number,
+                        source_key=sample_txt_name,
+                    )
+                    result = await extract_entities(
+                        chunk.text, llm_client,
+                    )
+                    await graph_writer.write_extraction_result(
+                        source_key=sample_txt_name,
+                        chunk_id=chunk_id,
+                        extraction_result=result,
+                    )
+
+        await graph_writer.close()
 
         # Verify Neo4j has Document + Chunk nodes
-        async def _check() -> None:
-            async with neo4j_driver.session() as session:
-                doc_result = await session.run(
-                    "MATCH (d:Document {s3_key: $key}) RETURN d",
-                    key=sample_txt_name,
-                )
-                docs = await doc_result.data()
-                assert len(docs) == 1
+        async with neo4j_driver.session() as session:
+            doc_result = await session.run(
+                "MATCH (d:Document {source_key: $key}) RETURN d",
+                key=sample_txt_name,
+            )
+            docs = await doc_result.data()
+            assert len(docs) == 1
 
-                chunk_result = await session.run(
-                    "MATCH (d:Document {s3_key: $key})-[:HAS_CHUNK]->(c:Chunk) RETURN c",
-                    key=sample_txt_name,
-                )
-                chunks_found = await chunk_result.data()
-                assert len(chunks_found) >= 1
+            chunk_result = await session.run(
+                "MATCH (d:Document {source_key: $key})-[:HAS_CHUNK]->(c:Chunk) RETURN c",
+                key=sample_txt_name,
+            )
+            chunks_found = await chunk_result.data()
+            assert len(chunks_found) >= 1
 
-                # Entity should exist from mock extraction
-                entity_result = await session.run(
-                    "MATCH (e:Entity {name: 'Test Entity'}) RETURN e",
-                )
-                entities = await entity_result.data()
-                assert len(entities) >= 1
-
-        asyncio.run(_check())
+            # Entity should exist from mock extraction
+            entity_result = await session.run(
+                "MATCH (e:Entity {name: 'Test Entity'}) RETURN e",
+            )
+            entities = await entity_result.data()
+            assert len(entities) >= 1
 
 
 @pytest.mark.integration
 class TestImagePageIngestion:
     """Test image file → dense + multivec Qdrant points."""
 
-    def test_image_file_produces_both_collections(
+    def test_image_file_produces_dense_points(
         self,
         qdrant_client,  # type: ignore[no-untyped-def]
         sample_png_bytes: bytes,
@@ -149,15 +164,9 @@ class TestImagePageIngestion:
         assert len(pages) == 1
         assert pages[0].content_type == "image"
 
-        with (
-            patch(
-                "ingestion.pipeline.jina_embed_image",
-                side_effect=_deterministic_image_embed,
-            ),
-            patch(
-                "ingestion.pipeline.jina_embed_image_multivec",
-                side_effect=_deterministic_multivec,
-            ),
+        with patch(
+            "ingestion.pipeline.jina_embed_image",
+            side_effect=_deterministic_image_embed,
         ):
             _process_visual_page(
                 source_file=sample_png_name,
@@ -169,7 +178,6 @@ class TestImagePageIngestion:
                 qdrant=qdrant_client,
             )
 
-        # Dense collection
         dense_result = qdrant_client.scroll(
             collection_name=DENSE_COLLECTION,
             limit=100,
@@ -178,7 +186,35 @@ class TestImagePageIngestion:
         assert len(dense_points) == 1
         assert dense_points[0].payload["content_type"] == "image"
 
-        # Multivec collection
+    def test_image_file_produces_multivec_when_enabled(
+        self,
+        qdrant_client,  # type: ignore[no-untyped-def]
+        sample_png_bytes: bytes,
+        sample_png_name: str,
+    ) -> None:
+        pages = file_to_pages(sample_png_name, sample_png_bytes)
+
+        with (
+            patch(
+                "ingestion.pipeline.jina_embed_image",
+                side_effect=_deterministic_image_embed,
+            ),
+            patch(
+                "ingestion.pipeline.jina_embed_image_multivec",
+                side_effect=_deterministic_multivec,
+            ),
+            patch.object(settings, "multivec_enabled", True),
+        ):
+            _process_visual_page(
+                source_file=sample_png_name,
+                image_bytes=pages[0].image_bytes,
+                page_number=1,
+                content_type="image",
+                mime="image/png",
+                now="2025-01-01T00:00:00",
+                qdrant=qdrant_client,
+            )
+
         multivec_result = qdrant_client.scroll(
             collection_name=MULTIVEC_COLLECTION,
             limit=100,
@@ -192,7 +228,7 @@ class TestImagePageIngestion:
 class TestPdfIngestion:
     """Test PDF file → dense + multivec points for each page."""
 
-    def test_pdf_produces_points_per_page(
+    def test_pdf_produces_dense_points_per_page(
         self,
         qdrant_client,  # type: ignore[no-untyped-def]
         sample_pdf_bytes: bytes,
@@ -202,15 +238,9 @@ class TestPdfIngestion:
         assert len(pages) >= 1
         assert all(p.content_type == "pdf" for p in pages)
 
-        with (
-            patch(
-                "ingestion.pipeline.jina_embed_image",
-                side_effect=_deterministic_image_embed,
-            ),
-            patch(
-                "ingestion.pipeline.jina_embed_image_multivec",
-                side_effect=_deterministic_multivec,
-            ),
+        with patch(
+            "ingestion.pipeline.jina_embed_image",
+            side_effect=_deterministic_image_embed,
         ):
             for page in pages:
                 _process_visual_page(
@@ -223,19 +253,11 @@ class TestPdfIngestion:
                     qdrant=qdrant_client,
                 )
 
-        # Should have one dense point per page
         dense_result = qdrant_client.scroll(
             collection_name=DENSE_COLLECTION,
             limit=100,
         )
         assert len(dense_result[0]) == len(pages)
-
-        # Should have one multivec point per page
-        multivec_result = qdrant_client.scroll(
-            collection_name=MULTIVEC_COLLECTION,
-            limit=100,
-        )
-        assert len(multivec_result[0]) == len(pages)
 
 
 @pytest.mark.integration
@@ -263,7 +285,7 @@ class TestIdempotency:
                     mime="text/plain",
                     now="2025-01-01T00:00:00",
                     qdrant=qdrant_client,
-                    graph_writer=None,
+                    graphiti_writer=None,
                 )
 
         # Deterministic IDs mean upsert overwrites, no duplicates
@@ -289,6 +311,7 @@ class TestIdempotency:
                 "ingestion.pipeline.jina_embed_image_multivec",
                 side_effect=_deterministic_multivec,
             ),
+            patch.object(settings, "multivec_enabled", True),
         ):
             for _ in range(2):
                 _process_visual_page(
@@ -332,7 +355,7 @@ class TestCorruptFiles:
                 mime="text/plain",
                 now="2025-01-01T00:00:00",
                 qdrant=qdrant_client,
-                graph_writer=None,
+                graphiti_writer=None,
             )
 
         result = qdrant_client.scroll(
@@ -368,7 +391,8 @@ class TestCorruptFiles:
             patch("ingestion.pipeline.settings") as mock_settings,
         ):
             mock_settings.qdrant_url = "http://localhost:6333"
-            mock_settings.s3_bucket_name = ""
+            mock_settings.document_source = "local"
+            mock_settings.multivec_enabled = False
             # ingest_file should not crash
             result = ingest_file(corrupt_pdf, "corrupt.pdf")
             assert result == "corrupt.pdf"
@@ -381,27 +405,27 @@ class TestIngestFileEndToEnd:
     def test_ingest_text_file(
         self,
         qdrant_client,  # type: ignore[no-untyped-def]
-        neo4j_driver,  # type: ignore[no-untyped-def]
         sample_txt_bytes: bytes,
         sample_txt_name: str,
-        mock_llm_client: MagicMock,
     ) -> None:
+        mock_graphiti = MagicMock()
+        mock_graphiti.ingest_chunk = AsyncMock()
+        mock_graphiti.close = AsyncMock()
+
         with (
             patch(
                 "ingestion.pipeline.jina_embed_text",
                 side_effect=_deterministic_text_embed,
             ),
             patch(
-                "ingestion.pipeline.get_llm_client",
-                return_value=mock_llm_client,
+                "ingestion.pipeline.GraphitiWriter",
+                return_value=mock_graphiti,
             ),
             patch("ingestion.pipeline.settings") as mock_settings,
         ):
             mock_settings.qdrant_url = "http://localhost:6333"
-            mock_settings.neo4j_uri = "bolt://localhost:7687"
-            mock_settings.neo4j_user = "neo4j"
-            mock_settings.neo4j_password = "password"
-            mock_settings.s3_bucket_name = ""
+            mock_settings.document_source = "local"
+            mock_settings.multivec_enabled = False
 
             result = ingest_file(sample_txt_bytes, sample_txt_name)
 
@@ -425,28 +449,18 @@ class TestIngestFileEndToEnd:
                 "ingestion.pipeline.jina_embed_image",
                 side_effect=_deterministic_image_embed,
             ),
-            patch(
-                "ingestion.pipeline.jina_embed_image_multivec",
-                side_effect=_deterministic_multivec,
-            ),
             patch("ingestion.pipeline.settings") as mock_settings,
         ):
             mock_settings.qdrant_url = "http://localhost:6333"
-            mock_settings.s3_bucket_name = ""
+            mock_settings.document_source = "local"
+            mock_settings.multivec_enabled = False
 
             result = ingest_file(sample_png_bytes, sample_png_name)
 
         assert result == sample_png_name
 
-        # Dense + multivec points
         dense_result = qdrant_client.scroll(
             collection_name=DENSE_COLLECTION,
             limit=100,
         )
         assert len(dense_result[0]) == 1
-
-        multivec_result = qdrant_client.scroll(
-            collection_name=MULTIVEC_COLLECTION,
-            limit=100,
-        )
-        assert len(multivec_result[0]) == 1

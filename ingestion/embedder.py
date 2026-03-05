@@ -23,18 +23,35 @@ class TokenBucket:
         self._max = float(burst)
         self._tokens = float(burst)
         self._last = _time.monotonic()
+        self._pause_until: float = 0.0
 
-    async def acquire(self) -> None:
-        """Wait until a token is available, then consume one."""
+    def pause(self, seconds: float) -> None:
+        """Globally pause all token acquisition for *seconds*.
+
+        Called when a 429 response is received so that all concurrent
+        requests back off, not just the one that was rate-limited.
+        """
+        resume_at = _time.monotonic() + seconds
+        if resume_at > self._pause_until:
+            self._pause_until = resume_at
+            logger.warning("Rate limiter paused for %.1fs", seconds)
+
+    async def acquire(self, n: float = 1.0) -> None:
+        """Wait until *n* tokens are available, then consume them."""
+        # Honour global pause from 429 responses
+        now = _time.monotonic()
+        if now < self._pause_until:
+            await asyncio.sleep(self._pause_until - now)
+
         while True:
             now = _time.monotonic()
             elapsed = now - self._last
             self._tokens = min(self._max, self._tokens + elapsed * self._rate)
             self._last = now
-            if self._tokens >= 1.0:
-                self._tokens -= 1.0
+            if self._tokens >= n:
+                self._tokens -= n
                 return
-            wait = (1.0 - self._tokens) / self._rate
+            wait = (n - self._tokens) / self._rate
             await asyncio.sleep(wait)
 
 

@@ -14,7 +14,8 @@ class Settings(BaseSettings):
     jina_model: str = "jina-embeddings-v4"
     jina_dense_dimensions: int = 2048
     jina_rpm: int = 500  # requests per minute (free=500, tier1=500, tier2=5000)
-    jina_tpm: int = 1_000_000  # tokens per minute (free=1M, tier1=10M, tier2=100M)
+    jina_tpm: int = 100_000  # tokens per minute (free=100k, tier1=10M, tier2=100M)
+    jina_batch_size: int = 10  # max texts per embed_text API call
 
     # Embedding provider selection
     embedding_provider: str = "jina"  # "jina" | "voyage"

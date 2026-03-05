@@ -42,16 +42,18 @@ mcp = FastMCP(
     middleware=[BearerAuthMiddleware()],
 )
 mcp.tool()(vector_search)
-mcp.tool()(visual_search)
 mcp.tool()(graph_search)
 mcp.tool()(hybrid_search)
 
 _REGISTERED_TOOLS = [
     "vector_search",
-    "visual_search",
     "graph_search",
     "hybrid_search",
 ]
+
+if settings.multivec_enabled:
+    mcp.tool()(visual_search)
+    _REGISTERED_TOOLS.append("visual_search")
 
 if __name__ == "__main__":
     logger.info(

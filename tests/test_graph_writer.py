@@ -33,7 +33,7 @@ async def test_upsert_document(writer: GraphWriter) -> None:
     )
     async with writer.driver.session() as session:
         result = await session.run(
-            "MATCH (d:Document {s3_key: $key}) RETURN d",
+            "MATCH (d:Document {source_key: $key}) RETURN d",
             key="test/doc.pdf",
         )
         record = await result.single()
@@ -55,7 +55,7 @@ async def test_upsert_document_idempotent(
 
     async with writer.driver.session() as session:
         result = await session.run(
-            "MATCH (d:Document {s3_key: 'test/dup.pdf'}) RETURN count(d) AS cnt"
+            "MATCH (d:Document {source_key: 'test/dup.pdf'}) RETURN count(d) AS cnt"
         )
         record = await result.single()
     assert record is not None
@@ -70,12 +70,12 @@ async def test_upsert_chunk(writer: GraphWriter) -> None:
         chunk_id="c-001",
         text_preview="Hello world",
         page_number=1,
-        s3_key="test/c.pdf",
+        source_key="test/c.pdf",
     )
 
     async with writer.driver.session() as session:
         result = await session.run(
-            "MATCH (d:Document {s3_key: 'test/c.pdf'})"
+            "MATCH (d:Document {source_key: 'test/c.pdf'})"
             "-[:HAS_CHUNK]->(c:Chunk {id: 'c-001'}) "
             "RETURN c"
         )
@@ -130,7 +130,7 @@ async def test_upsert_relationship(writer: GraphWriter) -> None:
 async def test_link_chunk_to_entity(writer: GraphWriter) -> None:
     """MENTIONS relationship links chunk to entity."""
     await writer.upsert_document("test/m.pdf", filename="m.pdf")
-    await writer.upsert_chunk("m-001", "preview", 1, "test/m.pdf")
+    await writer.upsert_chunk("m-001", "preview", 1, source_key="test/m.pdf")
     entity = Entity(name="Google", type="ORGANIZATION", description="Co.")
     await writer.upsert_entity(entity)
     await writer.link_chunk_to_entity("m-001", "Google", 0.95)
@@ -153,7 +153,7 @@ async def test_write_extraction_result(
 ) -> None:
     """End-to-end: creates entities, relationships, MENTIONS."""
     await writer.upsert_document("test/e.pdf", filename="e.pdf")
-    await writer.upsert_chunk("e-001", "preview", 1, "test/e.pdf")
+    await writer.upsert_chunk("e-001", "preview", 1, source_key="test/e.pdf")
 
     extraction = ExtractionResult(
         entities=[

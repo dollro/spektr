@@ -318,12 +318,12 @@ The cost of inaction: agents produce answers based on outdated information witho
 **Qdrant Points (documents_dense):**
 - ID: UUID v4
 - Vector: 2048-dim dense embedding (Jina v4)
-- Payload: source_file, content_type (text_chunk | pdf_page | image), page_number, chunk_index, text_content, metadata (mime_type, ingested_at, s3_key, char_count)
+- Payload: source_file, content_type (text_chunk | pdf_page | image), page_number, chunk_index, text_content, metadata (mime_type, ingested_at, source_key, char_count)
 
 **Qdrant Points (documents_multivec) [Nice-to-have]:**
 - ID: UUID v4
 - Vector: list of 128-dim vectors (Jina v4 ColBERT mode)
-- Payload: source_file, content_type (pdf_page | image | slide), page_number, metadata (mime_type, ingested_at, s3_key, image dimensions)
+- Payload: source_file, content_type (pdf_page | image | slide), page_number, metadata (mime_type, ingested_at, source_key, image dimensions)
 
 **Graphiti Entities (Neo4j):**
 - Managed by Graphiti internally. Episodes, entity nodes, and edges carry `inserted_at` and `invalid_at` timestamps. Entity types include PERSON, ORGANIZATION, PRODUCT, TECHNOLOGY, LOCATION, CONCEPT, EVENT.

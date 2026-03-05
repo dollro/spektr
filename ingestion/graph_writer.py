@@ -114,18 +114,18 @@ class _LegacyGraphWriter:
 
     @_NEO4J_RETRY
     async def upsert_document(
-        self, s3_key: str, **properties: object
+        self, source_key: str, **properties: object
     ) -> None:
-        """MERGE Document node on s3_key, SET all props."""
+        """MERGE Document node on source_key, SET all props."""
         async with self.driver.session() as session:
             await session.run(
-                "MERGE (d:Document {s3_key: $s3_key}) "
+                "MERGE (d:Document {source_key: $source_key}) "
                 "SET d.filename = $filename, "
                 "d.mime_type = $mime_type, "
                 "d.ingested_at = datetime(), "
                 "d.page_count = $page_count, "
                 "d.source_bucket = $source_bucket",
-                s3_key=s3_key,
+                source_key=source_key,
                 filename=properties.get("filename", ""),
                 mime_type=properties.get("mime_type", ""),
                 page_count=properties.get("page_count", 0),
@@ -138,7 +138,7 @@ class _LegacyGraphWriter:
         chunk_id: str,
         text_preview: str,
         page_number: int,
-        s3_key: str,
+        source_key: str,
     ) -> None:
         """MERGE Chunk node, create HAS_CHUNK rel."""
         async with self.driver.session() as session:
@@ -147,12 +147,12 @@ class _LegacyGraphWriter:
                 "SET c.text_preview = $text_preview, "
                 "c.page_number = $page_number "
                 "WITH c "
-                "MATCH (d:Document {s3_key: $s3_key}) "
+                "MATCH (d:Document {source_key: $source_key}) "
                 "MERGE (d)-[:HAS_CHUNK {page_number: $page_number}]->(c)",
                 chunk_id=chunk_id,
                 text_preview=text_preview,
                 page_number=page_number,
-                s3_key=s3_key,
+                source_key=source_key,
             )
 
     @_NEO4J_RETRY
@@ -161,9 +161,9 @@ class _LegacyGraphWriter:
         async with self.driver.session() as session:
             await session.run(
                 "MERGE (e:Entity {name: $name, type: $type}) "
+                "ON CREATE SET e.first_seen = datetime() "
                 "SET e.description = $description, "
-                "e.last_seen = datetime() "
-                "ON CREATE SET e.first_seen = datetime()",
+                "e.last_seen = datetime()",
                 name=entity.name,
                 type=entity.type,
                 description=entity.description,
@@ -212,7 +212,7 @@ class _LegacyGraphWriter:
 
     async def write_extraction_result(
         self,
-        s3_key: str,
+        source_key: str,
         chunk_id: str,
         extraction_result: ExtractionResult,
     ) -> None:

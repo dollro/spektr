@@ -163,6 +163,9 @@ class VoyageEmbedder:
                 response=resp,
             )
             code = resp.status_code
+            if code == 429:
+                retry_after = float(resp.headers.get("Retry-After", 5))
+                self._rpm_limiter.pause(retry_after)
             if code != 429 and code < 500:
                 raise httpx.HTTPStatusError(
                     f"Voyage API client error ({code}): {resp.text}",

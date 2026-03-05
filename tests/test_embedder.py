@@ -208,26 +208,41 @@ class TestErrorHandling:
         embedder: JinaV4Embedder,
     ) -> None:
         """EC-01: Repeated 429s exhaust retries and raise RetryError."""
-        from tenacity import RetryError
+        from tenacity import RetryError, wait_none
 
         mock_resp = MagicMock(spec=httpx.Response)
         mock_resp.status_code = 429
         mock_resp.text = "Too Many Requests"
+        mock_resp.headers = {"Retry-After": "0"}
         mock_resp.request = MagicMock()
-        with patch.object(
-            embedder._client,
-            "post",
-            new_callable=AsyncMock,
-            return_value=mock_resp,
-        ):
-            with pytest.raises(RetryError):
-                await embedder.embed_text(["overloaded"])
+        # Patch retry wait to avoid 15s+ delay from exponential backoff
+        original_wait = embedder._request_with_retry.retry.wait  # type: ignore[attr-defined]
+        embedder._request_with_retry.retry.wait = wait_none()  # type: ignore[attr-defined]
+        try:
+            with patch.object(
+                embedder._client,
+                "post",
+                new_callable=AsyncMock,
+                return_value=mock_resp,
+            ):
+                with pytest.raises(RetryError):
+                    await embedder.embed_text(["overloaded"])
+        finally:
+            embedder._request_with_retry.retry.wait = original_wait  # type: ignore[attr-defined]
+
+
+def _fast_limiters(embedder: JinaV4Embedder) -> None:
+    """Replace both rate limiters with fast variants for tests."""
+    # RPM: burst=2, refill 2 tokens/sec → ~0.5s wait for 3rd request
+    embedder._rpm_limiter = TokenBucket(tokens_per_sec=2, burst=2)
+    # TPM: effectively unlimited so it doesn't interfere
+    embedder._tpm_limiter = TokenBucket(tokens_per_sec=1e9, burst=int(1e9))
 
 
 class TestRateLimiter:
     async def test_rpm_throttling(self, embedder: JinaV4Embedder) -> None:
         """Requests beyond RPM limit are delayed."""
-        embedder._rpm_limiter = TokenBucket(tokens_per_sec=2 / 60, burst=2)
+        _fast_limiters(embedder)
         mock_resp = _mock_response([{"embedding": [0.1] * 2048}])
 
         with patch.object(
@@ -248,13 +263,43 @@ class TestRateLimiter:
             slow_elapsed = time.monotonic() - t1
 
         assert fast_elapsed < 1.0
-        assert slow_elapsed >= 0.5  # had to wait for token refill
+        assert slow_elapsed >= 0.3  # had to wait for token refill
+
+    async def test_tpm_throttling(self, embedder: JinaV4Embedder) -> None:
+        """TPM limiter delays requests that exceed token budget."""
+        # RPM: unlimited. TPM: burst=10 tokens, refill 20 tokens/sec.
+        embedder._rpm_limiter = TokenBucket(tokens_per_sec=1e9, burst=int(1e9))
+        embedder._tpm_limiter = TokenBucket(tokens_per_sec=20, burst=10)
+        mock_resp = _mock_response([{"embedding": [0.1] * 2048}])
+
+        with patch.object(
+            embedder._client,
+            "post",
+            new_callable=AsyncMock,
+            return_value=mock_resp,
+        ):
+            # First call: "a" ≈ 1 token (max(0.25, 1.0) = 1.0), instant
+            t0 = time.monotonic()
+            await embedder.embed_text(["a"])
+            fast_elapsed = time.monotonic() - t0
+
+            # Drain remaining burst with a ~9-token string
+            await embedder.embed_text(["x" * 36])  # 36/4 = 9 tokens
+
+            # Next call must wait for refill
+            t1 = time.monotonic()
+            await embedder.embed_text(["hello"])  # ~1.25 tokens
+            slow_elapsed = time.monotonic() - t1
+
+        assert fast_elapsed < 0.5
+        assert slow_elapsed >= 0.02  # had to wait for TPM refill
 
     async def test_concurrent_requests_respect_semaphore(
         self,
         embedder: JinaV4Embedder,
     ) -> None:
         """Concurrency semaphore limits parallel requests."""
+        _fast_limiters(embedder)
         call_count = 0
         max_concurrent = 0
 

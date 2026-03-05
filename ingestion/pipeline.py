@@ -79,6 +79,16 @@ def _make_point_id(key: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, key))
 
 
+class _PageTasks:
+    """Text and image coroutines for a single page."""
+
+    __slots__ = ("text", "image")
+
+    def __init__(self) -> None:
+        self.text: list = []  # type: ignore[type-arg]
+        self.image: list = []  # type: ignore[type-arg]
+
+
 def _build_page_tasks(
     page,  # type: ignore[no-untyped-def]
     source_file: str,
@@ -87,12 +97,12 @@ def _build_page_tasks(
     qdrant: QdrantClient,
     embedder: Embedder,
     graphiti_writer: GraphitiWriter | None,
-) -> list:  # type: ignore[type-arg]
-    """Return a list of async coroutines for processing one page."""
-    tasks = []
+) -> _PageTasks:
+    """Return text and image coroutines for processing one page."""
+    tasks = _PageTasks()
 
     if page.content_type == "text":
-        tasks.append(
+        tasks.text.append(
             _process_text_page(
                 source_file,
                 page.text,
@@ -106,7 +116,7 @@ def _build_page_tasks(
         )
     elif page.content_type == "pdf":
         if page.text.strip():
-            tasks.append(
+            tasks.text.append(
                 _process_text_page(
                     source_file,
                     page.text,
@@ -118,7 +128,7 @@ def _build_page_tasks(
                     graphiti_writer,
                 )
             )
-        tasks.append(
+        tasks.image.append(
             _process_visual_page(
                 source_file,
                 page.image_bytes,
@@ -131,7 +141,7 @@ def _build_page_tasks(
             )
         )
     else:
-        tasks.append(
+        tasks.image.append(
             _process_visual_page(
                 source_file,
                 page.image_bytes,
@@ -162,25 +172,26 @@ async def _process_text_page(
     if not chunks:
         return
 
-    # Embed all chunks
+    # Batch-embed all chunks in a single API call
+    try:
+        all_texts = [chunk.text for chunk in chunks]
+        vectors = await embedder.embed_text(all_texts)
+    except Exception:
+        logger.exception(
+            "Text embedding failed for %s page %d (%d chunks)",
+            source_file,
+            page_number,
+            len(chunks),
+        )
+        return
+
     dense_points: list[models.PointStruct] = []
-    for chunk in chunks:
+    for chunk, vector in zip(chunks, vectors):
         chunk_id = _make_chunk_id(
             source_file,
             page_number,
             chunk.chunk_index,
         )
-        try:
-            vectors = await embedder.embed_text([chunk.text])
-            vector = vectors[0]
-        except Exception:
-            logger.exception(
-                "Text embedding failed for %s chunk %d",
-                source_file,
-                chunk.chunk_index,
-            )
-            continue
-
         point_id = _make_point_id(chunk_id)
         dense_points.append(
             models.PointStruct(
@@ -363,22 +374,35 @@ def ingest_file(content: bytes, filename: str) -> str:
 
         async def _process_all_pages() -> None:
             embedder = create_embedder()
+            sem = asyncio.Semaphore(2)
+
+            async def _bounded(coro):  # type: ignore[no-untyped-def]
+                async with sem:
+                    return await coro
+
             try:
-                tasks = []
+                text_tasks: list = []  # type: ignore[type-arg]
+                image_tasks: list = []  # type: ignore[type-arg]
                 for page in pages:
-                    tasks.extend(
-                        _build_page_tasks(
-                            page,
-                            filename,
-                            mime,
-                            now,
-                            qdrant,
-                            embedder,
-                            graphiti_writer,
-                        )
+                    pt = _build_page_tasks(
+                        page,
+                        filename,
+                        mime,
+                        now,
+                        qdrant,
+                        embedder,
+                        graphiti_writer,
                     )
-                if tasks:
-                    await asyncio.gather(*tasks)
+                    text_tasks.extend(pt.text)
+                    image_tasks.extend(pt.image)
+
+                # Text: concurrent (lightweight, small TPM footprint)
+                if text_tasks:
+                    await asyncio.gather(*[_bounded(t) for t in text_tasks])
+
+                # Images: sequential (heavy, TPM-sensitive)
+                for task in image_tasks:
+                    await task
             finally:
                 await embedder.close()
 

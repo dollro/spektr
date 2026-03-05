@@ -48,7 +48,7 @@ def _make_multivec_point(
     source_file: str = "doc.pdf",
     page_number: int = 1,
     content_type: str = "pdf",
-    s3_key: str = "documents/doc.pdf",
+    source_key: str = "documents/doc.pdf",
 ) -> dict:
     """Build a Qdrant point payload dict for the multivec collection."""
     return {
@@ -58,7 +58,7 @@ def _make_multivec_point(
             "source_file": source_file,
             "page_number": page_number,
             "content_type": content_type,
-            "s3_key": s3_key,
+            "source_key": source_key,
             "metadata": {},
         },
     }
@@ -233,7 +233,7 @@ class TestVisualSearch:
         """Returns results from the multivec collection."""
         _seed_multivec(
             qdrant_client,
-            [_make_multivec_point(1, s3_key="docs/page.pdf")],
+            [_make_multivec_point(1, source_key="docs/page.pdf")],
         )
 
         with (
@@ -251,7 +251,7 @@ class TestVisualSearch:
             results = await visual_search("chart diagram")
 
         assert len(results) == 1
-        assert results[0]["s3_key"] == "docs/page.pdf"
+        assert results[0]["source_key"] == "docs/page.pdf"
         assert "text" not in results[0]
 
 
@@ -430,17 +430,18 @@ class TestMCPServer:
     """Tests for MCP server tool registration."""
 
     async def test_all_tools_registered(self):
-        """All four search tools are discoverable."""
+        """Core search tools are always registered; visual_search is conditional."""
         from server.mcp_server import mcp
 
         tools = await mcp.list_tools()
         tool_names = {t.name for t in tools}
-        assert tool_names == {
-            "vector_search",
-            "visual_search",
-            "graph_search",
-            "hybrid_search",
-        }
+        assert {"vector_search", "graph_search", "hybrid_search"} <= tool_names
+        from config.settings import settings
+
+        if settings.multivec_enabled:
+            assert "visual_search" in tool_names
+        else:
+            assert "visual_search" not in tool_names
 
 
 # ---------------------------------------------------------------------------
@@ -691,7 +692,7 @@ class TestVLMGenerator:
 
     async def test_generate_returns_answer(self):
         """VLM generates answer from S3 images."""
-        results = [{"s3_key": "docs/chart.pdf"}]
+        results = [{"source_key": "docs/chart.pdf"}]
 
         with (
             patch(
@@ -714,8 +715,8 @@ class TestVLMGenerator:
 
         assert answer == "The chart shows growth."
 
-    async def test_generate_returns_none_on_no_s3_keys(self):
-        """Returns None when no results have s3_key."""
+    async def test_generate_returns_none_on_no_source_keys(self):
+        """Returns None when no results have source_key."""
         from server.tools.vlm_generator import generate_visual_answer
 
         answer = await generate_visual_answer("query", [{"score": 0.5}])
@@ -723,7 +724,7 @@ class TestVLMGenerator:
 
     async def test_generate_returns_none_on_s3_error(self):
         """Returns None when S3 fetch fails."""
-        results = [{"s3_key": "docs/missing.pdf"}]
+        results = [{"source_key": "docs/missing.pdf"}]
 
         with patch(
             "server.tools.vlm_generator._fetch_s3_image",

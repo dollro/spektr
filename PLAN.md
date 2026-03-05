@@ -155,7 +155,7 @@ Stand up infrastructure, create the Python project skeleton, configure all servi
     - Neo4j: `neo4j_uri`, `neo4j_user`, `neo4j_password`
     - PostgreSQL: `database_url`
     - AWS: `s3_bucket_name`, `s3_sqs_queue_url`, `aws_region`
-    - LLM: `llm_provider`, `llm_model`, `llm_api_key`
+    - LLM: `llm_api_type`, `llm_model`, `llm_api_key`
     - MCP: `mcp_transport`, `mcp_port`
   - `config/constants.py` defines:
     - `DENSE_COLLECTION = "documents_dense"`
@@ -203,7 +203,7 @@ Stand up infrastructure, create the Python project skeleton, configure all servi
 - **Uses:** `neo4j` async driver, `config.settings`
 - **Acceptance criteria:**
   - `create_neo4j_schema()` runs the Cypher from blueprint Section 5.1:
-    - Uniqueness constraint on `Document.s3_key`
+    - Uniqueness constraint on `Document.source_key`
     - Uniqueness constraint on `Entity(name, type)` composite
     - Uniqueness constraint on `Chunk.id`
   - Function is idempotent (uses `IF NOT EXISTS` per blueprint)
@@ -324,13 +324,13 @@ Build the document processing pipeline that converts files from S3 into embeddin
 - **Uses:** `neo4j` async driver, `config.settings`, entity models from 2.2
 - **Acceptance criteria:**
   - `GraphWriter` class per blueprint Section 8.2 with all methods:
-    - `upsert_document(doc)` -- MERGE on `s3_key`, set all properties
-    - `upsert_chunk(chunk_id, text_preview, page_number, s3_key)` -- MERGE Chunk, link to Document via HAS_CHUNK
+    - `upsert_document(doc)` -- MERGE on `source_key`, set all properties
+    - `upsert_chunk(chunk_id, text_preview, page_number, source_key)` -- MERGE Chunk, link to Document via HAS_CHUNK
     - `upsert_entity(entity)` -- MERGE on `(name, type)`, set description, timestamps
     - `upsert_relationship(source, target, relation, properties)` -- APOC merge relationship
     - `link_chunk_to_entity(chunk_id, entity_name, confidence)` -- MERGE MENTIONS relationship
     - `close()` -- close driver
-  - Convenience method: `write_extraction_result(s3_key, chunk_id, extraction_result)` that orchestrates all upserts for a single chunk's entities
+  - Convenience method: `write_extraction_result(source_key, chunk_id, extraction_result)` that orchestrates all upserts for a single chunk's entities
   - All operations use async sessions
   - Tests (against running Neo4j from docker-compose):
     - Upsert document, verify node exists with correct properties
@@ -399,7 +399,7 @@ Build the document processing pipeline that converts files from S3 into embeddin
     - 1 PNG image -- verify dense + multivec points created
     - 1 TXT file -- verify dense points created, entities in Neo4j, no multivec points
   - Verify point counts in Qdrant collections match expected
-  - Verify Neo4j Document nodes created with correct s3_key/filename
+  - Verify Neo4j Document nodes created with correct source_key/filename
 
 ### Task 2.6: S3+SQS Source Integration
 
@@ -506,7 +506,7 @@ Build the FastMCP server that exposes the four search tools (vector, visual, gra
     - Parameters: `query: str`, `limit: int = 5`
     - Embeds query using `embed_query_multi_vector` (ColBERT mode)
     - Queries `documents_multivec` with `using="colbert"` named vector
-    - Returns list of dicts with: score, source_file, page_number, content_type, s3_key, metadata
+    - Returns list of dicts with: score, source_file, page_number, content_type, source_key, metadata
     - No text_content in results (visual-only retrieval, per blueprint Section 4.2 note)
   - Registered in `mcp_server.py`
   - Discoverable via MCP client
@@ -564,13 +564,13 @@ Build the FastMCP server that exposes the four search tools (vector, visual, gra
 - **Acceptance criteria:**
   - `server/models.py`:
     - `SearchResult` model: score, text, source_file, page_number, content_type, metadata
-    - `VisualSearchResult` model: score, source_file, page_number, content_type, s3_key, metadata
+    - `VisualSearchResult` model: score, source_file, page_number, content_type, source_key, metadata
     - `GraphEntity` model: entity, type, description, connections, source_documents
     - `HybridSearchResponse` model: vector_results, graph_results, query, strategy
   - `server/providers.py`:
     - LLM provider abstraction per blueprint reference to Cole Medin's Pydantic AI MCP Agent
     - Support for Anthropic, OpenAI, and Ollama providers
-    - Selected via `settings.llm_provider`
+    - Selected via `settings.llm_api_type`
     - Used by entity extraction and optionally by agent
   - Models are used by tool functions for type safety (tools can still return dicts for MCP serialization, but internally validate via models)
 
@@ -593,7 +593,7 @@ Build the FastMCP server that exposes the four search tools (vector, visual, gra
     - Empty results for unrelated query
   - `visual_search` tests:
     - Returns results from multivec collection
-    - Results contain s3_key for image retrieval
+    - Results contain source_key for image retrieval
   - `graph_search` tests:
     - Entity search finds seeded entity by name
     - Entity search returns connections

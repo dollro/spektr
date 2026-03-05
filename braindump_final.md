@@ -228,7 +228,7 @@ Since the system has no human-facing UI, user journeys describe **system flows**
 ### Key Entities and Their Storage
 
 **Qdrant — Vector Store:**
-- `documents_dense` collection: dense single-vector embeddings (2048-dim, Jina v4) for text chunks and images. Each point carries payload: source_file, content_type, page_number, chunk_index, text_content, metadata (mime_type, ingested_at, s3_key).
+- `documents_dense` collection: dense single-vector embeddings (2048-dim, Jina v4) for text chunks and images. Each point carries payload: source_file, content_type, page_number, chunk_index, text_content, metadata (mime_type, ingested_at, source_key).
 - `documents_multivec` collection [Nice-to-have]: multi-vector ColBERT embeddings (128-dim per token) for visually rich document pages.
 
 **Neo4j — Temporal Knowledge Graph (managed by Graphiti):**

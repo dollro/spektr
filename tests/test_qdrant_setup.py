@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from qdrant_client import models
@@ -76,8 +76,25 @@ class TestCreateMultivecCollection:
 
 
 class TestEnsureCollections:
-    def test_calls_both_creation_functions(self, mock_client: MagicMock) -> None:
-        ensure_collections(mock_client)
+    def test_creates_dense_only_when_multivec_disabled(
+        self, mock_client: MagicMock
+    ) -> None:
+        with patch("config.settings.settings") as mock_settings:
+            mock_settings.multivec_enabled = False
+            ensure_collections(mock_client)
+
+        exists_calls = mock_client.collection_exists.call_args_list
+        names = {c.args[0] for c in exists_calls}
+        assert DENSE_COLLECTION in names
+        assert MULTIVEC_COLLECTION not in names
+        assert mock_client.create_collection.call_count == 1
+
+    def test_creates_both_when_multivec_enabled(
+        self, mock_client: MagicMock
+    ) -> None:
+        with patch("config.settings.settings") as mock_settings:
+            mock_settings.multivec_enabled = True
+            ensure_collections(mock_client)
 
         exists_calls = mock_client.collection_exists.call_args_list
         names = {c.args[0] for c in exists_calls}

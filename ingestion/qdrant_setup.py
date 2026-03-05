@@ -77,6 +77,9 @@ def create_multivec_collection(client: QdrantClient) -> None:
 
 
 def ensure_collections(client: QdrantClient) -> None:
-    """Create both dense and multivec collections (idempotent)."""
+    """Create dense (and optionally multivec) collections (idempotent)."""
+    from config.settings import settings
+
     create_dense_collection(client)
-    create_multivec_collection(client)
+    if settings.multivec_enabled:
+        create_multivec_collection(client)

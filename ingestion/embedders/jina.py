@@ -41,6 +41,10 @@ class JinaV4Embedder:
             tokens_per_sec=settings.jina_rpm / 60.0,
             burst=settings.jina_max_concurrent,
         )
+        self._tpm_limiter = TokenBucket(
+            tokens_per_sec=settings.jina_tpm / 60.0,
+            burst=settings.jina_tpm,
+        )
         # Loop-bound resources — recreated when the event loop changes
         # because run_async() creates a new loop per call.
         self._client: httpx.AsyncClient | None = None
@@ -77,7 +81,28 @@ class JinaV4Embedder:
         task: str = "passage",
         dimensions: int | None = None,
     ) -> list[list[float]]:
-        """Batch text -> list of dense vectors."""
+        """Batch text -> list of dense vectors.
+
+        Automatically splits large lists into sub-batches of
+        ``settings.jina_batch_size`` to stay within API token limits.
+        """
+        batch_size = settings.jina_batch_size
+        if len(texts) <= batch_size:
+            return await self._embed_text_batch(texts, task, dimensions)
+
+        results: list[list[float]] = []
+        for i in range(0, len(texts), batch_size):
+            batch = texts[i : i + batch_size]
+            results.extend(await self._embed_text_batch(batch, task, dimensions))
+        return results
+
+    async def _embed_text_batch(
+        self,
+        texts: list[str],
+        task: str = "passage",
+        dimensions: int | None = None,
+    ) -> list[list[float]]:
+        """Send a single embed_text API call for one batch."""
         jina_task = _TASK_MAP.get(task, task)
         dims = dimensions if dimensions is not None else self._dimensions
         payload = {
@@ -144,6 +169,21 @@ class JinaV4Embedder:
         data = await self._request(payload)
         return data["data"][0]["embedding"]
 
+    @staticmethod
+    def _estimate_tokens(payload: dict) -> float:  # type: ignore[type-arg]
+        """Estimate token count from a Jina API payload."""
+        total = 0.0
+        for item in payload.get("input", []):
+            if "text" in item:
+                total += len(item["text"]) / 4.0
+            elif "image" in item:
+                # data:image/...;base64,<data> — count the base64 portion
+                data_str = item["image"]
+                comma = data_str.find(",")
+                b64_len = len(data_str) - comma - 1 if comma >= 0 else len(data_str)
+                total += b64_len / 4.0
+        return max(total, 1.0)
+
     async def _request(
         self,
         payload: dict,  # type: ignore[type-arg]
@@ -151,12 +191,14 @@ class JinaV4Embedder:
     ) -> dict:  # type: ignore[type-arg]
         """Send request with rate limiting + concurrency control."""
         self._ensure_loop_resources()
+        estimated_tokens = self._estimate_tokens(payload)
         await self._rpm_limiter.acquire()
+        await self._tpm_limiter.acquire(estimated_tokens)
         async with self._semaphore:  # type: ignore[union-attr]
             return await self._request_with_retry(payload, timeout)
 
     @retry(
-        wait=wait_exponential(multiplier=1, min=2, max=30),
+        wait=wait_exponential(multiplier=2, min=5, max=60),
         stop=stop_after_attempt(settings.max_retries),
         retry=retry_if_exception(_is_retryable_status),
         before_sleep=lambda rs: logger.warning(
@@ -184,6 +226,10 @@ class JinaV4Embedder:
                 response=resp,
             )
             code = resp.status_code
+            if code == 429:
+                retry_after = float(resp.headers.get("Retry-After", 20))
+                self._rpm_limiter.pause(retry_after)
+                self._tpm_limiter.pause(retry_after)
             if code != 429 and code < 500:
                 raise httpx.HTTPStatusError(
                     f"Jina API client error ({code}): {resp.text}",

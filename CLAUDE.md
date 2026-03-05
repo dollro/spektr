@@ -26,7 +26,8 @@ Primary consumers are LLM agents (Pydantic AI, Claude Code, custom frameworks). 
 │   ├── embedder.py              # Jina v4 API wrapper (JinaV4Embedder)
 │   ├── file_processor.py        # MIME classify, PDF-to-images, chunking
 │   ├── entity_extractor.py      # LLM-based entity + relationship extraction
-│   ├── graph_writer.py          # Neo4j upserts (GraphWriter)
+│   ├── graphiti_client.py       # Graphiti client singleton lifecycle
+│   ├── graph_writer.py          # GraphitiWriter (primary) + legacy Neo4j writer
 │   ├── jina_cocoindex_ops.py    # Custom CocoIndex ops wrapping Jina v4
 │   ├── pipeline.py              # CocoIndex pipeline definition
 │   ├── qdrant_setup.py          # Qdrant collection provisioning
@@ -38,14 +39,15 @@ Primary consumers are LLM agents (Pydantic AI, Claude Code, custom frameworks). 
 │   └── tools/                   # MCP tool implementations
 │       ├── vector_search.py     # Dense vector search (Qdrant)
 │       ├── visual_search.py     # ColBERT multi-vector search (Qdrant)
-│       ├── graph_search.py      # Knowledge graph search (Neo4j)
+│       ├── graph_search.py      # Knowledge graph search (Graphiti)
 │       └── hybrid_search.py     # Parallel vector + graph fusion
 ├── agent/                       # Pydantic AI agent
 │   ├── agent.py                 # Agent with MCP tool bindings
 │   └── api.py                   # Optional FastAPI HTTP endpoint
 ├── config/                      # Configuration
 │   ├── settings.py              # Pydantic Settings (.env loading)
-│   └── constants.py             # Collection names, dimensions, entity types
+│   ├── constants.py             # Collection names, vector dimensions
+│   └── logging.py               # Structured JSON/text logging
 ├── tests/                       # Test suite
 │   ├── conftest.py              # Shared fixtures
 │   ├── fixtures/                # Sample files (PDF, PNG, TXT)
@@ -138,7 +140,7 @@ make docs-serve                         # Serve MkDocs locally
 ## Environment
 
 - **Env file:** `.env` (gitignored), documented in `.env.example`
-- **Key variables:** Jina API key, Neo4j credentials, Qdrant URL, PostgreSQL URL, AWS credentials, LLM provider config, MCP transport/port
+- **Key variables:** Jina API key, Neo4j credentials, Qdrant URL, PostgreSQL URL, AWS credentials, LLM provider config, MCP transport/port, `MCP_API_KEY` (Bearer auth)
 
 ## Git Workflow
 
@@ -165,7 +167,8 @@ Use the `/branch` skill to create a new branch — it automatically creates the 
 ## Security
 
 - Never commit secrets → use environment variables
-- MCP server requires Bearer token authentication
+- MCP server uses Bearer token authentication via `MCP_API_KEY` (empty = auth disabled)
+- Auth middleware (`BearerAuthMiddleware`) protects `tools/call` requests when a key is set
 - All credentials in `.env`, never hardcoded
 
 ## Key Files
@@ -182,12 +185,8 @@ Use the `/branch` skill to create a new branch — it automatically creates the 
 
 ## Documentation
 
-Architecture docs live in `docs/`. Key topics:
+Documentation uses MkDocs and lives in `docs/`. Serve locally with `uv run mkdocs serve`.
 
-- Architecture overview and data flow
-- Ingestion pipeline (CocoIndex, Jina v4, Graphiti)
-- MCP server and search tools
-- Knowledge graph schema and temporal awareness
-- Deployment and infrastructure
-- Configuration reference
-- AWS setup (S3 event notifications, SQS, IAM)
+Existing pages:
+- `docs/AWS_SETUP.md` — S3/SQS event notification setup
+- `docs/resources/rag-mcp-architecture-blueprint.md` — Architecture blueprint

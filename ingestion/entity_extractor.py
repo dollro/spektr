@@ -69,6 +69,7 @@ class AnthropicClient:
 
         self._client = anthropic.AsyncAnthropic(
             api_key=api_key or settings.llm_api_key,
+            base_url=settings.llm_base_url or None,
         )
         self._model = model
 
@@ -97,6 +98,7 @@ class OpenAIClient:
 
         self._client = openai.AsyncOpenAI(
             api_key=api_key or settings.llm_api_key,
+            base_url=settings.llm_base_url or None,
         )
         self._model = model
 
@@ -117,7 +119,7 @@ class OpenAIClient:
 
 def get_llm_client() -> LLMClient:
     """Factory: create LLM client based on settings."""
-    provider = settings.llm_provider.lower()
+    provider = settings.llm_api_type.lower()
     if provider == "anthropic":
         return AnthropicClient(model=settings.llm_model)
     if provider == "openai":

@@ -4,303 +4,169 @@ These contracts define the exact interfaces between modules. Teammates MUST impl
 
 ---
 
-## Contract 1: Config Module → All Modules
+## Phases 1–3 Contracts (Implemented)
 
-**Producer:** foundation agent
-**Consumers:** all agents
-
+### Config Module (Contract 1)
 ```python
-# config/settings.py
-from pydantic_settings import BaseSettings
-
-class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
-
-    # Jina v4
-    jina_api_key: str
-    jina_model: str = "jina-clip-v4"
-    jina_dense_dimensions: int = 2048
-
-    # Qdrant
-    qdrant_url: str = "http://localhost:6333"
-    qdrant_dense_collection: str = "documents_dense"
-    qdrant_multivec_collection: str = "documents_multivec"
-
-    # Neo4j
-    neo4j_uri: str = "bolt://localhost:7687"
-    neo4j_user: str = "neo4j"
-    neo4j_password: str
-
-    # PostgreSQL
-    database_url: str
-
-    # AWS
-    s3_bucket_name: str = ""
-    s3_sqs_queue_url: str = ""
-    aws_region: str = "us-east-1"
-
-    # LLM
-    llm_provider: str = "anthropic"
-    llm_model: str = "claude-sonnet-4-20250514"
-    llm_api_key: str = ""
-
-    # MCP
-    mcp_transport: str = "sse"
-    mcp_port: int = 8000
-
-settings = Settings()
+# config/settings.py — Settings(BaseSettings) with Jina, Qdrant, Neo4j, PostgreSQL, AWS, LLM, MCP sections
+# config/constants.py — DENSE_COLLECTION, MULTIVEC_COLLECTION, DENSE_DIM=2048, MULTIVEC_DIM=128
 ```
 
-```python
-# config/constants.py
-DENSE_COLLECTION = "documents_dense"
-MULTIVEC_COLLECTION = "documents_multivec"
-DENSE_DIM = 2048
-MULTIVEC_DIM = 128
-ENTITY_TYPES = [
-    "PERSON", "ORGANIZATION", "PRODUCT", "TECHNOLOGY",
-    "LOCATION", "CONCEPT", "EVENT",
-]
-RELATIONSHIP_TYPES = [
-    "WORKS_AT", "PARTNERS_WITH", "PRODUCES", "USES_TECHNOLOGY",
-    "LOCATED_IN", "ACQUIRED", "COMPETES_WITH", "REFERENCES",
-]
-```
-
----
-
-## Contract 2: JinaV4Embedder → CocoIndex Ops, MCP Tools
-
-**Producer:** vector-layer agent (task 1.6)
-**Consumers:** vector-layer (task 2.4), MCP tools (Phase 3)
-
+### JinaV4Embedder (Contract 2)
 ```python
 # ingestion/embedder.py
 class JinaV4Embedder:
-    """Shared httpx.AsyncClient, initialized once."""
-
-    def __init__(self, api_key: str | None = None) -> None: ...
-    async def close(self) -> None: ...
-
-    async def embed_text(
-        self,
-        texts: list[str],
-        task: str = "retrieval.passage",
-        dimensions: int = 2048,
-    ) -> list[list[float]]:
-        """Batch text → list of dense vectors (2048d each)."""
-
-    async def embed_text_query(
-        self, query: str, dimensions: int = 2048
-    ) -> list[float]:
-        """Single query text → dense vector (2048d). Uses retrieval.query LoRA."""
-
-    async def embed_image(
-        self, image_bytes: bytes, media_type: str = "image/png"
-    ) -> list[float]:
-        """Single image → dense vector (2048d)."""
-
-    async def embed_multi_vector(
-        self, image_bytes: bytes, media_type: str = "image/png"
-    ) -> list[list[float]]:
-        """Single image → list of ColBERT token vectors (128d each)."""
-
-    async def embed_query_multi_vector(
-        self, query: str
-    ) -> list[list[float]]:
-        """Single query text → list of ColBERT token vectors (128d each)."""
+    async def embed_text(texts, task="retrieval.passage", dimensions=2048) -> list[list[float]]
+    async def embed_text_query(query, dimensions=2048) -> list[float]
+    async def embed_image(image_bytes, media_type="image/png") -> list[float]
+    async def embed_multi_vector(image_bytes, media_type="image/png") -> list[list[float]]
+    async def embed_query_multi_vector(query) -> list[list[float]]
+    async def close() -> None
 ```
 
-**API endpoint:** `https://api.jina.ai/v1/embeddings`
-**Headers:** `Authorization: Bearer {api_key}`, `Content-Type: application/json`
-
----
-
-## Contract 3: File Processor → Pipeline
-
-**Producer:** vector-layer agent (task 2.1)
-**Consumer:** pipeline agent (task 2.5)
-
+### File Processor (Contract 3)
 ```python
-# ingestion/file_processor.py
-from dataclasses import dataclass
-
-@dataclass
-class Page:
-    image_bytes: bytes       # PNG bytes for image/PDF pages, empty for text
-    text: str                # text content for text pages, empty for image
-    page_number: int
-    content_type: str        # "pdf" | "image" | "text"
-
-@dataclass
-class TextChunk:
-    text: str
-    chunk_index: int
-    page_number: int
-
-def file_to_pages(filename: str, content: bytes) -> list[Page]:
-    """MIME-classify file, convert to list of Pages.
-    PDF → multiple Pages with PNG bytes (300 DPI).
-    Image → single Page with original bytes.
-    Text → single Page with text content.
-    Unknown → empty list + log warning.
-    """
-
-def semantic_chunk(text: str, max_chunk_size: int = 512) -> list[TextChunk]:
-    """Split text into chunks preserving paragraph boundaries."""
+# ingestion/file_processor.py — Page, TextChunk dataclasses
+# file_to_pages(filename, content) -> list[Page]
+# semantic_chunk(text, max_chunk_size=512) -> list[TextChunk]
 ```
 
----
-
-## Contract 4: Entity Extractor → Graph Writer
-
-**Producer:** graph-layer agent (task 2.2)
-**Consumer:** graph-layer agent (task 2.3), pipeline agent (task 2.5)
-
+### Entity Extractor (Contract 4)
 ```python
 # ingestion/entity_extractor.py
-from pydantic import BaseModel
-from typing import Any, Literal
-from config.constants import ENTITY_TYPES, RELATIONSHIP_TYPES
+# Entity, Relationship, ExtractionResult models
+# extract_entities(text, llm_client) -> ExtractionResult
+# LLMClient protocol, AnthropicClient, OpenAIClient, get_llm_client()
+```
 
-EntityType = Literal["PERSON", "ORGANIZATION", "PRODUCT", "TECHNOLOGY",
-                     "LOCATION", "CONCEPT", "EVENT"]
-RelationType = Literal["WORKS_AT", "PARTNERS_WITH", "PRODUCES",
-                       "USES_TECHNOLOGY", "LOCATED_IN", "ACQUIRED",
-                       "COMPETES_WITH", "REFERENCES"]
+### Graph Writer (Contract 5)
+```python
+# ingestion/graph_writer.py — GraphWriter class with upsert_* and write_extraction_result
+```
 
-class Entity(BaseModel):
-    name: str
-    type: EntityType
-    description: str
-
-class Relationship(BaseModel):
-    source: str          # entity name
-    target: str          # entity name
-    relation: RelationType
-    properties: dict[str, Any] = {}
-
-class ExtractionResult(BaseModel):
-    entities: list[Entity]
-    relationships: list[Relationship]
-
-async def extract_entities(text: str, llm_client: "LLMClient") -> ExtractionResult:
-    """Extract entities + relationships from text via LLM.
-    Retry once on parse failure. Return empty result after max retries.
-    Normalize entity names: strip whitespace, title case.
-    """
+### MCP Server + Tools (Contracts 9-15)
+```python
+# server/mcp_server.py — FastMCP("rag-knowledge-base"), 4 tools registered
+# server/tools/vector_search.py — async def vector_search(query, limit=10, content_type=None, source_file=None) -> list[dict]
+# server/tools/visual_search.py — async def visual_search(query, limit=5) -> list[dict]
+# server/tools/graph_search.py — async def graph_search(query, search_type="entity", limit=10) -> list[dict]
+# server/tools/hybrid_search.py — async def hybrid_search(query, limit=10) -> dict
+# server/models.py — SearchResult, VisualSearchResult, GraphEntity, GraphPath, HybridSearchResponse
+# server/providers.py — re-exports LLMClient, get_llm_client from entity_extractor
 ```
 
 ---
 
-## Contract 5: Graph Writer → Pipeline
+## Phases 4–5 Contracts (Current Build)
 
-**Producer:** graph-layer agent (task 2.3)
-**Consumer:** pipeline agent (task 2.5)
+### Frozen: MCP Tool Signatures
 
-```python
-# ingestion/graph_writer.py
-class GraphWriter:
-    def __init__(self, uri: str, user: str, password: str) -> None: ...
-    async def close(self) -> None: ...
-
-    async def upsert_document(self, s3_key: str, **properties) -> None:
-        """MERGE Document node on s3_key."""
-
-    async def upsert_chunk(
-        self, chunk_id: str, text_preview: str,
-        page_number: int, s3_key: str
-    ) -> None:
-        """MERGE Chunk node, create HAS_CHUNK rel to Document."""
-
-    async def upsert_entity(self, entity: Entity) -> None:
-        """MERGE Entity on (name, type), set description + timestamps."""
-
-    async def upsert_relationship(
-        self, source: str, target: str,
-        relation: str, properties: dict
-    ) -> None:
-        """APOC merge relationship with dynamic type."""
-
-    async def link_chunk_to_entity(
-        self, chunk_id: str, entity_name: str, confidence: float
-    ) -> None:
-        """MERGE MENTIONS relationship between Chunk and Entity."""
-
-    async def write_extraction_result(
-        self, s3_key: str, chunk_id: str,
-        extraction_result: ExtractionResult
-    ) -> None:
-        """Orchestrate all upserts for one chunk's entities."""
-```
-
----
-
-## Contract 6: Qdrant Setup → Pipeline, MCP Tools
-
-**Producer:** vector-layer agent (task 1.4)
-**Consumer:** pipeline agent, MCP tools
+These signatures MUST NOT change. All agents build against them.
 
 ```python
-# ingestion/qdrant_setup.py
-from qdrant_client import QdrantClient
+async def vector_search(query: str, limit: int = 10, content_type: str | None = None, source_file: str | None = None) -> list[dict]
+# Returns: [{"score": float, "text": str, "source_file": str, "page_number": int, "content_type": str, "metadata": dict}]
 
-async def create_dense_collection(client: QdrantClient) -> None:
-    """Create documents_dense: size=2048, distance=COSINE.
-    Payload indexes: source_file (KEYWORD), content_type (KEYWORD).
-    Idempotent — skip if exists.
-    """
+async def visual_search(query: str, limit: int = 5) -> list[dict]
+# Returns: [{"score": float, "source_file": str, "page_number": int, "content_type": str, "source_key": str, "metadata": dict}]
 
-async def create_multivec_collection(client: QdrantClient) -> None:
-    """Create documents_multivec: named vector 'colbert', size=128,
-    distance=COSINE, multivector_config=MaxSim.
-    Payload index: source_file (KEYWORD).
-    Idempotent — skip if exists.
-    """
+async def graph_search(query: str, search_type: str = "entity", limit: int = 10) -> list[dict]
+# entity: [{"entity": str, "type": str, "description": str, "connections": list, "source_documents": list}]
+# path: [{"path": list, "relationships": list, "hop_count": int}]
 
-async def ensure_collections(client: QdrantClient) -> None:
-    """Call both creation functions."""
+async def hybrid_search(query: str, limit: int = 10) -> dict
+# {"vector_results": list, "graph_results": list, "query": str, "strategy": "parallel"}
 ```
 
----
-
-## Contract 7: Neo4j Setup → Graph Writer, MCP Tools
-
-**Producer:** graph-layer agent (task 1.5)
-**Consumer:** graph-layer (task 2.3), MCP tools
+### Contract A: Agent Module (produced by agent-dev)
 
 ```python
-# ingestion/neo4j_setup.py
-from neo4j import AsyncDriver
+# agent/agent.py
+from pydantic_ai import Agent
+from pydantic_ai.mcp import MCPServerHTTP
 
-async def create_neo4j_schema(driver: AsyncDriver) -> None:
-    """Create constraints (IF NOT EXISTS):
-    - Document.s3_key uniqueness
-    - Entity(name, type) composite uniqueness
-    - Chunk.id uniqueness
-    Verify APOC: RETURN apoc.version()
-    """
+SYSTEM_PROMPT = """You are a RAG assistant with access to search tools.
+- vector_search: text/semantic questions
+- visual_search: visual/layout/image questions
+- graph_search: relationship/entity questions
+- hybrid_search: complex multi-faceted questions"""
+
+async def create_rag_agent() -> tuple[Agent, MCPServerHTTP]:
+    """Create agent connected to MCP server. Returns (agent, server)."""
+
+# agent/api.py — FastAPI
+# POST /query {"query": str, "stream": bool} -> {"answer": str, "sources": list[dict]}
+# GET /health -> {"status": "ok"}
 ```
 
----
+### Contract B: Settings Ownership
 
-## Contract 8: LLM Client → Entity Extractor
+**resilience-dev** adds to `config/settings.py` (after `# MCP` section):
+```python
+    # Resilience
+    jina_max_concurrent: int = 5
+    extraction_timeout: int = 30
+    tool_timeout: int = 30
+    max_retries: int = 3
+    rerank_enabled: bool = False
+    vlm_generation_enabled: bool = False
+```
 
-**Producer:** graph-layer agent (task 2.2)
-**Consumer:** internal to entity_extractor
+**resilience-dev** adds `"tenacity"` to `pyproject.toml` dependencies.
+
+**observability-dev** adds to `config/settings.py` (after `# Resilience` section, AFTER resilience-dev completes):
+```python
+    # Observability
+    log_level: str = "INFO"
+    log_format: str = "json"
+```
+
+**agent-dev** does NOT modify `config/settings.py` or `pyproject.toml`.
+
+### Contract C: Logging Interface (produced by observability-dev)
 
 ```python
-# Simple LLM client abstraction
-from typing import Protocol
+# config/logging.py
+import logging
 
-class LLMClient(Protocol):
-    async def chat(
-        self,
-        messages: list[dict[str, str]],
-        response_format: dict | None = None,
-    ) -> str:
-        """Send messages to LLM, return response text."""
+def setup_logging() -> None:
+    """Configure root logger from settings."""
 
-# Implementations: AnthropicClient, OpenAIClient
-# Selected by settings.llm_provider
+def get_logger(name: str) -> logging.Logger:
+    """Return named logger."""
 ```
+
+### Contract D: Error Response Format (produced by resilience-dev)
+
+Tools return structured errors instead of raising:
+```python
+# Error case — tool returns dict with "error" key
+{"error": "Search failed: connection timeout", "query": "...", "partial_results": []}
+
+# hybrid_search partial failure:
+{"vector_results": [...], "graph_results": [], "query": "...", "strategy": "parallel", "errors": ["graph_search: connection refused"]}
+```
+
+### File Ownership Matrix
+
+| File | agent-dev | resilience-dev | observability-dev |
+|-|-|-|-|
+| `agent/agent.py` | CREATE | - | - |
+| `agent/api.py` | CREATE | - | - |
+| `tests/test_agent.py` | CREATE | - | - |
+| `tests/test_e2e.py` | CREATE | - | - |
+| `tests/conftest.py` | MODIFY | - | - |
+| `config/settings.py` | - | MODIFY (1st) | MODIFY (2nd) |
+| `config/logging.py` | - | - | CREATE |
+| `pyproject.toml` | - | MODIFY | - |
+| `ingestion/embedder.py` | - | MODIFY | - |
+| `ingestion/entity_extractor.py` | - | MODIFY | - |
+| `ingestion/graph_writer.py` | - | MODIFY | - |
+| `server/tools/vector_search.py` | - | MODIFY | - |
+| `server/tools/visual_search.py` | - | MODIFY | - |
+| `server/tools/graph_search.py` | - | MODIFY | - |
+| `server/tools/hybrid_search.py` | - | MODIFY | - |
+| `server/tools/reranker.py` | - | CREATE | - |
+| `server/tools/vlm_generator.py` | - | CREATE | - |
+| `ingestion/pipeline.py` | - | - | MODIFY |
+| `server/mcp_server.py` | - | - | MODIFY |
