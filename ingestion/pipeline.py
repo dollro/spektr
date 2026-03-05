@@ -634,7 +634,7 @@ def _use_s3_source() -> bool:
     return settings.document_source == "s3"
 
 
-def handle_file_delete(s3_key: str) -> None:
+def handle_file_delete(source_key: str) -> None:
     """Handle file deletion: remove Qdrant points and invalidate graph.
 
     Works for both S3 and local file sources.
@@ -643,8 +643,8 @@ def handle_file_delete(s3_key: str) -> None:
     """
     logger.info(
         "Handling file delete for %s",
-        s3_key,
-        extra={"file_name": s3_key},
+        source_key,
+        extra={"file_name": source_key},
     )
     qdrant = _get_qdrant_client()
 
@@ -657,7 +657,7 @@ def handle_file_delete(s3_key: str) -> None:
                     must=[
                         models.FieldCondition(
                             key="source_file",
-                            match=models.MatchValue(value=s3_key),
+                            match=models.MatchValue(value=source_key),
                         ),
                     ],
                 ),
@@ -672,7 +672,7 @@ def handle_file_delete(s3_key: str) -> None:
                         must=[
                             models.FieldCondition(
                                 key="source_file",
-                                match=models.MatchValue(value=s3_key),
+                                match=models.MatchValue(value=source_key),
                             ),
                         ],
                     ),
@@ -680,14 +680,14 @@ def handle_file_delete(s3_key: str) -> None:
             )
         logger.info(
             "Deleted Qdrant points for %s",
-            s3_key,
-            extra={"file_name": s3_key},
+            source_key,
+            extra={"file_name": source_key},
         )
     except Exception:
         logger.exception(
             "Failed to delete Qdrant points for %s",
-            s3_key,
-            extra={"file_name": s3_key},
+            source_key,
+            extra={"file_name": source_key},
         )
 
     # Invalidate Graphiti episodes by source_description
@@ -702,18 +702,18 @@ def handle_file_delete(s3_key: str) -> None:
             )
 
             client = await get_graphiti()
-            edges = await client.search(s3_key)
+            edges = await client.search(source_key)
             invalidated = 0
             for edge in edges:
-                if edge.source_description == s3_key:
+                if edge.source_description == source_key:
                     edge.expired_at = datetime.now(tz=UTC)
                     await edge.save(client.driver)
                     invalidated += 1
             logger.info(
                 "Invalidated %d Graphiti edges for %s",
                 invalidated,
-                s3_key,
-                extra={"file_name": s3_key},
+                source_key,
+                extra={"file_name": source_key},
             )
             await close_graphiti()
 
@@ -721,8 +721,8 @@ def handle_file_delete(s3_key: str) -> None:
     except Exception:
         logger.exception(
             "Failed to invalidate Graphiti data for %s",
-            s3_key,
-            extra={"file_name": s3_key},
+            source_key,
+            extra={"file_name": source_key},
         )
 
 

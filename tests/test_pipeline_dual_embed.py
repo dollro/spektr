@@ -42,6 +42,8 @@ class TestDualEmbedMixedPages:
 
         assert len(tasks.text) >= 1, "Mixed page should have text tasks"
         assert len(tasks.image) >= 1, "Mixed page should have image tasks"
+        for coro in tasks.text + tasks.image:
+            coro.close()
 
     def test_pdf_page_no_text_gets_only_image_task(self) -> None:
         """A PDF page with no text (scanned, OCR failed) gets only image task."""
@@ -70,6 +72,8 @@ class TestDualEmbedMixedPages:
 
         assert len(tasks.text) == 0, "No-text PDF page should have no text tasks"
         assert len(tasks.image) >= 1, "Visual PDF page should still have image task"
+        for coro in tasks.text + tasks.image:
+            coro.close()
 
     def test_text_only_page_gets_only_text_task(self) -> None:
         """A plain text page (not PDF) gets only text task, no image task."""
@@ -96,6 +100,8 @@ class TestDualEmbedMixedPages:
 
         assert len(tasks.text) >= 1, "Text page should have text tasks"
         assert len(tasks.image) == 0, "Text page should have no image tasks"
+        for coro in tasks.text + tasks.image:
+            coro.close()
 
     def test_image_page_gets_only_image_task(self) -> None:
         """A standalone image gets only image task, no text task."""
@@ -122,6 +128,8 @@ class TestDualEmbedMixedPages:
 
         assert len(tasks.text) == 0, "Image page should have no text tasks"
         assert len(tasks.image) >= 1, "Image page should have image tasks"
+        for coro in tasks.text + tasks.image:
+            coro.close()
 
 
 class TestImageEmbedStrategy:
@@ -154,6 +162,8 @@ class TestImageEmbedStrategy:
 
         assert len(tasks.text) >= 1, "Should still have text tasks"
         assert len(tasks.image) == 0, "Smart strategy should skip image for text-only"
+        for coro in tasks.text + tasks.image:
+            coro.close()
 
     def test_smart_strategy_embeds_image_for_visual_page(self) -> None:
         """Smart strategy embeds image when has_visual_content=True."""
@@ -182,6 +192,8 @@ class TestImageEmbedStrategy:
 
         assert len(tasks.text) >= 1, "Should have text tasks"
         assert len(tasks.image) >= 1, "Smart strategy should embed visual pages"
+        for coro in tasks.text + tasks.image:
+            coro.close()
 
     def test_all_strategy_always_embeds_image(self) -> None:
         """All strategy embeds image even when has_visual_content=False."""
@@ -210,3 +222,5 @@ class TestImageEmbedStrategy:
 
         assert len(tasks.text) >= 1, "Should have text tasks"
         assert len(tasks.image) >= 1, "All strategy should always embed image"
+        for coro in tasks.text + tasks.image:
+            coro.close()
