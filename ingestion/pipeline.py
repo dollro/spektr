@@ -22,6 +22,7 @@ from config.logging import get_logger
 from config.settings import settings
 from ingestion._utils import run_async
 from ingestion.embedder import Embedder, create_embedder
+from ingestion.target_connector import RagTarget
 from ingestion.file_processor import (
     TextChunk,
     docling_chunk,
@@ -779,8 +780,8 @@ def rag_ingestion_flow(
         )
 
     collector.export(
-        "ingestion_log",
-        cocoindex.targets.Postgres(),
+        "rag_target",
+        RagTarget(qdrant_url=settings.qdrant_url),
         primary_key_fields=["filename"],
     )
 
