@@ -1,8 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
-from ingestion.file_processor import file_to_pages, semantic_chunk
+from ingestion.file_processor import (
+    FileProcessingResult,
+    docling_chunk,
+    file_to_pages,
+    semantic_chunk,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -10,7 +16,9 @@ FIXTURES = Path(__file__).parent / "fixtures"
 class TestFileToPages:
     def test_png_returns_single_image_page(self) -> None:
         content = (FIXTURES / "sample.png").read_bytes()
-        pages = file_to_pages("photo.png", content)
+        result = file_to_pages("photo.png", content)
+        assert isinstance(result, FileProcessingResult)
+        pages = result.pages
 
         assert len(pages) == 1
         assert pages[0].content_type == "image"
@@ -19,14 +27,16 @@ class TestFileToPages:
         assert pages[0].page_number == 1
 
     def test_jpg_detected_as_image(self) -> None:
-        pages = file_to_pages("photo.jpg", b"\xff\xd8\xff\xe0fake")
+        result = file_to_pages("photo.jpg", b"\xff\xd8\xff\xe0fake")
+        pages = result.pages
 
         assert len(pages) == 1
         assert pages[0].content_type == "image"
 
     def test_txt_returns_text_page(self) -> None:
         content = (FIXTURES / "sample.txt").read_bytes()
-        pages = file_to_pages("doc.txt", content)
+        result = file_to_pages("doc.txt", content)
+        pages = result.pages
 
         assert len(pages) == 1
         assert pages[0].content_type == "text"
@@ -34,7 +44,8 @@ class TestFileToPages:
         assert pages[0].image_bytes == b""
 
     def test_markdown_detected_as_text(self) -> None:
-        pages = file_to_pages("readme.md", b"# Hello")
+        result = file_to_pages("readme.md", b"# Hello")
+        pages = result.pages
 
         assert len(pages) == 1
         assert pages[0].content_type == "text"
@@ -43,7 +54,8 @@ class TestFileToPages:
     def test_pdf_extracts_text_and_image(self) -> None:
         """PDF pages with text layer have both text and image_bytes."""
         content = (FIXTURES / "sample.pdf").read_bytes()
-        pages = file_to_pages("doc.pdf", content)
+        result = file_to_pages("doc.pdf", content)
+        pages = result.pages
 
         assert len(pages) == 2
         for i, page in enumerate(pages):
@@ -51,20 +63,31 @@ class TestFileToPages:
             assert page.page_number == i + 1
             assert len(page.image_bytes) > 0
             assert page.image_bytes[:4] == b"\x89PNG"
-            # PyMuPDF should extract text from the text layer
             assert len(page.text) > 0
 
     def test_pdf_image_at_150dpi(self) -> None:
         """PDF pages rendered at 150 DPI are smaller than 300 DPI."""
         content = (FIXTURES / "sample.pdf").read_bytes()
-        pages = file_to_pages("doc.pdf", content)
+        result = file_to_pages("doc.pdf", content)
+        pages = result.pages
 
         for page in pages:
             assert len(page.image_bytes) < 1_500_000
 
     def test_unknown_type_returns_empty(self) -> None:
-        pages = file_to_pages("data.xyz123", b"mystery")
-        assert pages == []
+        result = file_to_pages("data.xyz123", b"mystery")
+        assert result.pages == []
+
+    def test_pdf_returns_docling_document(self) -> None:
+        """PDF processing populates docling_document field."""
+        content = (FIXTURES / "sample.pdf").read_bytes()
+        result = file_to_pages("doc.pdf", content)
+        assert hasattr(result, "docling_document")
+
+    def test_text_file_has_no_docling_document(self) -> None:
+        """Text files don't produce a docling_document."""
+        result = file_to_pages("readme.md", b"# Hello")
+        assert result.docling_document is None
 
 
 class TestSemanticChunk:
@@ -116,3 +139,100 @@ class TestSemanticChunk:
     def test_only_whitespace_returns_empty(self) -> None:
         chunks = semantic_chunk("   \n\n   ", max_chunk_size=512)
         assert chunks == []
+
+
+class TestDoclingChunk:
+    def test_returns_text_chunks_with_page_numbers(self) -> None:
+        """docling_chunk produces TextChunks with contextualized text."""
+        mock_doc = MagicMock()
+        mock_chunk_1 = MagicMock()
+        mock_chunk_1.text = "First heading content"
+        mock_chunk_1.meta = MagicMock()
+        mock_chunk_1.meta.headings = ["Introduction"]
+        mock_chunk_1.meta.doc_items = [MagicMock()]
+        mock_chunk_1.meta.doc_items[0].prov = [MagicMock(page_no=1)]
+
+        mock_chunk_2 = MagicMock()
+        mock_chunk_2.text = "Table content here"
+        mock_chunk_2.meta = MagicMock()
+        mock_chunk_2.meta.headings = ["Results", "Table 1"]
+        mock_chunk_2.meta.doc_items = [MagicMock()]
+        mock_chunk_2.meta.doc_items[0].prov = [MagicMock(page_no=2)]
+
+        with patch(
+            "ingestion.file_processor._get_hybrid_chunker"
+        ) as mock_chunker_factory:
+            mock_chunker = MagicMock()
+            mock_chunker.chunk.return_value = [mock_chunk_1, mock_chunk_2]
+            mock_chunker.contextualize.side_effect = [
+                "Introduction\nFirst heading content",
+                "Results > Table 1\nTable content here",
+            ]
+            mock_chunker_factory.return_value = mock_chunker
+
+            chunks = docling_chunk(mock_doc)
+
+        assert len(chunks) == 2
+        assert chunks[0].text == "First heading content"
+        assert chunks[0].contextualized_text == (
+            "Introduction\nFirst heading content"
+        )
+        assert chunks[0].page_number == 1
+        assert chunks[0].chunk_index == 0
+        assert chunks[1].text == "Table content here"
+        assert chunks[1].contextualized_text == (
+            "Results > Table 1\nTable content here"
+        )
+        assert chunks[1].page_number == 2
+        assert chunks[1].chunk_index == 1
+
+    def test_returns_empty_for_none_document(self) -> None:
+        """docling_chunk returns empty list for None input."""
+        assert docling_chunk(None) == []
+
+    def test_falls_back_on_chunker_error(self) -> None:
+        """docling_chunk returns empty list if HybridChunker fails."""
+        mock_doc = MagicMock()
+        with patch(
+            "ingestion.file_processor._get_hybrid_chunker"
+        ) as mock_factory:
+            mock_factory.side_effect = Exception("chunker init failed")
+            result = docling_chunk(mock_doc)
+
+        assert result == []
+
+    def test_returns_empty_when_chunker_unavailable(self) -> None:
+        """docling_chunk returns empty when HybridChunker not installed."""
+        mock_doc = MagicMock()
+        with patch(
+            "ingestion.file_processor._get_hybrid_chunker",
+            return_value=None,
+        ):
+            result = docling_chunk(mock_doc)
+
+        assert result == []
+
+    def test_contextualize_failure_uses_raw_text(self) -> None:
+        """If contextualize() fails, fall back to raw chunk.text."""
+        mock_doc = MagicMock()
+        mock_chunk = MagicMock()
+        mock_chunk.text = "Raw text content"
+        mock_chunk.meta = MagicMock()
+        mock_chunk.meta.doc_items = [MagicMock()]
+        mock_chunk.meta.doc_items[0].prov = [MagicMock(page_no=1)]
+
+        with patch(
+            "ingestion.file_processor._get_hybrid_chunker"
+        ) as mock_chunker_factory:
+            mock_chunker = MagicMock()
+            mock_chunker.chunk.return_value = [mock_chunk]
+            mock_chunker.contextualize.side_effect = Exception(
+                "contextualize failed"
+            )
+            mock_chunker_factory.return_value = mock_chunker
+
+            chunks = docling_chunk(mock_doc)
+
+        assert len(chunks) == 1
+        assert chunks[0].text == "Raw text content"
+        assert chunks[0].contextualized_text is None

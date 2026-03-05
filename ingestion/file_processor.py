@@ -27,15 +27,22 @@ class TextChunk:
     text: str
     chunk_index: int
     page_number: int
+    contextualized_text: str | None = None
 
 
-def file_to_pages(filename: str, content: bytes) -> list[Page]:
-    """MIME-classify file and convert to a list of Pages.
+@dataclass
+class FileProcessingResult:
+    pages: list[Page]
+    docling_document: object | None = None
 
-    PDF -> multiple Pages with text extraction + PNG (150 DPI).
+
+def file_to_pages(filename: str, content: bytes) -> FileProcessingResult:
+    """MIME-classify file and convert to FileProcessingResult.
+
+    PDF -> multiple Pages with text extraction + PNG (150 DPI) + Docling Document.
     Image -> single Page with original bytes.
     Text -> single Page with text content.
-    Unknown -> empty list + log warning.
+    Unknown -> empty pages + log warning.
     """
     mime_type, _ = mimetypes.guess_type(filename)
     ext = _get_extension(filename)
@@ -43,19 +50,23 @@ def file_to_pages(filename: str, content: bytes) -> list[Page]:
     if mime_type == "application/pdf" or ext == ".pdf":
         return _pdf_to_pages(content)
     if ext in _IMAGE_EXTENSIONS or (mime_type and mime_type.startswith("image/")):
-        return [Page(image_bytes=content, text="", page_number=1, content_type="image")]
+        return FileProcessingResult(
+            pages=[Page(image_bytes=content, text="", page_number=1, content_type="image")]
+        )
     if ext in _TEXT_EXTENSIONS or (mime_type and mime_type.startswith("text/")):
-        return [
-            Page(
-                image_bytes=b"",
-                text=content.decode("utf-8"),
-                page_number=1,
-                content_type="text",
-            )
-        ]
+        return FileProcessingResult(
+            pages=[
+                Page(
+                    image_bytes=b"",
+                    text=content.decode("utf-8"),
+                    page_number=1,
+                    content_type="text",
+                )
+            ]
+        )
 
     logger.warning("Unknown file type for %s (mime=%s), skipping.", filename, mime_type)
-    return []
+    return FileProcessingResult(pages=[])
 
 
 def semantic_chunk(
@@ -131,7 +142,7 @@ def _extract_text_docling(image_bytes: bytes) -> str:
             os.unlink(tmp_path)
 
 
-def _pdf_to_pages(content: bytes) -> list[Page]:
+def _pdf_to_pages(content: bytes) -> FileProcessingResult:
     """Convert PDF to Pages with text extraction (PyMuPDF) + image rendering (150 DPI).
 
     Each page gets:
@@ -162,7 +173,7 @@ def _pdf_to_pages(content: bytes) -> list[Page]:
         )
 
     doc.close()
-    return pages
+    return FileProcessingResult(pages=pages)
 
 
 def _split_long_text(text: str, max_size: int) -> list[str]:
@@ -189,3 +200,94 @@ def _get_extension(filename: str) -> str:
     if dot_idx == -1:
         return ""
     return filename[dot_idx:].lower()
+
+
+_hybrid_chunker = None
+_hybrid_chunker_checked = False
+
+
+def _get_hybrid_chunker() -> object | None:
+    """Lazily initialize Docling HybridChunker with Jina v4 tokenizer."""
+    global _hybrid_chunker, _hybrid_chunker_checked  # noqa: PLW0603
+    if _hybrid_chunker_checked:
+        return _hybrid_chunker
+    _hybrid_chunker_checked = True
+    try:
+        from docling_core.transforms.chunker.hybrid_chunker import (
+            HybridChunker,
+        )
+        from docling_core.transforms.chunker.tokenizer.huggingface import (
+            HuggingFaceTokenizer,
+        )
+
+        tokenizer = HuggingFaceTokenizer.from_pretrained(
+            model_name="jinaai/jina-embeddings-v4",
+            max_tokens=256,
+        )
+        _hybrid_chunker = HybridChunker(
+            tokenizer=tokenizer,
+            merge_peers=True,
+        )
+        logger.info(
+            "Docling HybridChunker available"
+            " (jina-v4 tokenizer, 256 max_tokens)"
+        )
+    except (ImportError, Exception):
+        logger.info(
+            "Docling HybridChunker not available,"
+            " will use paragraph chunker"
+        )
+    return _hybrid_chunker
+
+
+def docling_chunk(doc: object | None) -> list[TextChunk]:
+    """Chunk a Docling Document using HybridChunker.
+
+    Returns TextChunks with page numbers from chunk provenance and
+    contextualized_text from chunker.contextualize() (heading-prefixed).
+    Returns empty list if doc is None or chunking fails.
+    """
+    if doc is None:
+        return []
+
+    try:
+        chunker = _get_hybrid_chunker()
+        if chunker is None:
+            return []
+
+        raw_chunks = chunker.chunk(dl_doc=doc)
+        result: list[TextChunk] = []
+        for idx, chunk in enumerate(raw_chunks):
+            page_no = 1
+            if (
+                hasattr(chunk, "meta")
+                and chunk.meta
+                and hasattr(chunk.meta, "doc_items")
+                and chunk.meta.doc_items
+            ):
+                first_item = chunk.meta.doc_items[0]
+                if hasattr(first_item, "prov") and first_item.prov:
+                    page_no = first_item.prov[0].page_no
+
+            ctx_text: str | None = None
+            try:
+                ctx_text = chunker.contextualize(chunk)
+            except Exception:
+                logger.warning(
+                    "contextualize() failed for chunk %d,"
+                    " using raw text",
+                    idx,
+                )
+
+            result.append(
+                TextChunk(
+                    text=chunk.text,
+                    chunk_index=idx,
+                    page_number=page_no,
+                    contextualized_text=ctx_text,
+                )
+            )
+        return result
+    except Exception:
+        logger.exception("Docling chunking failed, returning empty")
+        return []

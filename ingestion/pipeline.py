@@ -23,6 +23,7 @@ from config.settings import settings
 from ingestion._utils import run_async
 from ingestion.embedder import Embedder, create_embedder
 from ingestion.file_processor import (
+    FileProcessingResult,
     TextChunk,
     file_to_pages,
     semantic_chunk,
@@ -446,7 +447,8 @@ def ingest_file(content: bytes, filename: str) -> str:
     """
     t0 = time.monotonic()
     try:
-        pages = file_to_pages(filename, content)
+        result = file_to_pages(filename, content)
+        pages = result.pages
     except Exception:
         logger.exception(
             "Failed to process file: %s",
