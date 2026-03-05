@@ -69,6 +69,7 @@ class Embedder(Protocol):
         texts: list[str],
         task: str = "passage",
         dimensions: int | None = None,
+        late_chunking: bool = False,
     ) -> list[list[float]]: ...
 
     async def embed_text_query(
