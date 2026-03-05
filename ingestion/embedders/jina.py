@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import math
 
 import httpx
 from tenacity import (
@@ -28,6 +29,37 @@ def _is_retryable(exc: BaseException) -> bool:
     return isinstance(exc, (httpx.ReadError, httpx.ConnectError, httpx.RemoteProtocolError))
 
 
+_TILE_SIZE = 28
+_TOKENS_PER_TILE = 10
+_FALLBACK_TOKENS = 2000
+
+
+def _estimate_image_tokens(data_uri: str) -> float:
+    """Estimate Jina v4 token cost for an image.
+
+    Jina v4 uses a Qwen2.5-VL vision encoder that tiles images
+    into 28x28 patches with ~10 tokens per tile.
+    """
+    comma = data_uri.find(",")
+    if comma < 0:
+        return _FALLBACK_TOKENS
+
+    b64_data = data_uri[comma + 1 :]
+    try:
+        import io
+
+        from PIL import Image
+
+        img_bytes = base64.b64decode(b64_data)
+        img = Image.open(io.BytesIO(img_bytes))
+        w, h = img.size
+        tiles_w = math.ceil(w / _TILE_SIZE)
+        tiles_h = math.ceil(h / _TILE_SIZE)
+        return float(tiles_w * tiles_h * _TOKENS_PER_TILE)
+    except Exception:
+        return _FALLBACK_TOKENS
+
+
 class JinaV4Embedder:
     """Jina v4 embedding client using a shared httpx.AsyncClient."""
 
@@ -50,6 +82,7 @@ class JinaV4Embedder:
         self._client: httpx.AsyncClient | None = None
         self._semaphore: asyncio.Semaphore | None = None
         self._bound_loop: asyncio.AbstractEventLoop | None = None
+        self._tokens_used: float = 0.0
 
     def _ensure_loop_resources(self) -> None:
         """Recreate loop-bound async resources when the event loop changes.
@@ -74,6 +107,15 @@ class JinaV4Embedder:
         """Close the underlying HTTP client."""
         if self._client is not None:
             await self._client.aclose()
+
+    @property
+    def tokens_used(self) -> float:
+        """Total estimated tokens consumed since last reset."""
+        return self._tokens_used
+
+    def reset_token_counter(self) -> None:
+        """Reset the token consumption counter to zero."""
+        self._tokens_used = 0.0
 
     async def embed_text(
         self,
@@ -171,17 +213,17 @@ class JinaV4Embedder:
 
     @staticmethod
     def _estimate_tokens(payload: dict) -> float:  # type: ignore[type-arg]
-        """Estimate token count from a Jina API payload."""
+        """Estimate token count from a Jina API payload.
+
+        Text: len(text) / 4 (standard heuristic).
+        Images: Jina v4 tiles into 28x28 patches at ~10 tokens/tile.
+        """
         total = 0.0
         for item in payload.get("input", []):
             if "text" in item:
                 total += len(item["text"]) / 4.0
             elif "image" in item:
-                # data:image/...;base64,<data> — count the base64 portion
-                data_str = item["image"]
-                comma = data_str.find(",")
-                b64_len = len(data_str) - comma - 1 if comma >= 0 else len(data_str)
-                total += b64_len / 4.0
+                total += _estimate_image_tokens(item["image"])
         return max(total, 1.0)
 
     async def _request(
@@ -192,6 +234,7 @@ class JinaV4Embedder:
         """Send request with rate limiting + concurrency control."""
         self._ensure_loop_resources()
         estimated_tokens = self._estimate_tokens(payload)
+        self._tokens_used += estimated_tokens
         await self._rpm_limiter.acquire()
         await self._tpm_limiter.acquire(estimated_tokens)
         async with self._semaphore:  # type: ignore[union-attr]
