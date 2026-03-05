@@ -9,8 +9,13 @@ _LegacyGraphWriter — deprecated raw-Cypher writer kept for
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+import time
+from datetime import UTC, datetime
 
+from graphiti_core.nodes import EpisodeType
+from graphiti_core.utils.bulk_utils import RawEpisode
+
+from ingestion.file_processor import TextChunk
 from ingestion.graphiti_client import get_graphiti
 
 logger = logging.getLogger(__name__)
@@ -47,6 +52,70 @@ class GraphitiWriter:
             source_description=source_key,
             reference_time=ref_time,
         )
+
+    async def ingest_bulk(
+        self,
+        chunks: list[TextChunk],
+        source_key: str,
+        reference_time: datetime | None = None,
+    ) -> None:
+        """Ingest all chunks via add_episode_bulk with sequential fallback.
+
+        Falls back to individual add_episode calls if bulk ingestion
+        fails (known issues with LLM structured output parsing).
+        """
+        if not chunks:
+            return
+
+        ref_time = reference_time or datetime.now(tz=UTC)
+        client = await get_graphiti()
+
+        episodes = [
+            RawEpisode(
+                name=f"{source_key}:p{chunk.page_number}:c{chunk.chunk_index}",
+                content=chunk.contextualized_text or chunk.text,
+                source=EpisodeType.text,
+                source_description=source_key,
+                reference_time=ref_time,
+            )
+            for chunk in chunks
+        ]
+
+        t0 = time.monotonic()
+        try:
+            await client.add_episode_bulk(episodes)
+            duration_s = round(time.monotonic() - t0, 1)
+            logger.info(
+                "Bulk ingested %d episodes for %s in %ss",
+                len(episodes),
+                source_key,
+                duration_s,
+            )
+            return
+        except Exception:
+            duration_s = round(time.monotonic() - t0, 1)
+            logger.warning(
+                "Bulk ingestion failed for %s after %ss, "
+                "falling back to sequential",
+                source_key,
+                duration_s,
+                exc_info=True,
+            )
+
+        # Sequential fallback
+        for episode in episodes:
+            try:
+                await client.add_episode(
+                    name=episode.name,
+                    episode_body=episode.content,
+                    source_description=episode.source_description,
+                    reference_time=episode.reference_time,
+                )
+            except Exception:
+                logger.exception(
+                    "Sequential fallback failed for episode %s",
+                    episode.name,
+                )
 
     async def close(self) -> None:
         """Close the underlying Graphiti client."""
