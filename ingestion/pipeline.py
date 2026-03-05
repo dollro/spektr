@@ -340,12 +340,42 @@ async def _process_visual_page(
         )
 
 
+_vlm_client_anthropic: object | None = None
+_vlm_client_openai: object | None = None
+
+
+def _get_vlm_client() -> object:
+    """Return a lazily-initialized VLM API client (singleton)."""
+    provider = settings.llm_api_type.lower()
+    if provider == "anthropic":
+        global _vlm_client_anthropic  # noqa: PLW0603
+        if _vlm_client_anthropic is None:
+            import anthropic
+
+            _vlm_client_anthropic = anthropic.AsyncAnthropic(
+                api_key=settings.llm_api_key,
+                base_url=settings.llm_base_url or None,
+            )
+        return _vlm_client_anthropic
+    else:
+        global _vlm_client_openai  # noqa: PLW0603
+        if _vlm_client_openai is None:
+            import openai
+
+            _vlm_client_openai = openai.AsyncOpenAI(
+                api_key=settings.llm_api_key,
+                base_url=settings.llm_base_url or None,
+            )
+        return _vlm_client_openai
+
+
 async def _caption_visual_page(image_bytes: bytes) -> str:
     """Generate a text description of a visual page using VLM."""
     import base64 as _b64
 
     provider = settings.llm_api_type.lower()
     _b64_str = _b64.b64encode(image_bytes).decode()
+    client = _get_vlm_client()
 
     prompt = (
         "Describe the content of this document page in detail. "
@@ -354,12 +384,6 @@ async def _caption_visual_page(image_bytes: bytes) -> str:
     )
 
     if provider == "anthropic":
-        import anthropic
-
-        client = anthropic.AsyncAnthropic(
-            api_key=settings.llm_api_key,
-            base_url=settings.llm_base_url or None,
-        )
         resp = await client.messages.create(
             model=settings.llm_model,
             max_tokens=512,
@@ -382,12 +406,6 @@ async def _caption_visual_page(image_bytes: bytes) -> str:
         )
         return resp.content[0].text
     else:
-        import openai
-
-        client = openai.AsyncOpenAI(
-            api_key=settings.llm_api_key,
-            base_url=settings.llm_base_url or None,
-        )
         resp = await client.chat.completions.create(
             model=settings.llm_model,
             max_tokens=512,
@@ -680,6 +698,7 @@ def handle_file_delete(s3_key: str) -> None:
             for edge in edges:
                 if edge.source_description == s3_key:
                     edge.expired_at = datetime.now(tz=UTC)
+                    await edge.save(client.driver)
                     invalidated += 1
             logger.info(
                 "Invalidated %d Graphiti edges for %s",

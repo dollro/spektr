@@ -82,6 +82,7 @@ class VoyageEmbedder:
         texts: list[str],
         task: str = "passage",
         dimensions: int | None = None,
+        late_chunking: bool = False,  # noqa: ARG002
     ) -> list[list[float]]:
         """Batch text -> list of dense vectors."""
         voyage_task = _TASK_MAP.get(task, task)
