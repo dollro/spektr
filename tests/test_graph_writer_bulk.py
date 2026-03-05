@@ -30,7 +30,10 @@ class TestGraphitiWriterBulk:
         with patch(
             "ingestion.graph_writer.get_graphiti",
             return_value=mock_client,
-        ):
+        ), patch(
+            "ingestion.graph_writer.settings",
+        ) as mock_settings:
+            mock_settings.graph_episode_target_size = 1500
             writer = GraphitiWriter()
             await writer.ingest_bulk(
                 chunks=chunks,
@@ -39,15 +42,15 @@ class TestGraphitiWriterBulk:
 
         mock_client.add_episode_bulk.assert_called_once()
         episodes = mock_client.add_episode_bulk.call_args.args[0]
-        assert len(episodes) == 3
-        # Chunk 1 should use contextualized_text
-        assert episodes[1].content == "## Heading\nchunk one raw"
-        # Chunk 0 should use raw text
-        assert episodes[0].content == "chunk zero"
-        # Names should encode source/page/chunk
+        assert len(episodes) == 2
+        # Page 1 chunks grouped: chunk 0 (raw) + chunk 1 (contextualized)
+        assert "chunk zero" in episodes[0].content
+        assert "## Heading\nchunk one raw" in episodes[0].content
+        # Page 2 chunk standalone
+        assert episodes[1].content == "chunk two"
+        # Names use anchor chunk
         assert episodes[0].name == "test.pdf:p1:c0"
-        assert episodes[2].name == "test.pdf:p2:c2"
-        # source_description should be source_key
+        assert episodes[1].name == "test.pdf:p2:c2"
         assert episodes[0].source_description == "test.pdf"
 
     @pytest.mark.asyncio
@@ -85,15 +88,18 @@ class TestGraphitiWriterBulk:
         with patch(
             "ingestion.graph_writer.get_graphiti",
             return_value=mock_client,
-        ):
+        ), patch(
+            "ingestion.graph_writer.settings",
+        ) as mock_settings:
+            mock_settings.graph_episode_target_size = 1500
             writer = GraphitiWriter()
             await writer.ingest_bulk(
                 chunks=chunks,
                 source_key="test.pdf",
             )
 
-        # Bulk failed, so sequential should have been called per chunk
-        assert mock_client.add_episode.call_count == 2
+        # Bulk failed; chunks grouped into 1 episode, so 1 sequential call
+        assert mock_client.add_episode.call_count == 1
 
     @pytest.mark.asyncio
     async def test_ingest_bulk_fallback_logs_individual_failures(
@@ -109,13 +115,16 @@ class TestGraphitiWriterBulk:
 
         mock_client = AsyncMock()
         mock_client.add_episode_bulk = AsyncMock(side_effect=Exception("bulk failed"))
-        # Second sequential call fails
-        mock_client.add_episode = AsyncMock(side_effect=[None, Exception("single failed")])
+        # Single grouped episode fails
+        mock_client.add_episode = AsyncMock(side_effect=Exception("single failed"))
 
         with patch(
             "ingestion.graph_writer.get_graphiti",
             return_value=mock_client,
-        ):
+        ), patch(
+            "ingestion.graph_writer.settings",
+        ) as mock_settings:
+            mock_settings.graph_episode_target_size = 1500
             writer = GraphitiWriter()
             # Should not raise
             await writer.ingest_bulk(
@@ -123,4 +132,35 @@ class TestGraphitiWriterBulk:
                 source_key="test.pdf",
             )
 
-        assert mock_client.add_episode.call_count == 2
+        # Chunks grouped into 1 episode, so 1 sequential call
+        assert mock_client.add_episode.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_ingest_bulk_groups_chunks(self) -> None:
+        """ingest_bulk groups small chunks into fewer episodes."""
+        from ingestion.graph_writer import GraphitiWriter
+
+        # 10 small chunks (100 chars each) → should group into fewer episodes
+        chunks = [
+            TextChunk(text=f"chunk {i} " * 10, chunk_index=i, page_number=1)
+            for i in range(10)
+        ]
+
+        mock_client = AsyncMock()
+        mock_client.add_episode_bulk = AsyncMock(return_value=MagicMock())
+
+        with patch(
+            "ingestion.graph_writer.get_graphiti",
+            return_value=mock_client,
+        ), patch(
+            "ingestion.graph_writer.settings",
+        ) as mock_settings:
+            mock_settings.graph_episode_target_size = 1500
+            writer = GraphitiWriter()
+            await writer.ingest_bulk(chunks=chunks, source_key="test.pdf")
+
+        mock_client.add_episode_bulk.assert_called_once()
+        episodes = mock_client.add_episode_bulk.call_args.args[0]
+        # 10 chunks of ~80 chars → should be grouped (fewer than 10 episodes)
+        assert len(episodes) < 10
+        assert len(episodes) >= 1

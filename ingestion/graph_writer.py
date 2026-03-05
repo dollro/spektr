@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 from graphiti_core.nodes import EpisodeType
 from graphiti_core.utils.bulk_utils import RawEpisode
 
+from config.settings import settings
 from ingestion.file_processor import TextChunk
 from ingestion.graphiti_client import get_graphiti
 
@@ -132,15 +133,19 @@ class GraphitiWriter:
         ref_time = reference_time or datetime.now(tz=UTC)
         client = await get_graphiti()
 
+        grouped = group_chunks_for_graph(
+            chunks, target_size=settings.graph_episode_target_size,
+        )
+
         episodes = [
             RawEpisode(
                 name=f"{source_key}:p{chunk.page_number}:c{chunk.chunk_index}",
-                content=chunk.contextualized_text or chunk.text,
+                content=chunk.text,
                 source=EpisodeType.text,
                 source_description=source_key,
                 reference_time=ref_time,
             )
-            for chunk in chunks
+            for chunk in grouped
         ]
 
         t0 = time.monotonic()
@@ -201,7 +206,6 @@ from tenacity import (  # noqa: E402
     wait_exponential,
 )
 
-from config.settings import settings  # noqa: E402
 from ingestion.entity_extractor import Entity, ExtractionResult  # noqa: E402
 
 _NEO4J_RETRY = retry(
