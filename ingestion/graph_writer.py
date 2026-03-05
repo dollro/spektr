@@ -21,6 +21,68 @@ from ingestion.graphiti_client import get_graphiti
 logger = logging.getLogger(__name__)
 
 
+def group_chunks_for_graph(
+    chunks: list[TextChunk],
+    target_size: int = 1500,
+) -> list[TextChunk]:
+    """Group adjacent same-page chunks into larger episodes for Graphiti.
+
+    Keeps vector search chunks untouched — this only affects what
+    gets sent to the knowledge graph. Larger episodes give the LLM
+    more context for entity extraction and reduce total LLM calls.
+    """
+    if not chunks:
+        return []
+
+    grouped: list[TextChunk] = []
+    current_texts: list[str] = []
+    current_len = 0
+    anchor = chunks[0]
+
+    for chunk in chunks:
+        text = chunk.contextualized_text or chunk.text
+
+        # Page boundary → flush
+        if chunk.page_number != anchor.page_number:
+            grouped.append(
+                TextChunk(
+                    text="\n\n".join(current_texts),
+                    chunk_index=anchor.chunk_index,
+                    page_number=anchor.page_number,
+                )
+            )
+            current_texts = [text]
+            current_len = len(text)
+            anchor = chunk
+        # Would exceed target → flush and start new group
+        elif current_texts and current_len + len(text) + 2 > target_size:
+            grouped.append(
+                TextChunk(
+                    text="\n\n".join(current_texts),
+                    chunk_index=anchor.chunk_index,
+                    page_number=anchor.page_number,
+                )
+            )
+            current_texts = [text]
+            current_len = len(text)
+            anchor = chunk
+        else:
+            current_texts.append(text)
+            current_len += len(text) + 2  # +2 for "\n\n" separator
+
+    # Flush remaining
+    if current_texts:
+        grouped.append(
+            TextChunk(
+                text="\n\n".join(current_texts),
+                chunk_index=anchor.chunk_index,
+                page_number=anchor.page_number,
+            )
+        )
+
+    return grouped
+
+
 class GraphitiWriter:
     """Ingest text chunks as Graphiti episodes.
 
