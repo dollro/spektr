@@ -35,7 +35,7 @@ flowchart LR
 
 | Category | Extensions | Processing |
 |-|-|-|
-| PDF | `.pdf` | Rasterized to PNG pages at 300 DPI, embedded as images |
+| PDF | `.pdf` | Rasterized to PNG pages at 150 DPI, embedded as images |
 | Images | `.png`, `.jpg`, `.jpeg`, `.gif`, `.bmp`, `.webp` | Embedded directly (dense + ColBERT multi-vector) |
 | Text | `.md`, `.txt`, `.csv`, `.json`, `.xml`, `.html`, `.yaml`, `.yml` | Semantic chunked, embedded as text, ingested to Graphiti |
 
@@ -44,7 +44,7 @@ flowchart LR
 ```mermaid
 flowchart TD
     File["Input File"] --> Detect{MIME Type?}
-    Detect -->|PDF| PDF["PDF -> PNG pages\n(300 DPI)"]
+    Detect -->|PDF| PDF["PDF -> PNG pages\n(150 DPI)"]
     Detect -->|Image| IMG["Single image Page"]
     Detect -->|Text| TXT["Single text Page"]
 

@@ -49,14 +49,14 @@ def file_to_pages(filename: str, content: bytes) -> list[Page]
 
 | Condition | Result |
 |-|-|
-| `application/pdf` or `.pdf` extension | PDF -> multiple Pages with PNG bytes (300 DPI via `pdf2image`) |
+| `application/pdf` or `.pdf` extension | PDF -> multiple Pages with PNG bytes (150 DPI via `pdf2image`) |
 | Image MIME or extension in `.png .jpg .jpeg .gif .bmp .webp` | Single Page with original image bytes |
 | Text MIME or extension in `.md .txt .csv .json .xml .html .yaml .yml` | Single Page with decoded UTF-8 text |
 | Unknown | Empty list + warning log |
 
 ### PDF conversion
 
-PDFs are rasterized page-by-page using `pdf2image.convert_from_bytes()` at **300 DPI** to PNG format. Each page becomes a separate `Page` with `content_type="pdf"` and 1-based page numbering.
+PDFs are rasterized page-by-page using `pdf2image.convert_from_bytes()` at **150 DPI** to PNG format. Each page becomes a separate `Page` with `content_type="pdf"` and 1-based page numbering.
 
 ## `semantic_chunk()`
 

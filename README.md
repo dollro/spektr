@@ -24,7 +24,7 @@ S3 / Local ──► CocoIndex Pipeline
 ```
 
 - **Pipeline:** CocoIndex (S3/SQS source or local dir → classify → chunk → embed → store)
-- **Embeddings:** Provider-agnostic. Jina v4 (default): dense 2048d + ColBERT 128d multi-vectors. Voyage AI: dense 1024d.
+- **Embeddings:** Provider-agnostic. Jina v4 (default): dense 2048d. ColBERT 128d multi-vectors available but disabled by default (`MULTIVEC_ENABLED=true` to enable). Voyage AI: dense 1024d.
 - **Vector Store:** Qdrant (`documents_dense`, `documents_multivec`)
 - **Knowledge Graph:** Neo4j 5 + Graphiti (temporal entity/relationship tracking). Graphiti uses a Jina embedder adapter and an OpenAI-compatible LLM (via OpenRouter or direct) for entity extraction.
 - **State Tracking:** PostgreSQL 17 (CocoIndex pipeline state)
@@ -37,7 +37,7 @@ S3 / Local ──► CocoIndex Pipeline
 | Tool | Purpose |
 |-|-|
 | `vector_search` | Semantic similarity search (Qdrant dense vectors) |
-| `visual_search` | Visual/layout search (Qdrant ColBERT multi-vectors) |
+| `visual_search` | Visual/layout search (Qdrant ColBERT multi-vectors, requires `MULTIVEC_ENABLED=true`) |
 | `graph_search` | Entity and relationship search (Graphiti temporal KG) |
 | `hybrid_search` | Parallel vector + graph fusion |
 
@@ -64,7 +64,7 @@ uv run python -m agent.api              # Agent HTTP endpoint (optional)
 
 ## Document Processing Pipeline
 
-- **PDF pages** are rasterized to 300 DPI PNG and embedded as images. If OCR text is available, chunks are also embedded as text.
+- **PDF pages** are rasterized to 150 DPI PNG and embedded as images. If OCR text is available, chunks are also embedded as text.
 - **Text tasks run concurrently**, **image tasks run sequentially** to avoid exceeding Jina's TPM limit (image embeddings consume 50-100k+ tokens each).
 - Text chunks are ingested into Neo4j via Graphiti for entity/relationship extraction.
 - **TPM-aware rate limiting:** TokenBucket with variable token counts estimates payload tokens before each request.
