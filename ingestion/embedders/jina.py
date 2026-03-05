@@ -20,12 +20,12 @@ logger = logging.getLogger(__name__)
 _TASK_MAP = {"passage": "retrieval.passage", "query": "retrieval.query"}
 
 
-def _is_retryable_status(exc: BaseException) -> bool:
-    """Return True for HTTP 429 and 5xx errors."""
+def _is_retryable(exc: BaseException) -> bool:
+    """Return True for HTTP 429/5xx and transient network errors."""
     if isinstance(exc, httpx.HTTPStatusError):
         code = exc.response.status_code
         return code == 429 or code >= 500
-    return False
+    return isinstance(exc, (httpx.ReadError, httpx.ConnectError, httpx.RemoteProtocolError))
 
 
 class JinaV4Embedder:
@@ -200,7 +200,7 @@ class JinaV4Embedder:
     @retry(
         wait=wait_exponential(multiplier=2, min=5, max=60),
         stop=stop_after_attempt(settings.max_retries),
-        retry=retry_if_exception(_is_retryable_status),
+        retry=retry_if_exception(_is_retryable),
         before_sleep=lambda rs: logger.warning(
             "Jina API retry attempt %d after %s",
             rs.attempt_number,
