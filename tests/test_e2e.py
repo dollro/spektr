@@ -156,7 +156,7 @@ class TestAgentWithSeededData:
 
         mock_edge = MagicMock()
         mock_edge.fact = "Python is a language"
-        mock_edge.source_description = "test_doc.pdf"
+        mock_edge.source_description = "unique_graph_source.pdf"
         mock_edge.created_at = "2025-01-01"
         mock_edge.expired_at = None
 

@@ -20,45 +20,32 @@ from ingestion.pipeline import (
 )
 
 
-def _deterministic_text_embed(text: str) -> list[float]:
-    return [0.1] * DENSE_DIM
-
-
-def _deterministic_image_embed(image_bytes: bytes) -> list[float]:
-    return [0.3] * DENSE_DIM
-
-
-def _deterministic_multivec(image_bytes: bytes) -> list[list[float]]:
-    return [[0.4] * 128] * 10
-
-
 @pytest.mark.integration
 class TestTextPageIngestion:
     """Test text file → dense Qdrant points + Neo4j entities."""
 
-    def test_text_file_produces_dense_points(
+    async def test_text_file_produces_dense_points(
         self,
         qdrant_client,  # type: ignore[no-untyped-def]
+        mock_embedder,  # type: ignore[no-untyped-def]
         sample_txt_bytes: bytes,
         sample_txt_name: str,
     ) -> None:
-        pages = file_to_pages(sample_txt_name, sample_txt_bytes)
+        result = file_to_pages(sample_txt_name, sample_txt_bytes)
+        pages = result.pages
         assert len(pages) == 1
         assert pages[0].content_type == "text"
 
-        with patch(
-            "ingestion.pipeline.jina_embed_text",
-            side_effect=_deterministic_text_embed,
-        ):
-            _process_text_page(
-                source_file=sample_txt_name,
-                text=pages[0].text,
-                page_number=1,
-                mime="text/plain",
-                now="2025-01-01T00:00:00",
-                qdrant=qdrant_client,
-                graphiti_writer=None,
-            )
+        await _process_text_page(
+            source_file=sample_txt_name,
+            text=pages[0].text,
+            page_number=1,
+            mime="text/plain",
+            now="2025-01-01T00:00:00",
+            qdrant=qdrant_client,
+            embedder=mock_embedder,
+            graphiti_writer=None,
+        )
 
         # Verify points in dense collection
         result = qdrant_client.scroll(
@@ -154,29 +141,28 @@ class TestTextPageIngestion:
 class TestImagePageIngestion:
     """Test image file → dense + multivec Qdrant points."""
 
-    def test_image_file_produces_dense_points(
+    async def test_image_file_produces_dense_points(
         self,
         qdrant_client,  # type: ignore[no-untyped-def]
+        mock_embedder,  # type: ignore[no-untyped-def]
         sample_png_bytes: bytes,
         sample_png_name: str,
     ) -> None:
-        pages = file_to_pages(sample_png_name, sample_png_bytes)
+        result = file_to_pages(sample_png_name, sample_png_bytes)
+        pages = result.pages
         assert len(pages) == 1
         assert pages[0].content_type == "image"
 
-        with patch(
-            "ingestion.pipeline.jina_embed_image",
-            side_effect=_deterministic_image_embed,
-        ):
-            _process_visual_page(
-                source_file=sample_png_name,
-                image_bytes=pages[0].image_bytes,
-                page_number=1,
-                content_type="image",
-                mime="image/png",
-                now="2025-01-01T00:00:00",
-                qdrant=qdrant_client,
-            )
+        await _process_visual_page(
+            source_file=sample_png_name,
+            image_bytes=pages[0].image_bytes,
+            page_number=1,
+            content_type="image",
+            mime="image/png",
+            now="2025-01-01T00:00:00",
+            qdrant=qdrant_client,
+            embedder=mock_embedder,
+        )
 
         dense_result = qdrant_client.scroll(
             collection_name=DENSE_COLLECTION,
@@ -186,26 +172,18 @@ class TestImagePageIngestion:
         assert len(dense_points) == 1
         assert dense_points[0].payload["content_type"] == "image"
 
-    def test_image_file_produces_multivec_when_enabled(
+    async def test_image_file_produces_multivec_when_enabled(
         self,
         qdrant_client,  # type: ignore[no-untyped-def]
+        mock_embedder,  # type: ignore[no-untyped-def]
         sample_png_bytes: bytes,
         sample_png_name: str,
     ) -> None:
-        pages = file_to_pages(sample_png_name, sample_png_bytes)
+        result = file_to_pages(sample_png_name, sample_png_bytes)
+        pages = result.pages
 
-        with (
-            patch(
-                "ingestion.pipeline.jina_embed_image",
-                side_effect=_deterministic_image_embed,
-            ),
-            patch(
-                "ingestion.pipeline.jina_embed_image_multivec",
-                side_effect=_deterministic_multivec,
-            ),
-            patch.object(settings, "multivec_enabled", True),
-        ):
-            _process_visual_page(
+        with patch.object(settings, "multivec_enabled", True):
+            await _process_visual_page(
                 source_file=sample_png_name,
                 image_bytes=pages[0].image_bytes,
                 page_number=1,
@@ -213,6 +191,7 @@ class TestImagePageIngestion:
                 mime="image/png",
                 now="2025-01-01T00:00:00",
                 qdrant=qdrant_client,
+                embedder=mock_embedder,
             )
 
         multivec_result = qdrant_client.scroll(
@@ -228,30 +207,29 @@ class TestImagePageIngestion:
 class TestPdfIngestion:
     """Test PDF file → dense + multivec points for each page."""
 
-    def test_pdf_produces_dense_points_per_page(
+    async def test_pdf_produces_dense_points_per_page(
         self,
         qdrant_client,  # type: ignore[no-untyped-def]
+        mock_embedder,  # type: ignore[no-untyped-def]
         sample_pdf_bytes: bytes,
         sample_pdf_name: str,
     ) -> None:
-        pages = file_to_pages(sample_pdf_name, sample_pdf_bytes)
+        result = file_to_pages(sample_pdf_name, sample_pdf_bytes)
+        pages = result.pages
         assert len(pages) >= 1
         assert all(p.content_type == "pdf" for p in pages)
 
-        with patch(
-            "ingestion.pipeline.jina_embed_image",
-            side_effect=_deterministic_image_embed,
-        ):
-            for page in pages:
-                _process_visual_page(
-                    source_file=sample_pdf_name,
-                    image_bytes=page.image_bytes,
-                    page_number=page.page_number,
-                    content_type="pdf_page",
-                    mime="application/pdf",
-                    now="2025-01-01T00:00:00",
-                    qdrant=qdrant_client,
-                )
+        for page in pages:
+            await _process_visual_page(
+                source_file=sample_pdf_name,
+                image_bytes=page.image_bytes,
+                page_number=page.page_number,
+                content_type="pdf_page",
+                mime="application/pdf",
+                now="2025-01-01T00:00:00",
+                qdrant=qdrant_client,
+                embedder=mock_embedder,
+            )
 
         dense_result = qdrant_client.scroll(
             collection_name=DENSE_COLLECTION,
@@ -264,29 +242,28 @@ class TestPdfIngestion:
 class TestIdempotency:
     """Test that running twice on same file produces no duplicates."""
 
-    def test_no_duplicate_dense_points(
+    async def test_no_duplicate_dense_points(
         self,
         qdrant_client,  # type: ignore[no-untyped-def]
+        mock_embedder,  # type: ignore[no-untyped-def]
         sample_txt_bytes: bytes,
         sample_txt_name: str,
     ) -> None:
-        pages = file_to_pages(sample_txt_name, sample_txt_bytes)
+        result = file_to_pages(sample_txt_name, sample_txt_bytes)
+        pages = result.pages
 
-        with patch(
-            "ingestion.pipeline.jina_embed_text",
-            side_effect=_deterministic_text_embed,
-        ):
-            # Run twice
-            for _ in range(2):
-                _process_text_page(
-                    source_file=sample_txt_name,
-                    text=pages[0].text,
-                    page_number=1,
-                    mime="text/plain",
-                    now="2025-01-01T00:00:00",
-                    qdrant=qdrant_client,
-                    graphiti_writer=None,
-                )
+        # Run twice
+        for _ in range(2):
+            await _process_text_page(
+                source_file=sample_txt_name,
+                text=pages[0].text,
+                page_number=1,
+                mime="text/plain",
+                now="2025-01-01T00:00:00",
+                qdrant=qdrant_client,
+                embedder=mock_embedder,
+                graphiti_writer=None,
+            )
 
         # Deterministic IDs mean upsert overwrites, no duplicates
         result = qdrant_client.scroll(
@@ -296,25 +273,16 @@ class TestIdempotency:
         chunks = semantic_chunk(pages[0].text)
         assert len(result[0]) == len(chunks)
 
-    def test_no_duplicate_multivec_points(
+    async def test_no_duplicate_multivec_points(
         self,
         qdrant_client,  # type: ignore[no-untyped-def]
+        mock_embedder,  # type: ignore[no-untyped-def]
         sample_png_bytes: bytes,
         sample_png_name: str,
     ) -> None:
-        with (
-            patch(
-                "ingestion.pipeline.jina_embed_image",
-                side_effect=_deterministic_image_embed,
-            ),
-            patch(
-                "ingestion.pipeline.jina_embed_image_multivec",
-                side_effect=_deterministic_multivec,
-            ),
-            patch.object(settings, "multivec_enabled", True),
-        ):
+        with patch.object(settings, "multivec_enabled", True):
             for _ in range(2):
-                _process_visual_page(
+                await _process_visual_page(
                     source_file=sample_png_name,
                     image_bytes=sample_png_bytes,
                     page_number=1,
@@ -322,6 +290,7 @@ class TestIdempotency:
                     mime="image/png",
                     now="2025-01-01T00:00:00",
                     qdrant=qdrant_client,
+                    embedder=mock_embedder,
                 )
 
         multivec_result = qdrant_client.scroll(
@@ -335,28 +304,27 @@ class TestIdempotency:
 class TestCorruptFiles:
     """Test that corrupt/empty files are skipped gracefully."""
 
-    def test_empty_file_skipped(
+    async def test_empty_file_skipped(
         self,
         qdrant_client,  # type: ignore[no-untyped-def]
+        mock_embedder,  # type: ignore[no-untyped-def]
     ) -> None:
-        pages = file_to_pages("empty.txt", b"")
+        result = file_to_pages("empty.txt", b"")
+        pages = result.pages
         assert len(pages) == 1
         assert pages[0].text == ""
 
         # Empty text produces no chunks, so no points
-        with patch(
-            "ingestion.pipeline.jina_embed_text",
-            side_effect=_deterministic_text_embed,
-        ):
-            _process_text_page(
-                source_file="empty.txt",
-                text="",
-                page_number=1,
-                mime="text/plain",
-                now="2025-01-01T00:00:00",
-                qdrant=qdrant_client,
-                graphiti_writer=None,
-            )
+        await _process_text_page(
+            source_file="empty.txt",
+            text="",
+            page_number=1,
+            mime="text/plain",
+            now="2025-01-01T00:00:00",
+            qdrant=qdrant_client,
+            embedder=mock_embedder,
+            graphiti_writer=None,
+        )
 
         result = qdrant_client.scroll(
             collection_name=DENSE_COLLECTION,
@@ -365,34 +333,29 @@ class TestCorruptFiles:
         assert len(result[0]) == 0
 
     def test_unknown_file_type_returns_no_pages(self) -> None:
-        pages = file_to_pages("data.xyz", b"some binary data")
-        assert len(pages) == 0
+        result = file_to_pages("data.xyz", b"some binary data")
+        assert len(result.pages) == 0
 
     def test_ingest_file_handles_corrupt_pdf(
         self,
         qdrant_client,  # type: ignore[no-untyped-def]
+        mock_embedder,  # type: ignore[no-untyped-def]
     ) -> None:
         # Corrupt PDF: valid header but invalid content
         corrupt_pdf = b"%PDF-1.4 corrupt data"
 
         with (
             patch(
-                "ingestion.pipeline.jina_embed_text",
-                side_effect=_deterministic_text_embed,
-            ),
-            patch(
-                "ingestion.pipeline.jina_embed_image",
-                side_effect=_deterministic_image_embed,
-            ),
-            patch(
-                "ingestion.pipeline.jina_embed_image_multivec",
-                side_effect=_deterministic_multivec,
+                "ingestion.pipeline.create_embedder",
+                return_value=mock_embedder,
             ),
             patch("ingestion.pipeline.settings") as mock_settings,
         ):
             mock_settings.qdrant_url = "http://localhost:6333"
             mock_settings.document_source = "local"
             mock_settings.multivec_enabled = False
+            mock_settings.image_embed_strategy = "smart"
+            mock_settings.vlm_generation_enabled = False
             # ingest_file should not crash
             result = ingest_file(corrupt_pdf, "corrupt.pdf")
             assert result == "corrupt.pdf"
@@ -405,6 +368,7 @@ class TestIngestFileEndToEnd:
     def test_ingest_text_file(
         self,
         qdrant_client,  # type: ignore[no-untyped-def]
+        mock_embedder,  # type: ignore[no-untyped-def]
         sample_txt_bytes: bytes,
         sample_txt_name: str,
     ) -> None:
@@ -414,8 +378,8 @@ class TestIngestFileEndToEnd:
 
         with (
             patch(
-                "ingestion.pipeline.jina_embed_text",
-                side_effect=_deterministic_text_embed,
+                "ingestion.pipeline.create_embedder",
+                return_value=mock_embedder,
             ),
             patch(
                 "ingestion.pipeline.GraphitiWriter",
@@ -426,6 +390,8 @@ class TestIngestFileEndToEnd:
             mock_settings.qdrant_url = "http://localhost:6333"
             mock_settings.document_source = "local"
             mock_settings.multivec_enabled = False
+            mock_settings.image_embed_strategy = "smart"
+            mock_settings.vlm_generation_enabled = False
 
             result = ingest_file(sample_txt_bytes, sample_txt_name)
 
@@ -441,19 +407,22 @@ class TestIngestFileEndToEnd:
     def test_ingest_image_file(
         self,
         qdrant_client,  # type: ignore[no-untyped-def]
+        mock_embedder,  # type: ignore[no-untyped-def]
         sample_png_bytes: bytes,
         sample_png_name: str,
     ) -> None:
         with (
             patch(
-                "ingestion.pipeline.jina_embed_image",
-                side_effect=_deterministic_image_embed,
+                "ingestion.pipeline.create_embedder",
+                return_value=mock_embedder,
             ),
             patch("ingestion.pipeline.settings") as mock_settings,
         ):
             mock_settings.qdrant_url = "http://localhost:6333"
             mock_settings.document_source = "local"
             mock_settings.multivec_enabled = False
+            mock_settings.image_embed_strategy = "smart"
+            mock_settings.vlm_generation_enabled = False
 
             result = ingest_file(sample_png_bytes, sample_png_name)
 

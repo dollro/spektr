@@ -117,11 +117,11 @@ class TestVectorSearch:
 
         with (
             patch(
-                "server.tools.vector_search._get_qdrant_client",
+                "server.tools.vector_search._qdrant_client",
                 qdrant_client,
             ),
             patch(
-                "server.tools.vector_search._get_embedder",
+                "server.tools.vector_search._embedder",
                 mock_embedder,
             ),
         ):
@@ -147,11 +147,11 @@ class TestVectorSearch:
 
         with (
             patch(
-                "server.tools.vector_search._get_qdrant_client",
+                "server.tools.vector_search._qdrant_client",
                 qdrant_client,
             ),
             patch(
-                "server.tools.vector_search._get_embedder",
+                "server.tools.vector_search._embedder",
                 mock_embedder,
             ),
         ):
@@ -179,11 +179,11 @@ class TestVectorSearch:
 
         with (
             patch(
-                "server.tools.vector_search._get_qdrant_client",
+                "server.tools.vector_search._qdrant_client",
                 qdrant_client,
             ),
             patch(
-                "server.tools.vector_search._get_embedder",
+                "server.tools.vector_search._embedder",
                 mock_embedder,
             ),
         ):
@@ -203,11 +203,11 @@ class TestVectorSearch:
         """Empty collection returns empty list."""
         with (
             patch(
-                "server.tools.vector_search._get_qdrant_client",
+                "server.tools.vector_search._qdrant_client",
                 qdrant_client,
             ),
             patch(
-                "server.tools.vector_search._get_embedder",
+                "server.tools.vector_search._embedder",
                 mock_embedder,
             ),
         ):
@@ -238,11 +238,11 @@ class TestVisualSearch:
 
         with (
             patch(
-                "server.tools.visual_search._get_qdrant_client",
+                "server.tools.visual_search._qdrant_client",
                 qdrant_client,
             ),
             patch(
-                "server.tools.visual_search._get_embedder",
+                "server.tools.visual_search._embedder",
                 mock_embedder,
             ),
         ):
@@ -459,11 +459,11 @@ class TestEdgeCases:
         """EC-05: Empty collection returns empty list, not an error."""
         with (
             patch(
-                "server.tools.vector_search._get_qdrant_client",
+                "server.tools.vector_search._qdrant_client",
                 qdrant_client,
             ),
             patch(
-                "server.tools.vector_search._get_embedder",
+                "server.tools.vector_search._embedder",
                 mock_embedder,
             ),
         ):
