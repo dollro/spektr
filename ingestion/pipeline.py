@@ -23,8 +23,8 @@ from config.settings import settings
 from ingestion._utils import run_async
 from ingestion.embedder import Embedder, create_embedder
 from ingestion.file_processor import (
-    FileProcessingResult,
     TextChunk,
+    docling_chunk,
     file_to_pages,
     semantic_chunk,
 )
@@ -98,6 +98,7 @@ def _build_page_tasks(
     qdrant: QdrantClient,
     embedder: Embedder,
     graphiti_writer: GraphitiWriter | None,
+    docling_chunks: list[TextChunk] | None = None,
 ) -> _PageTasks:
     """Return text and image coroutines for processing one page."""
     tasks = _PageTasks()
@@ -113,6 +114,7 @@ def _build_page_tasks(
                 qdrant,
                 embedder,
                 graphiti_writer,
+                docling_chunks=docling_chunks,
             )
         )
     elif page.content_type == "pdf":
@@ -127,6 +129,7 @@ def _build_page_tasks(
                     qdrant,
                     embedder,
                     graphiti_writer,
+                    docling_chunks=docling_chunks,
                 )
             )
         tasks.image.append(
@@ -169,16 +172,33 @@ async def _process_text_page(
     qdrant: QdrantClient,
     embedder: Embedder,
     graphiti_writer: GraphitiWriter | None,
+    docling_chunks: list[TextChunk] | None = None,
 ) -> None:
-    """Process a text page: chunk, embed, store dense, ingest to Graphiti."""
-    chunks = semantic_chunk(text, page_number=page_number)
+    """Process a text page: chunk, embed, store dense, ingest to Graphiti.
+
+    When docling_chunks are provided, uses them (filtered to this page)
+    with late_chunking=True for contextual embeddings.
+    Falls back to semantic_chunk() without late chunking otherwise.
+    """
+    use_late_chunking = False
+    if docling_chunks is not None:
+        chunks = [
+            c for c in docling_chunks if c.page_number == page_number
+        ]
+        use_late_chunking = bool(chunks)
+
+    if not docling_chunks or not use_late_chunking:
+        chunks = semantic_chunk(text, page_number=page_number)
+
     if not chunks:
         return
 
     # Batch-embed all chunks in a single API call
     try:
         all_texts = [chunk.text for chunk in chunks]
-        vectors = await embedder.embed_text(all_texts)
+        vectors = await embedder.embed_text(
+            all_texts, late_chunking=use_late_chunking,
+        )
     except Exception:
         logger.exception(
             "Text embedding failed for %s page %d (%d chunks)",
@@ -196,23 +216,27 @@ async def _process_text_page(
             chunk.chunk_index,
         )
         point_id = _make_point_id(chunk_id)
+        payload = {
+            "source_file": source_file,
+            "content_type": "text_chunk",
+            "page_number": page_number,
+            "chunk_index": chunk.chunk_index,
+            "char_count": len(chunk.text),
+            "text_content": chunk.text,
+            "metadata": {
+                "mime_type": mime,
+                "ingested_at": now,
+                "source_key": source_file,
+            },
+        }
+        if chunk.contextualized_text is not None:
+            payload["contextualized_text"] = chunk.contextualized_text
+
         dense_points.append(
             models.PointStruct(
                 id=point_id,
                 vector=vector,
-                payload={
-                    "source_file": source_file,
-                    "content_type": "text_chunk",
-                    "page_number": page_number,
-                    "chunk_index": chunk.chunk_index,
-                    "char_count": len(chunk.text),
-                    "text_content": chunk.text,
-                    "metadata": {
-                        "mime_type": mime,
-                        "ingested_at": now,
-                        "source_key": source_file,
-                    },
-                },
+                payload=payload,
             ),
         )
 
@@ -420,12 +444,17 @@ async def _ingest_to_graphiti(
     chunks: list[TextChunk],
     graphiti_writer: GraphitiWriter,
 ) -> None:
-    """Ingest chunks as Graphiti episodes (entity extraction is automatic)."""
+    """Ingest chunks as Graphiti episodes (entity extraction is automatic).
+
+    Uses contextualized_text (heading-prefixed) when available for better
+    entity resolution. Falls back to raw text.
+    """
     ref_time = datetime.now(tz=UTC)
     for chunk in chunks:
+        chunk_text = chunk.contextualized_text or chunk.text
         try:
             await graphiti_writer.ingest_chunk(
-                chunk_text=chunk.text,
+                chunk_text=chunk_text,
                 source_key=source_file,
                 page_number=chunk.page_number,
                 chunk_index=chunk.chunk_index,
@@ -470,6 +499,23 @@ def ingest_file(content: bytes, filename: str) -> str:
     qdrant = _get_qdrant_client()
     graphiti_writer: GraphitiWriter | None = None
 
+    # Compute Docling chunks once for the whole document
+    dl_chunks = (
+        docling_chunk(result.docling_document)
+        if result.docling_document
+        else None
+    )
+    if dl_chunks:
+        logger.info(
+            "Using Docling HybridChunker: %d chunks for %s",
+            len(dl_chunks),
+            filename,
+            extra={
+                "file_name": filename,
+                "chunk_count": len(dl_chunks),
+            },
+        )
+
     logger.info(
         "Processing file: %s",
         filename,
@@ -505,6 +551,7 @@ def ingest_file(content: bytes, filename: str) -> str:
                         qdrant,
                         embedder,
                         graphiti_writer,
+                        docling_chunks=dl_chunks,
                     )
                     text_tasks.extend(pt.text)
                     image_tasks.extend(pt.image)
