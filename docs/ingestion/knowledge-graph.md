@@ -75,18 +75,44 @@ This enables time-aware queries: "What was true at time T?" rather than just "Wh
 ```mermaid
 flowchart TD
     Call["get_graphiti()"] --> Check{Client\nexists?}
-    Check -->|No| Init["Create Graphiti(\nneo4j_uri, user, password)"]
+    Check -->|No| Init["Create Graphiti(\nneo4j_uri, user, password,\nllm_client, embedder, cross_encoder)"]
     Init --> Indices["build_indices_and_constraints()"]
     Indices --> Return["Return client"]
     Check -->|Yes| Return
 
-    Close["close_graphiti()"] --> Shutdown["client.close()\nset _client = None"]
+    Close["close_graphiti()"] --> Shutdown["embedder.close()\nclient.close()\nset both = None"]
 ```
 
 | Function | Description |
 |-|-|
-| `get_graphiti()` | Returns (and lazily initializes) the singleton. On first call, connects to Neo4j and builds indices/constraints. |
-| `close_graphiti()` | Closes the client and resets the singleton to `None`. |
+| `get_graphiti()` | Returns (and lazily initializes) the singleton. On first call, connects to Neo4j, builds indices/constraints, and wires up LLM + embedder. |
+| `close_graphiti()` | Closes the embedder and client, resets both singletons to `None`. |
+
+### LLM Configuration
+
+Graphiti's entity extraction uses `OpenAIGenericClient` (Chat Completions API), which is compatible with OpenRouter and any OpenAI-compatible endpoint. Configure via:
+
+| Setting | Env var | Description |
+|-|-|-|
+| `llm_api_key` | `LLM_API_KEY` | API key for the LLM provider |
+| `llm_model` | `LLM_MODEL` | Model name (e.g. `openai/gpt-4.1`) |
+| `llm_base_url` | `LLM_BASE_URL` | Base URL (e.g. `https://openrouter.ai/api/v1`) or omit for direct OpenAI |
+
+> **Note:** `OpenAIGenericClient` is used instead of `OpenAIClient` because the Responses API (`OpenAIClient`) is not supported by OpenRouter. Use Chat Completions-compatible models only.
+>
+> **Warning:** Reasoning models (e.g. `o4-mini`) may not work — they can return empty `content` fields in responses, breaking Graphiti's extraction pipeline. Use standard chat completion models like `openai/gpt-4.1`.
+
+### Embedder Adapter
+
+Rather than using `OpenAIEmbedder` (which requires a separate OpenAI embeddings endpoint), the client uses `_JinaGraphitiEmbedder` — an adapter that wraps the project's own `JinaV4Embedder`. This reuses the Jina v4 API for graph vector search, keeping embeddings consistent across vector store and knowledge graph.
+
+`EMBEDDING_DIM=2048` is set via `os.environ.setdefault` at module import time to match Jina's output dimension, since Graphiti reads this at import time for vector index sizing.
+
+The adapter implements both `create()` (single or batch input, returns first vector) and `create_batch()` (returns all vectors) using Graphiti's `EmbedderClient` interface.
+
+### Cross-encoder (Reranker)
+
+`OpenAIRerankerClient` is used with the same `LLMConfig` as the LLM client. It reranks graph search results using the configured chat completions model.
 
 The client connects to Neo4j using `settings.neo4j_uri`, `settings.neo4j_user`, and `settings.neo4j_password`.
 

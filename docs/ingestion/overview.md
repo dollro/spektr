@@ -27,7 +27,7 @@ flowchart LR
 | Source | `pipeline.py` | CocoIndex reads from S3 (via SQS) or local `documents/` dir |
 | Classify | `file_processor.py` | MIME-detect file type, convert to `Page` objects |
 | Chunk | `file_processor.py` | `semantic_chunk()` splits text on paragraph boundaries |
-| Embed | `embedder.py` / `jina_cocoindex_ops.py` | Jina v4 dense (2048d) + ColBERT (128d) embeddings |
+| Embed | `embedders/jina.py` or `embedders/voyage.py` | Provider-agnostic dense (2048d) + ColBERT (128d) embeddings |
 | Store | `pipeline.py` | Upsert vectors to Qdrant collections |
 | Graph | `graph_writer.py` / `graphiti_client.py` | Ingest text chunks as Graphiti episodes into Neo4j |
 
@@ -48,6 +48,7 @@ flowchart TD
     Detect -->|Image| IMG["Single image Page"]
     Detect -->|Text| TXT["Single text Page"]
 
+    PDF -->|text if OCR available| SemanticChunk
     PDF --> DenseImg["Dense embed (2048d)"]
     PDF --> ColBERT["ColBERT embed (128d)"]
     IMG --> DenseImg
@@ -69,6 +70,9 @@ flowchart TD
 - **Text content flows to both stores** -- Qdrant for vector search, Neo4j for entity/relationship queries.
 - **Visual content (PDF pages, images) only goes to Qdrant** -- no text extraction from images in the current pipeline.
 - **State tracked in PostgreSQL** -- CocoIndex maintains `ingestion_log` for incremental processing.
+- **Text tasks run concurrently, image tasks run sequentially** -- image embeddings consume 50-100k+ tokens each and would blow TPM limits if run in parallel. The pipeline splits tasks by type and processes them accordingly.
+- **TPM-aware rate limiting** -- a dual TokenBucket system (RPM + TPM) estimates token cost before each API call and throttles accordingly.
+- **Graphiti uses the same Jina embedder** -- a thin adapter (`_JinaGraphitiEmbedder`) delegates graph embedding requests to the project's Jina/Voyage embedder, sharing rate limiters.
 
 ## Module Map
 
@@ -76,7 +80,9 @@ flowchart TD
 |-|-|
 | `file_processor.py` | [File Processing](file-processing.md) |
 | `embedder.py` | [Embeddings](embeddings.md) |
-| `jina_cocoindex_ops.py` | [CocoIndex Pipeline](cocoindex.md) |
+| `embedders/jina.py` | [Embeddings](embeddings.md) |
+| `embedders/voyage.py` | [Embeddings](embeddings.md) |
+| `cocoindex_ops.py` | [CocoIndex Pipeline](cocoindex.md) |
 | `graph_writer.py` | [Knowledge Graph](knowledge-graph.md) |
 | `graphiti_client.py` | [Knowledge Graph](knowledge-graph.md) |
 | `pipeline.py` | [CocoIndex Pipeline](cocoindex.md) |
