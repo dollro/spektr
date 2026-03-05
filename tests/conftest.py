@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import os
+import pathlib
+from unittest.mock import AsyncMock, MagicMock
 
 import dotenv
+import pytest
 
 # Load .env so real credentials are available for integration tests.
 # setdefault fills in dummy values only for vars not in .env (unit tests).
@@ -13,18 +16,13 @@ os.environ.setdefault("JINA_API_KEY", "test-jina-key")
 os.environ.setdefault("JINA_MODEL", "jina-embeddings-v4")
 os.environ.setdefault("NEO4J_PASSWORD", "test-neo4j-password")
 
-import pathlib
-from unittest.mock import AsyncMock, MagicMock
-
-import pytest
-
-from config.constants import (
+from config.constants import (  # noqa: E402
     DENSE_COLLECTION,
     DENSE_DIM,
     MULTIVEC_COLLECTION,
     MULTIVEC_DIM,
 )
-from ingestion.entity_extractor import ExtractionResult
+from ingestion.entity_extractor import ExtractionResult  # noqa: E402
 
 FIXTURES_DIR = pathlib.Path(__file__).parent / "fixtures"
 

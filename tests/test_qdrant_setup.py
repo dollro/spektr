@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from qdrant_client import models
 
-from config.constants import DENSE_COLLECTION, MULTIVEC_COLLECTION, MULTIVEC_DIM
+from config.constants import DENSE_COLLECTION, DENSE_DIM, MULTIVEC_COLLECTION, MULTIVEC_DIM
 from config.settings import settings
 from ingestion.qdrant_setup import (
     create_dense_collection,

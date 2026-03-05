@@ -3,12 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TypeVar
-
-T = TypeVar("T")
 
 
-def run_async(coro: T, *, timeout: float | None = None) -> T:  # type: ignore[type-var]
+def run_async[T](coro: T, *, timeout: float | None = None) -> T:  # type: ignore[type-var]
     """Run an async coroutine from a sync context.
 
     If no event loop is running, uses ``asyncio.run``.
