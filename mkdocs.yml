@@ -16,7 +16,7 @@ theme:
 plugins:
   - search
   - with-pdf:
-      output_path: docs/spektr.pdf
+      output_path: pdf/spektr.pdf
       cover_title: Spektr
       cover_subtitle: RAG-as-MCP-Server Documentation
 
