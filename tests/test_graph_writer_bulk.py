@@ -27,12 +27,15 @@ class TestGraphitiWriterBulk:
         mock_client = AsyncMock()
         mock_client.add_episode_bulk = AsyncMock(return_value=MagicMock())
 
-        with patch(
-            "ingestion.graph_writer.get_graphiti",
-            return_value=mock_client,
-        ), patch(
-            "ingestion.graph_writer.settings",
-        ) as mock_settings:
+        with (
+            patch(
+                "ingestion.graph_writer.get_graphiti",
+                return_value=mock_client,
+            ),
+            patch(
+                "ingestion.graph_writer.settings",
+            ) as mock_settings,
+        ):
             mock_settings.graph_episode_target_size = 1500
             writer = GraphitiWriter()
             await writer.ingest_bulk(
@@ -85,12 +88,15 @@ class TestGraphitiWriterBulk:
         )
         mock_client.add_episode = AsyncMock()
 
-        with patch(
-            "ingestion.graph_writer.get_graphiti",
-            return_value=mock_client,
-        ), patch(
-            "ingestion.graph_writer.settings",
-        ) as mock_settings:
+        with (
+            patch(
+                "ingestion.graph_writer.get_graphiti",
+                return_value=mock_client,
+            ),
+            patch(
+                "ingestion.graph_writer.settings",
+            ) as mock_settings,
+        ):
             mock_settings.graph_episode_target_size = 1500
             writer = GraphitiWriter()
             await writer.ingest_bulk(
@@ -118,12 +124,15 @@ class TestGraphitiWriterBulk:
         # Single grouped episode fails
         mock_client.add_episode = AsyncMock(side_effect=Exception("single failed"))
 
-        with patch(
-            "ingestion.graph_writer.get_graphiti",
-            return_value=mock_client,
-        ), patch(
-            "ingestion.graph_writer.settings",
-        ) as mock_settings:
+        with (
+            patch(
+                "ingestion.graph_writer.get_graphiti",
+                return_value=mock_client,
+            ),
+            patch(
+                "ingestion.graph_writer.settings",
+            ) as mock_settings,
+        ):
             mock_settings.graph_episode_target_size = 1500
             writer = GraphitiWriter()
             # Should not raise
@@ -142,19 +151,21 @@ class TestGraphitiWriterBulk:
 
         # 10 small chunks (100 chars each) → should group into fewer episodes
         chunks = [
-            TextChunk(text=f"chunk {i} " * 10, chunk_index=i, page_number=1)
-            for i in range(10)
+            TextChunk(text=f"chunk {i} " * 10, chunk_index=i, page_number=1) for i in range(10)
         ]
 
         mock_client = AsyncMock()
         mock_client.add_episode_bulk = AsyncMock(return_value=MagicMock())
 
-        with patch(
-            "ingestion.graph_writer.get_graphiti",
-            return_value=mock_client,
-        ), patch(
-            "ingestion.graph_writer.settings",
-        ) as mock_settings:
+        with (
+            patch(
+                "ingestion.graph_writer.get_graphiti",
+                return_value=mock_client,
+            ),
+            patch(
+                "ingestion.graph_writer.settings",
+            ) as mock_settings,
+        ):
             mock_settings.graph_episode_target_size = 1500
             writer = GraphitiWriter()
             await writer.ingest_bulk(chunks=chunks, source_key="test.pdf")

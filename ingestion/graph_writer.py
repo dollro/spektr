@@ -134,7 +134,8 @@ class GraphitiWriter:
         client = await get_graphiti()
 
         grouped = group_chunks_for_graph(
-            chunks, target_size=settings.graph_episode_target_size,
+            chunks,
+            target_size=settings.graph_episode_target_size,
         )
 
         if len(grouped) < len(chunks):
