@@ -99,6 +99,7 @@ def _build_page_tasks(
     embedder: Embedder,
     graphiti_writer: GraphitiWriter | None,
     docling_chunks: list[TextChunk] | None = None,
+    chunk_collector: list[TextChunk] | None = None,
 ) -> _PageTasks:
     """Return text and image coroutines for processing one page."""
     tasks = _PageTasks()
@@ -115,6 +116,7 @@ def _build_page_tasks(
                 embedder,
                 graphiti_writer,
                 docling_chunks=docling_chunks,
+                chunk_collector=chunk_collector,
             )
         )
     elif page.content_type == "pdf":
@@ -130,6 +132,7 @@ def _build_page_tasks(
                     embedder,
                     graphiti_writer,
                     docling_chunks=docling_chunks,
+                    chunk_collector=chunk_collector,
                 )
             )
 
@@ -182,6 +185,7 @@ async def _process_text_page(
     embedder: Embedder,
     graphiti_writer: GraphitiWriter | None,
     docling_chunks: list[TextChunk] | None = None,
+    chunk_collector: list[TextChunk] | None = None,
 ) -> None:
     """Process a text page: chunk, embed, store dense, ingest to Graphiti.
 
@@ -255,9 +259,9 @@ async def _process_text_page(
             points=dense_points,
         )
 
-    # Graphiti episode ingestion (handles entity extraction internally)
-    if graphiti_writer is not None:
-        await _ingest_to_graphiti(source_file, chunks, graphiti_writer)
+    # Collect chunks for bulk Graphiti ingestion (called after all pages)
+    if chunk_collector is not None:
+        chunk_collector.extend(chunks)
 
 
 async def _process_visual_page(
@@ -550,6 +554,7 @@ def ingest_file(content: bytes, filename: str) -> str:
         async def _process_all_pages() -> None:
             embedder = create_embedder()
             sem = asyncio.Semaphore(2)
+            all_chunks: list[TextChunk] = []
 
             async def _bounded(coro):  # type: ignore[no-untyped-def]
                 async with sem:
@@ -568,6 +573,7 @@ def ingest_file(content: bytes, filename: str) -> str:
                         embedder,
                         graphiti_writer,
                         docling_chunks=dl_chunks,
+                        chunk_collector=all_chunks if graphiti_writer else None,
                     )
                     text_tasks.extend(pt.text)
                     image_tasks.extend(pt.image)
@@ -575,6 +581,12 @@ def ingest_file(content: bytes, filename: str) -> str:
                 # Text: concurrent (lightweight, small TPM footprint)
                 if text_tasks:
                     await asyncio.gather(*[_bounded(t) for t in text_tasks])
+
+                # Bulk Graphiti ingestion after all text pages are processed
+                if graphiti_writer and all_chunks:
+                    await _ingest_to_graphiti(
+                        filename, all_chunks, graphiti_writer,
+                    )
 
                 # Images: sequential (heavy, TPM-sensitive)
                 for task in image_tasks:
