@@ -47,6 +47,7 @@ class VoyageEmbedder:
         self._client: httpx.AsyncClient | None = None
         self._semaphore: asyncio.Semaphore | None = None
         self._bound_loop: asyncio.AbstractEventLoop | None = None
+        self._tokens_used: float = 0.0
 
     def _ensure_loop_resources(self) -> None:
         """Recreate loop-bound async resources when the event loop changes."""
@@ -66,6 +67,15 @@ class VoyageEmbedder:
         """Close the underlying HTTP client."""
         if self._client is not None:
             await self._client.aclose()
+
+    @property
+    def tokens_used(self) -> float:
+        """Total estimated tokens consumed since last reset."""
+        return self._tokens_used
+
+    def reset_token_counter(self) -> None:
+        """Reset the token consumption counter to zero."""
+        self._tokens_used = 0.0
 
     async def embed_text(
         self,

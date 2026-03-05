@@ -96,6 +96,10 @@ class Embedder(Protocol):
 
     async def close(self) -> None: ...
 
+    @property
+    def tokens_used(self) -> float: ...
+    def reset_token_counter(self) -> None: ...
+
 
 def create_embedder(**kwargs: object) -> Embedder:
     """Instantiate the configured embedding provider.

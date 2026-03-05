@@ -67,6 +67,8 @@ class TestProtocolCompliance:
         mock.embed_multi_vector = AsyncMock()
         mock.embed_query_multi_vector = AsyncMock()
         mock.close = AsyncMock()
+        mock.tokens_used = 0.0
+        mock.reset_token_counter = MagicMock()
         assert isinstance(mock, Embedder)
 
 
@@ -326,6 +328,97 @@ class TestRateLimiter:
             )
 
         assert max_concurrent <= 2
+
+
+class TestEstimateTokens:
+    def test_text_token_estimation(self) -> None:
+        """Text tokens estimated as len/4."""
+        payload = {"input": [{"text": "hello world test string"}]}
+        result = JinaV4Embedder._estimate_tokens(payload)
+        assert result == len("hello world test string") / 4.0
+
+    def test_image_token_estimation_uses_tile_calculation(self) -> None:
+        """Image tokens estimated via 28x28 tile grid, not base64 length."""
+        import io
+        import os
+
+        from PIL import Image
+
+        # Use random noise so PNG can't compress it away
+        img = Image.frombytes("RGB", (400, 300), os.urandom(400 * 300 * 3))
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        b64 = base64.b64encode(buf.getvalue()).decode()
+        data_uri = f"data:image/png;base64,{b64}"
+
+        payload = {"input": [{"image": data_uri}]}
+        result = JinaV4Embedder._estimate_tokens(payload)
+        assert 1000 <= result <= 2500
+        old_estimate = len(b64) / 4.0
+        assert result < old_estimate * 0.5
+
+    def test_image_token_estimation_small_image(self) -> None:
+        """Small images still get a reasonable token count."""
+        import base64
+        import io
+
+        from PIL import Image
+
+        img = Image.new("RGB", (100, 100), color="blue")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        b64 = base64.b64encode(buf.getvalue()).decode()
+        data_uri = f"data:image/png;base64,{b64}"
+
+        payload = {"input": [{"image": data_uri}]}
+        result = JinaV4Embedder._estimate_tokens(payload)
+        assert 100 <= result <= 300
+
+    def test_mixed_payload_sums_correctly(self) -> None:
+        """Payload with both text and image sums both estimates."""
+        payload = {
+            "input": [
+                {"text": "x" * 400},
+                {"image": "data:image/png;base64," + "A" * 1000},
+            ]
+        }
+        result = JinaV4Embedder._estimate_tokens(payload)
+        assert result >= 100
+
+
+class TestTokenCounter:
+    async def test_tracks_estimated_tokens(self, embedder: JinaV4Embedder) -> None:
+        """Token counter accumulates across calls."""
+        mock_resp = _mock_response([{"embedding": [0.1] * 2048}])
+        with patch.object(
+            embedder._client,
+            "post",
+            new_callable=AsyncMock,
+            return_value=mock_resp,
+        ):
+            embedder.reset_token_counter()
+            await embedder.embed_text(["hello world"])
+            tokens_after_text = embedder.tokens_used
+
+            await embedder.embed_text(["another query"])
+            tokens_after_two = embedder.tokens_used
+
+        assert tokens_after_text > 0
+        assert tokens_after_two > tokens_after_text
+
+    async def test_reset_clears_counter(self, embedder: JinaV4Embedder) -> None:
+        """reset_token_counter zeroes the accumulator."""
+        mock_resp = _mock_response([{"embedding": [0.1] * 2048}])
+        with patch.object(
+            embedder._client,
+            "post",
+            new_callable=AsyncMock,
+            return_value=mock_resp,
+        ):
+            await embedder.embed_text(["test"])
+            embedder.reset_token_counter()
+
+        assert embedder.tokens_used == 0.0
 
 
 @pytest.mark.integration

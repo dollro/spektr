@@ -138,6 +138,7 @@ def _build_page_tasks(
                 now,
                 qdrant,
                 embedder,
+                graphiti_writer,
             )
         )
     else:
@@ -151,6 +152,7 @@ def _build_page_tasks(
                 now,
                 qdrant,
                 embedder,
+                graphiti_writer,
             )
         )
 
@@ -233,6 +235,7 @@ async def _process_visual_page(
     now: str,
     qdrant: QdrantClient,
     embedder: Embedder,
+    graphiti_writer: GraphitiWriter | None = None,
 ) -> None:
     """Process an image/PDF page: dense + multivec embedding."""
     page_key = f"{source_file}::p{page_number}"
@@ -301,6 +304,114 @@ async def _process_visual_page(
                 source_file,
                 page_number,
             )
+
+    # VLM caption -> Graphiti (when enabled)
+    if settings.vlm_generation_enabled and graphiti_writer is not None:
+        await _caption_and_ingest_visual(
+            source_file,
+            image_bytes,
+            page_number,
+            graphiti_writer,
+        )
+
+
+async def _caption_visual_page(image_bytes: bytes) -> str:
+    """Generate a text description of a visual page using VLM."""
+    import base64 as _b64
+
+    provider = settings.llm_api_type.lower()
+    _b64_str = _b64.b64encode(image_bytes).decode()
+
+    prompt = (
+        "Describe the content of this document page in detail. "
+        "Extract all entities (people, organizations, products, dates, "
+        "numbers), relationships, and key facts. Be factual and concise."
+    )
+
+    if provider == "anthropic":
+        import anthropic
+
+        client = anthropic.AsyncAnthropic(
+            api_key=settings.llm_api_key,
+            base_url=settings.llm_base_url or None,
+        )
+        resp = await client.messages.create(
+            model=settings.llm_model,
+            max_tokens=512,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": _b64_str,
+                            },
+                        },
+                        {"type": "text", "text": prompt},
+                    ],
+                }
+            ],
+        )
+        return resp.content[0].text
+    else:
+        import openai
+
+        client = openai.AsyncOpenAI(
+            api_key=settings.llm_api_key,
+            base_url=settings.llm_base_url or None,
+        )
+        resp = await client.chat.completions.create(
+            model=settings.llm_model,
+            max_tokens=512,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/png;base64,{_b64_str}"},
+                        },
+                        {"type": "text", "text": prompt},
+                    ],
+                }
+            ],
+        )
+        return resp.choices[0].message.content or ""
+
+
+async def _caption_and_ingest_visual(
+    source_file: str,
+    image_bytes: bytes,
+    page_number: int,
+    graphiti_writer: GraphitiWriter,
+) -> None:
+    """Caption a visual page and ingest the text to Graphiti."""
+    try:
+        caption = await _caption_visual_page(image_bytes)
+        if not caption or not caption.strip():
+            return
+
+        await graphiti_writer.ingest_chunk(
+            chunk_text=caption,
+            source_key=source_file,
+            page_number=page_number,
+            chunk_index=0,
+        )
+        logger.info(
+            "VLM caption ingested for %s page %d (%d chars)",
+            source_file,
+            page_number,
+            len(caption),
+        )
+    except Exception:
+        logger.exception(
+            "VLM caption/ingestion failed for %s page %d",
+            source_file,
+            page_number,
+        )
 
 
 async def _ingest_to_graphiti(
@@ -404,6 +515,16 @@ def ingest_file(content: bytes, filename: str) -> str:
                 for task in image_tasks:
                     await task
             finally:
+                if hasattr(embedder, "tokens_used"):
+                    logger.info(
+                        "Token usage for %s: %.0f estimated tokens",
+                        filename,
+                        embedder.tokens_used,
+                        extra={
+                            "file_name": filename,
+                            "estimated_tokens": embedder.tokens_used,
+                        },
+                    )
                 await embedder.close()
 
         run_async(_process_all_pages())
@@ -437,15 +558,15 @@ def _use_s3_source() -> bool:
     return settings.document_source == "s3"
 
 
-def handle_s3_delete(s3_key: str) -> None:
-    """Handle S3 object deletion: remove Qdrant points and invalidate graph.
+def handle_file_delete(s3_key: str) -> None:
+    """Handle file deletion: remove Qdrant points and invalidate graph.
 
-    Called when an s3:ObjectRemoved:* event is received from SQS.
+    Works for both S3 and local file sources.
     Deletes all Qdrant points matching the source_file and invalidates
     related Graphiti episodes.
     """
     logger.info(
-        "Handling S3 delete for %s",
+        "Handling file delete for %s",
         s3_key,
         extra={"file_name": s3_key},
     )
@@ -526,6 +647,10 @@ def handle_s3_delete(s3_key: str) -> None:
             s3_key,
             extra={"file_name": s3_key},
         )
+
+
+# Backward-compatible alias
+handle_s3_delete = handle_file_delete
 
 
 @cocoindex.flow_def(name="RagIngestion")

@@ -1,3 +1,8 @@
+from __future__ import annotations
+
+from typing import Self
+
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -77,6 +82,16 @@ class Settings(BaseSettings):
     # Observability
     log_level: str = "INFO"
     log_format: str = "json"
+
+    @model_validator(mode="after")
+    def _validate_provider_features(self) -> Self:
+        if self.embedding_provider == "voyage" and self.multivec_enabled:
+            msg = (
+                "Voyage does not support ColBERT multi-vector embeddings. "
+                "Set multivec_enabled=False or use embedding_provider=jina."
+            )
+            raise ValueError(msg)
+        return self
 
 
 settings = Settings()
