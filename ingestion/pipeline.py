@@ -136,12 +136,8 @@ def _build_page_tasks(
                 )
             )
 
-        should_embed_image = (
-            settings.image_embed_strategy == "all"
-            or (
-                settings.image_embed_strategy == "smart"
-                and page.has_visual_content
-            )
+        should_embed_image = settings.image_embed_strategy == "all" or (
+            settings.image_embed_strategy == "smart" and page.has_visual_content
         )
         if should_embed_image:
             tasks.image.append(
@@ -195,9 +191,7 @@ async def _process_text_page(
     """
     use_late_chunking = False
     if docling_chunks is not None:
-        chunks = [
-            c for c in docling_chunks if c.page_number == page_number
-        ]
+        chunks = [c for c in docling_chunks if c.page_number == page_number]
         use_late_chunking = bool(chunks)
 
     if not docling_chunks or not use_late_chunking:
@@ -210,7 +204,8 @@ async def _process_text_page(
     try:
         all_texts = [chunk.text for chunk in chunks]
         vectors = await embedder.embed_text(
-            all_texts, late_chunking=use_late_chunking,
+            all_texts,
+            late_chunking=use_late_chunking,
         )
     except Exception:
         logger.exception(
@@ -520,11 +515,7 @@ def ingest_file(content: bytes, filename: str) -> str:
     graphiti_writer: GraphitiWriter | None = None
 
     # Compute Docling chunks once for the whole document
-    dl_chunks = (
-        docling_chunk(result.docling_document)
-        if result.docling_document
-        else None
-    )
+    dl_chunks = docling_chunk(result.docling_document) if result.docling_document else None
     if dl_chunks:
         logger.info(
             "Using Docling HybridChunker: %d chunks for %s",
@@ -585,7 +576,9 @@ def ingest_file(content: bytes, filename: str) -> str:
                 # Bulk Graphiti ingestion after all text pages are processed
                 if graphiti_writer and all_chunks:
                     await _ingest_to_graphiti(
-                        filename, all_chunks, graphiti_writer,
+                        filename,
+                        all_chunks,
+                        graphiti_writer,
                     )
 
                 # Images: sequential (heavy, TPM-sensitive)

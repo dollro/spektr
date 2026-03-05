@@ -17,7 +17,7 @@ from graphiti_core import Graphiti
 from graphiti_core.cross_encoder.openai_reranker_client import (
     OpenAIRerankerClient,
 )
-from graphiti_core.embedder.client import EmbedderClient, EmbedderConfig
+from graphiti_core.embedder.client import EmbedderClient
 from graphiti_core.llm_client import LLMConfig
 from graphiti_core.llm_client.openai_generic_client import OpenAIGenericClient
 

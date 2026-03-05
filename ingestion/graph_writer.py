@@ -95,8 +95,7 @@ class GraphitiWriter:
         except Exception:
             duration_s = round(time.monotonic() - t0, 1)
             logger.warning(
-                "Bulk ingestion failed for %s after %ss, "
-                "falling back to sequential",
+                "Bulk ingestion failed for %s after %ss, falling back to sequential",
                 source_key,
                 duration_s,
                 exc_info=True,
@@ -182,9 +181,7 @@ class _LegacyGraphWriter:
         await self.driver.close()
 
     @_NEO4J_RETRY
-    async def upsert_document(
-        self, source_key: str, **properties: object
-    ) -> None:
+    async def upsert_document(self, source_key: str, **properties: object) -> None:
         """MERGE Document node on source_key, SET all props."""
         async with self.driver.session() as session:
             await session.run(

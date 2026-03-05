@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -109,13 +108,9 @@ class TestGraphitiWriterBulk:
         ]
 
         mock_client = AsyncMock()
-        mock_client.add_episode_bulk = AsyncMock(
-            side_effect=Exception("bulk failed")
-        )
+        mock_client.add_episode_bulk = AsyncMock(side_effect=Exception("bulk failed"))
         # Second sequential call fails
-        mock_client.add_episode = AsyncMock(
-            side_effect=[None, Exception("single failed")]
-        )
+        mock_client.add_episode = AsyncMock(side_effect=[None, Exception("single failed")])
 
         with patch(
             "ingestion.graph_writer.get_graphiti",
