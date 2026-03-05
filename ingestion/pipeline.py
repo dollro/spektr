@@ -596,6 +596,8 @@ def ingest_file(content: bytes, filename: str) -> str:
                         },
                     )
                 await embedder.close()
+                if graphiti_writer is not None:
+                    await graphiti_writer.close()
 
         run_async(
             _process_all_pages(),
@@ -614,9 +616,6 @@ def ingest_file(content: bytes, filename: str) -> str:
             filename,
             extra={"file_name": filename},
         )
-    finally:
-        if graphiti_writer is not None:
-            run_async(graphiti_writer.close())
 
     duration_ms = round((time.monotonic() - t0) * 1000)
     logger.info(
