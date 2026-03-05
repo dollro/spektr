@@ -82,12 +82,15 @@ flowchart TD
 4. **Process each page**:
     - **Text pages** (`_process_text_page`):
         - `semantic_chunk()` splits text into chunks
-        - Each chunk is embedded via `jina_embed_text()` (dense 2048d)
+        - Each chunk is embedded via `embed_text()` (dense 512d)
         - Dense vectors are upserted to `documents_dense` collection
         - Chunks are ingested as Graphiti episodes for entity extraction
-    - **Visual pages** (`_process_visual_page`):
-        - `jina_embed_image()` produces a dense 2048d vector -> `documents_dense`
-        - `jina_embed_image_multivec()` produces ColBERT 128d token vectors -> `documents_multivec`
+    - **Visual pages** (`_process_visual_page`, gated by `IMAGE_EMBED_STRATEGY`):
+        - Image resized to `IMAGE_EMBED_MAX_PX` (400px default) before embedding
+        - `embed_image()` produces a dense 512d vector -> `documents_dense`
+        - `embed_multi_vector()` produces ColBERT 128d token vectors -> `documents_multivec`
+    - **Text-only PDF pages** (`_store_page_thumbnail`):
+        - 200px thumbnail stored in Qdrant payload as `page_thumbnail_b64` (no embedding cost)
 5. **Cleanup**: Close Qdrant client and GraphitiWriter in `finally` block
 6. **Log**: Duration logged in milliseconds
 

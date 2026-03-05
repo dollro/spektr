@@ -11,7 +11,7 @@ import os
 from collections.abc import Iterable
 
 # Graphiti reads EMBEDDING_DIM at import time for vector index sizing
-os.environ.setdefault("EMBEDDING_DIM", str(2048))
+os.environ.setdefault("EMBEDDING_DIM", str(512))
 
 from graphiti_core import Graphiti
 from graphiti_core.cross_encoder.openai_reranker_client import (

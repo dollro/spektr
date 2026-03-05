@@ -36,7 +36,7 @@ docker compose down -v
 
 Qdrant stores two collections:
 
-- **`documents_dense`** — 2048-dimensional dense vectors (Jina v4 single-vector)
+- **`documents_dense`** — 512-dimensional dense vectors (Jina v4 Matryoshka truncation)
 - **`documents_multivec`** — 128-dimensional ColBERT multi-vectors (Jina v4)
 
 Collections are provisioned automatically by the ingestion pipeline on first run.

@@ -20,7 +20,7 @@ Spektr uses a provider-agnostic embedding abstraction. The active provider is se
 | Image embeddings | Yes | Yes |
 | ColBERT multi-vector | Yes | No |
 | Models | Single model for all | Separate text + multimodal models |
-| Default dimensions | 2048 | 1024 |
+| Default dimensions | 512 (Matryoshka, from 2048) | 1024 |
 | Text endpoint | `/v1/embeddings` | `/v1/embeddings` |
 | Image endpoint | Same | `/v1/multimodalembeddings` |
 
@@ -102,6 +102,27 @@ Token estimation:
 
 The Voyage provider uses a single `TokenBucket` + `asyncio.Semaphore` for concurrency. Configure via `*_RPM` and `*_MAX_CONCURRENT` settings.
 
+## Smart Image Embedding
+
+PDF pages are selectively image-embedded based on content analysis to avoid expensive vision model calls on text-only pages.
+
+**Strategy** (`IMAGE_EMBED_STRATEGY`):
+
+| Value | Behavior |
+|-|-|
+| `smart` (default) | Only embed pages with visual content (figures, tables, formulas) detected by Docling layout analysis |
+| `all` | Embed every PDF page as an image (original behavior, slow) |
+| `none` | Skip all image embedding |
+
+**How it works:**
+
+1. Docling runs once on the entire PDF (RT-DETR model, DocLayNet-trained) for both OCR and layout classification
+2. Pages with `TableItem`, `PictureItem`, or `FormulaItem` elements are flagged as visual
+3. Visual pages are resized to `IMAGE_EMBED_MAX_PX` (default 400px) before embedding, reducing token cost by ~75%
+4. Text-only pages store a 200px thumbnail in the Qdrant payload (`page_thumbnail_b64`) for retrieval display, at zero embedding cost
+
+**Fallback:** If Docling is unavailable, PyMuPDF heuristics detect visual content (embedded images, complex drawings, tables).
+
 ## Pipeline Execution Strategy
 
 Text and image embedding tasks use different concurrency strategies to stay within API limits:
@@ -129,7 +150,7 @@ When Graphiti is used for the knowledge graph, it requires its own embedder inte
 
 - Graph embeddings share the same rate limiters as document ingestion
 - No duplicate HTTP clients or separate API quota consumption
-- `EMBEDDING_DIM=2048` is set automatically on the Graphiti client via the adapter
+- `EMBEDDING_DIM=512` is set automatically on the Graphiti client via the adapter
 
 ## Adding a New Provider
 

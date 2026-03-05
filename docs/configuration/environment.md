@@ -21,7 +21,7 @@ Set this to choose the active provider, then configure the corresponding section
 | `JINA_API_KEY` | — | If jina | API key for Jina v4 embedding service |
 | `JINA_API_URL` | `https://api.jina.ai` | No | Base URL (change for proxy/self-hosted) |
 | `JINA_MODEL` | `jina-embeddings-v4` | No | Jina embedding model name |
-| `JINA_DENSE_DIMENSIONS` | `2048` | No | Dimensionality of dense embeddings |
+| `JINA_DENSE_DIMENSIONS` | `512` | No | Dimensionality of dense embeddings (Matryoshka: 128/256/512/1024/2048) |
 
 ## Voyage AI (when `EMBEDDING_PROVIDER=voyage`)
 
@@ -100,6 +100,13 @@ When `LLM_BASE_URL` is set, the **agent** uses an OpenAI-compatible client regar
 | `EXTRACTION_TIMEOUT` | `30` | No | Timeout in seconds for entity extraction |
 | `TOOL_TIMEOUT` | `30` | No | Timeout in seconds for MCP tool execution |
 | `MAX_RETRIES` | `3` | No | Max retry attempts for transient failures |
+
+## Image Embedding
+
+| Variable | Default | Required | Description |
+|-|-|-|-|
+| `IMAGE_EMBED_MAX_PX` | `400` | No | Max pixels on longest side before embedding (reduces token cost) |
+| `IMAGE_EMBED_STRATEGY` | `smart` | No | `smart` (Docling-gated), `all` (every page), `none` (skip images) |
 
 ## Feature Flags
 

@@ -5,7 +5,7 @@
 ## Features
 
 - **Dual retrieval** -- vector similarity (Qdrant) and temporal knowledge graph (Neo4j/Graphiti) in a single server
-- **Multimodal embeddings** -- Jina v4 produces dense 2048-d vectors for text and images, plus ColBERT 128-d multi-vectors for layout-aware visual search
+- **Multimodal embeddings** -- Jina v4 produces dense 512-d vectors for text and images (Matryoshka truncation), plus ColBERT 128-d multi-vectors for layout-aware visual search
 - **Automatic sync** -- CocoIndex pipeline watches S3 via SQS event notifications; new, updated, and deleted files are processed incrementally
 - **Four MCP search tools** -- `vector_search`, `visual_search`, `graph_search`, `hybrid_search`
 - **Bearer auth middleware** -- optional token-based protection on `tools/call` requests
@@ -63,7 +63,7 @@ See [Local Development](deployment/local-development.md) for the full setup guid
 | Language | Python 3.13 |
 | Package manager | uv |
 | Ingestion pipeline | CocoIndex |
-| Embeddings | Jina v4 API (dense 2048-d + ColBERT 128-d) |
+| Embeddings | Jina v4 API (dense 512-d + ColBERT 128-d) |
 | Vector store | Qdrant v1.13 |
 | Knowledge graph | Neo4j 5.26 + Graphiti |
 | State DB | PostgreSQL 17.2 |

@@ -27,7 +27,7 @@ flowchart LR
 | Source | `pipeline.py` | CocoIndex reads from S3 (via SQS) or local `documents/` dir |
 | Classify | `file_processor.py` | MIME-detect file type, convert to `Page` objects |
 | Chunk | `file_processor.py` | `semantic_chunk()` splits text on paragraph boundaries |
-| Embed | `embedders/jina.py` or `embedders/voyage.py` | Provider-agnostic dense (2048d) + ColBERT (128d) embeddings |
+| Embed | `embedders/jina.py` or `embedders/voyage.py` | Provider-agnostic dense (512d, Matryoshka) + ColBERT (128d) embeddings |
 | Store | `pipeline.py` | Upsert vectors to Qdrant collections |
 | Graph | `graph_writer.py` / `graphiti_client.py` | Ingest text chunks as Graphiti episodes into Neo4j |
 
@@ -35,7 +35,7 @@ flowchart LR
 
 | Category | Extensions | Processing |
 |-|-|-|
-| PDF | `.pdf` | Rasterized to PNG pages at 150 DPI, embedded as images |
+| PDF | `.pdf` | Docling layout analysis + PyMuPDF rendering at 150 DPI; visual pages image-embedded, text-only pages get thumbnails |
 | Images | `.png`, `.jpg`, `.jpeg`, `.gif`, `.bmp`, `.webp` | Embedded directly (dense + ColBERT multi-vector) |
 | Text | `.md`, `.txt`, `.csv`, `.json`, `.xml`, `.html`, `.yaml`, `.yml` | Semantic chunked, embedded as text, ingested to Graphiti |
 
@@ -48,18 +48,19 @@ flowchart TD
     Detect -->|Image| IMG["Single image Page"]
     Detect -->|Text| TXT["Single text Page"]
 
-    PDF -->|text if OCR available| SemanticChunk
-    PDF --> DenseImg["Dense embed (2048d)"]
-    PDF --> ColBERT["ColBERT embed (128d)"]
+    PDF -->|text from Docling OCR| SemanticChunk
+    PDF --> Classify{"Visual content?\n(Docling layout)"}
+    Classify -->|yes| Resize["Resize to 400px"]
+    Classify -->|no| Thumb["Store thumbnail\n(200px, no embed)"]
+    Resize --> DenseImg["Dense embed (512d)"]
     IMG --> DenseImg
-    IMG --> ColBERT
 
     TXT --> SemanticChunk["Semantic chunk\n(512 chars max)"]
-    SemanticChunk --> DenseTxt["Dense embed (2048d)"]
+    SemanticChunk --> DenseTxt["Dense embed (512d)"]
     SemanticChunk --> Graphiti["Graphiti episode\ningest"]
 
     DenseImg --> QdrantDense["documents_dense"]
-    ColBERT --> QdrantMV["documents_multivec"]
+    Thumb --> QdrantDense
     DenseTxt --> QdrantDense
     Graphiti --> Neo4jDB["Neo4j"]
 ```
@@ -68,7 +69,7 @@ flowchart TD
 
 - **All processing happens inside `ingest_file`** -- a single CocoIndex custom op that writes directly to Qdrant and Neo4j. CocoIndex handles source management and incremental state only.
 - **Text content flows to both stores** -- Qdrant for vector search, Neo4j for entity/relationship queries.
-- **Visual content (PDF pages, images) only goes to Qdrant** -- no text extraction from images in the current pipeline.
+- **Smart image embedding** -- Docling layout analysis classifies each PDF page. Only pages with figures, tables, or formulas are image-embedded (resized to 400px). Text-only pages store a lightweight thumbnail instead. This reduces embedding cost by ~90% on text-heavy PDFs.
 - **State tracked in PostgreSQL** -- CocoIndex maintains `ingestion_log` for incremental processing.
 - **Text tasks run concurrently, image tasks run sequentially** -- image embeddings consume 50-100k+ tokens each and would blow TPM limits if run in parallel. The pipeline splits tasks by type and processes them accordingly.
 - **TPM-aware rate limiting** -- a dual TokenBucket system (RPM + TPM) estimates token cost before each API call and throttles accordingly.

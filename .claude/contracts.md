@@ -9,15 +9,15 @@ These contracts define the exact interfaces between modules. Teammates MUST impl
 ### Config Module (Contract 1)
 ```python
 # config/settings.py — Settings(BaseSettings) with Jina, Qdrant, Neo4j, PostgreSQL, AWS, LLM, MCP sections
-# config/constants.py — DENSE_COLLECTION, MULTIVEC_COLLECTION, DENSE_DIM=2048, MULTIVEC_DIM=128
+# config/constants.py — DENSE_COLLECTION, MULTIVEC_COLLECTION, DENSE_DIM=512, MULTIVEC_DIM=128
 ```
 
 ### JinaV4Embedder (Contract 2)
 ```python
 # ingestion/embedder.py
 class JinaV4Embedder:
-    async def embed_text(texts, task="retrieval.passage", dimensions=2048) -> list[list[float]]
-    async def embed_text_query(query, dimensions=2048) -> list[float]
+    async def embed_text(texts, task="retrieval.passage", dimensions=512) -> list[list[float]]
+    async def embed_text_query(query, dimensions=512) -> list[float]
     async def embed_image(image_bytes, media_type="image/png") -> list[float]
     async def embed_multi_vector(image_bytes, media_type="image/png") -> list[list[float]]
     async def embed_query_multi_vector(query) -> list[list[float]]
@@ -26,9 +26,10 @@ class JinaV4Embedder:
 
 ### File Processor (Contract 3)
 ```python
-# ingestion/file_processor.py — Page, TextChunk dataclasses
+# ingestion/file_processor.py — Page (with has_visual_content), TextChunk dataclasses
 # file_to_pages(filename, content) -> list[Page]
 # semantic_chunk(text, max_chunk_size=512) -> list[TextChunk]
+# resize_image_for_embedding(image_bytes, max_px) -> bytes
 ```
 
 ### Entity Extractor (Contract 4)

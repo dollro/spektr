@@ -1,6 +1,6 @@
 DENSE_COLLECTION = "documents_dense"
 MULTIVEC_COLLECTION = "documents_multivec"
-DENSE_DIM = 2048
+DENSE_DIM = 512
 MULTIVEC_DIM = 128
 
 ENTITY_TYPES = [

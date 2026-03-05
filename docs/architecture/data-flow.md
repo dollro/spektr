@@ -41,7 +41,7 @@ sequenceDiagram
 
         loop Each chunk
             Coco->>Jina: embed_text(chunk)
-            Jina-->>Coco: dense vector (2048-d)
+            Jina-->>Coco: dense vector (512-d)
             Coco->>QD: Upsert to documents_dense
         end
 
@@ -49,14 +49,26 @@ sequenceDiagram
         Note over Gr: Graphiti extracts entities,<br/>discovers relationships,<br/>tracks temporal metadata
     end
 
-    loop Each visual page (image / PDF page)
-        Coco->>Jina: embed_image(page) → dense
-        Jina-->>Coco: dense vector (2048-d)
-        Coco->>QD: Upsert to documents_dense
+    loop Each PDF page
+        alt Visual content detected (smart gating)
+            Coco->>Jina: embed_image(resized page, 400px) → dense
+            Jina-->>Coco: dense vector (512-d)
+            Coco->>QD: Upsert to documents_dense
 
-        Coco->>Jina: embed_image_multivec(page) → ColBERT
-        Jina-->>Coco: multi-vector (N × 128-d)
-        Coco->>QD: Upsert to documents_multivec
+            opt ColBERT enabled
+                Coco->>Jina: embed_image_multivec(page) → ColBERT
+                Jina-->>Coco: multi-vector (N × 128-d)
+                Coco->>QD: Upsert to documents_multivec
+            end
+        else Text-only page
+            Coco->>QD: Store thumbnail (200px, no embedding)
+        end
+    end
+
+    loop Each standalone image
+        Coco->>Jina: embed_image(image) → dense
+        Jina-->>Coco: dense vector (512-d)
+        Coco->>QD: Upsert to documents_dense
     end
 
     Coco->>PG: Update pipeline state + ingestion log
@@ -94,7 +106,7 @@ sequenceDiagram
 
     alt vector_search
         Tool->>Jina: embed_text_query(query)
-        Jina-->>Tool: query vector (2048-d)
+        Jina-->>Tool: query vector (512-d)
         Tool->>QD: query_points(documents_dense, vector, filters)
         QD-->>Tool: scored results
     else visual_search
@@ -129,10 +141,10 @@ sequenceDiagram
 
 | Tool | Backend | Embedding | Best for |
 |-|-|-|-|
-| `vector_search` | Qdrant `documents_dense` | Dense 2048-d | General semantic search over text and images |
+| `vector_search` | Qdrant `documents_dense` | Dense 512-d | General semantic search over text and images |
 | `visual_search` | Qdrant `documents_multivec` | ColBERT 128-d | Charts, diagrams, tables, formatted content |
 | `graph_search` | Neo4j via Graphiti | None (Graphiti semantic) | Entity lookup, temporal facts, relationships |
-| `hybrid_search` | Both (parallel) | Dense 2048-d | Comprehensive retrieval combining both stores |
+| `hybrid_search` | Both (parallel) | Dense 512-d | Comprehensive retrieval combining both stores |
 
 ### Filtering and reranking
 

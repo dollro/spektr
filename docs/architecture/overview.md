@@ -39,7 +39,7 @@ graph TB
     SQS -->|push events| Pipeline
     Pipeline --> Classify --> Chunk --> Embed
     Chunk --> Extract
-    Embed -->|dense 2048-d| Qdrant
+    Embed -->|dense 512-d| Qdrant
     Embed -->|ColBERT 128-d| Qdrant
     Extract -->|episodes| Neo4j
     Pipeline -->|state| PG
@@ -58,7 +58,7 @@ graph TB
 | **AWS S3** | Document source | PDFs, images, markdown, CSV, JSON, XML, HTML, YAML |
 | **AWS SQS** | Event delivery | Receives S3 create/update/delete notifications; provides push-based trigger to pipeline |
 | **CocoIndex** | Pipeline orchestrator | Manages incremental state, source reading, and lineage tracking via PostgreSQL |
-| **Jina v4 API** | Embedding model | Single model for text and images; produces dense 2048-d single-vectors and ColBERT 128-d multi-vectors |
+| **Jina v4 API** | Embedding model | Single model for text and images; produces dense 512-d single-vectors (Matryoshka truncation) and ColBERT 128-d multi-vectors |
 | **Qdrant** | Vector store | Two collections: `documents_dense` (single-vector NN search) and `documents_multivec` (ColBERT late interaction) |
 | **Neo4j + Graphiti** | Knowledge graph | Temporal entity-relationship graph; Graphiti handles entity extraction, deduplication, and temporal metadata via its LLM pipeline |
 | **PostgreSQL** | Pipeline state | CocoIndex stores flow state and ingestion logs |
@@ -73,7 +73,7 @@ Jina v4 (`jina-embeddings-v4`) handles text and images in a unified embedding sp
 
 ### Why Qdrant with two collections?
 
-- **`documents_dense`** -- standard nearest-neighbor search over 2048-d dense vectors. Works for text chunks and image pages alike. Fast and straightforward.
+- **`documents_dense`** -- standard nearest-neighbor search over 512-d dense vectors (Matryoshka truncation from 2048-d). Works for text chunks and image pages alike. Fast and straightforward.
 - **`documents_multivec`** -- ColBERT multi-vector index with 128-d token-level vectors. Enables fine-grained matching that captures spatial layout, useful for visual content that dense single-vectors struggle with.
 
 Separating collections keeps index configurations independent and avoids mixed-mode query overhead.

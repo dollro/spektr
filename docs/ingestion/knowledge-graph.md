@@ -106,7 +106,7 @@ Graphiti's entity extraction uses `OpenAIGenericClient` (Chat Completions API), 
 
 Rather than using `OpenAIEmbedder` (which requires a separate OpenAI embeddings endpoint), the client uses `_JinaGraphitiEmbedder` — an adapter that wraps the project's own `JinaV4Embedder`. This reuses the Jina v4 API for graph vector search, keeping embeddings consistent across vector store and knowledge graph.
 
-`EMBEDDING_DIM=2048` is set via `os.environ.setdefault` at module import time to match Jina's output dimension, since Graphiti reads this at import time for vector index sizing.
+`EMBEDDING_DIM=512` is set via `os.environ.setdefault` at module import time to match Jina's output dimension (Matryoshka truncation), since Graphiti reads this at import time for vector index sizing.
 
 The adapter implements both `create()` (single or batch input, returns first vector) and `create_batch()` (returns all vectors) using Graphiti's `EmbedderClient` interface.
 

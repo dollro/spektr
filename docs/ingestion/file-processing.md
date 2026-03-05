@@ -26,6 +26,7 @@ Represents a single page extracted from a file.
 | `text` | `str` | Text content for text pages; empty for image |
 | `page_number` | `int` | 1-based page number |
 | `content_type` | `str` | `"pdf"`, `"image"`, or `"text"` |
+| `has_visual_content` | `bool` | Whether Docling detected figures, tables, or formulas (default `False`) |
 
 ### `TextChunk`
 
@@ -56,7 +57,16 @@ def file_to_pages(filename: str, content: bytes) -> list[Page]
 
 ### PDF conversion
 
-PDFs are rasterized page-by-page using `pdf2image.convert_from_bytes()` at **150 DPI** to PNG format. Each page becomes a separate `Page` with `content_type="pdf"` and 1-based page numbering.
+PDFs are processed in two stages:
+
+1. **Docling classification** — `_classify_pdf_pages_docling()` runs Docling once on the entire PDF. This extracts OCR text for scanned pages and classifies each page's layout, flagging pages with `TableItem`, `PictureItem`, or `FormulaItem` as `has_visual_content=True`.
+2. **PyMuPDF rendering** — each page is rasterized at **150 DPI** to PNG format via PyMuPDF.
+
+If Docling is unavailable, `_page_has_visual_content_pymupdf()` uses heuristics (embedded images, drawings, table detection) as a fallback.
+
+### `resize_image_for_embedding()`
+
+Resizes an image so its longest side is at most `max_px` pixels, using Lanczos resampling. Returns PNG bytes. Used to reduce token cost before embedding (400px default) and for thumbnails (200px).
 
 ## `semantic_chunk()`
 
