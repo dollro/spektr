@@ -13,6 +13,13 @@ theme:
     - navigation.expand
     - content.code.copy
 
+plugins:
+  - search
+  - with-pdf:
+      output_path: docs/spektr.pdf
+      cover_title: Spektr
+      cover_subtitle: RAG-as-MCP-Server Documentation
+
 markdown_extensions:
   - admonition
   - pymdownx.details
