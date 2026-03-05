@@ -127,7 +127,7 @@ class TestQdrantPayloadContextualizedText:
 
 class TestGraphitiContextualizedText:
     async def test_graphiti_receives_contextualized_text(self) -> None:
-        """Graphiti ingestion uses contextualized_text."""
+        """Graphiti bulk ingestion receives chunks with contextualized_text."""
         from ingestion.pipeline import _ingest_to_graphiti
 
         chunks = [
@@ -142,11 +142,12 @@ class TestGraphitiContextualizedText:
         mock_writer = AsyncMock()
         await _ingest_to_graphiti("doc.pdf", chunks, mock_writer)
 
-        call_kwargs = mock_writer.ingest_chunk.call_args.kwargs
-        assert call_kwargs["chunk_text"] == "Heading > Sub\nRaw text"
+        mock_writer.ingest_bulk.assert_called_once()
+        call_kwargs = mock_writer.ingest_bulk.call_args.kwargs
+        assert call_kwargs["chunks"][0].contextualized_text == "Heading > Sub\nRaw text"
 
     async def test_graphiti_falls_back_to_raw_text(self) -> None:
-        """Without contextualized_text, uses raw text."""
+        """Without contextualized_text, chunk has None contextualized_text."""
         from ingestion.pipeline import _ingest_to_graphiti
 
         chunks = [
@@ -160,5 +161,7 @@ class TestGraphitiContextualizedText:
         mock_writer = AsyncMock()
         await _ingest_to_graphiti("doc.pdf", chunks, mock_writer)
 
-        call_kwargs = mock_writer.ingest_chunk.call_args.kwargs
-        assert call_kwargs["chunk_text"] == "Raw text only"
+        mock_writer.ingest_bulk.assert_called_once()
+        call_kwargs = mock_writer.ingest_bulk.call_args.kwargs
+        assert call_kwargs["chunks"][0].text == "Raw text only"
+        assert call_kwargs["chunks"][0].contextualized_text is None

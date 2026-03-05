@@ -471,28 +471,17 @@ async def _ingest_to_graphiti(
     chunks: list[TextChunk],
     graphiti_writer: GraphitiWriter,
 ) -> None:
-    """Ingest chunks as Graphiti episodes (entity extraction is automatic).
+    """Ingest chunks as Graphiti episodes using bulk API.
 
-    Uses contextualized_text (heading-prefixed) when available for better
-    entity resolution. Falls back to raw text.
+    Uses add_episode_bulk for speed. GraphitiWriter.ingest_bulk
+    handles fallback to sequential on failure.
     """
     ref_time = datetime.now(tz=UTC)
-    for chunk in chunks:
-        chunk_text = chunk.contextualized_text or chunk.text
-        try:
-            await graphiti_writer.ingest_chunk(
-                chunk_text=chunk_text,
-                source_key=source_file,
-                page_number=chunk.page_number,
-                chunk_index=chunk.chunk_index,
-                reference_time=ref_time,
-            )
-        except Exception:
-            logger.exception(
-                "Graphiti ingestion failed for %s chunk %d",
-                source_file,
-                chunk.chunk_index,
-            )
+    await graphiti_writer.ingest_bulk(
+        chunks=chunks,
+        source_key=source_file,
+        reference_time=ref_time,
+    )
 
 
 @cocoindex.op.function()
@@ -555,7 +544,7 @@ def ingest_file(content: bytes, filename: str) -> str:
 
     try:
         has_text = any(p.text.strip() for p in pages)
-        if has_text:
+        if has_text and settings.graph_enabled:
             graphiti_writer = GraphitiWriter()
 
         async def _process_all_pages() -> None:
@@ -603,7 +592,17 @@ def ingest_file(content: bytes, filename: str) -> str:
                     )
                 await embedder.close()
 
-        run_async(_process_all_pages())
+        run_async(
+            _process_all_pages(),
+            timeout=settings.pipeline_timeout,
+        )
+    except TimeoutError:
+        logger.error(
+            "File processing timed out after %ds: %s",
+            settings.pipeline_timeout,
+            filename,
+            extra={"file_name": filename},
+        )
     except Exception:
         logger.exception(
             "Pipeline failed for file: %s",
