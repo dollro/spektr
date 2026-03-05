@@ -66,6 +66,7 @@ async def get_graphiti() -> Graphiti:
     """Return (and lazily initialise) the shared Graphiti client."""
     global _client, _graphiti_embedder  # noqa: PLW0603
     if _client is None:
+        os.environ.setdefault("SEMAPHORE_LIMIT", str(settings.graph_semaphore_limit))
         llm_config = LLMConfig(
             api_key=settings.llm_api_key,
             model=settings.llm_model,

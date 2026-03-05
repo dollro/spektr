@@ -71,6 +71,8 @@ class Settings(BaseSettings):
     mcp_api_key: str = ""
 
     # Resilience
+    pipeline_timeout: int = 3600  # per-file timeout in seconds (default 1h)
+    graphiti_concurrency: int = 3  # max concurrent Graphiti episode ingestions
     jina_max_concurrent: int = 5
     extraction_timeout: int = 30
     tool_timeout: int = 30
@@ -78,11 +80,20 @@ class Settings(BaseSettings):
     rerank_enabled: bool = False
     vlm_generation_enabled: bool = False
     multivec_enabled: bool = False
+    graph_enabled: bool = True
+    graph_semaphore_limit: int = 10  # SEMAPHORE_LIMIT for Graphiti LLM concurrency
     image_embed_strategy: str = "smart"  # "smart" | "all"
 
     # Observability
     log_level: str = "INFO"
     log_format: str = "json"
+
+    @property
+    def dense_dimensions(self) -> int:
+        """Return dense vector dimensions for the active embedding provider."""
+        if self.embedding_provider == "voyage":
+            return self.voyage_dense_dimensions
+        return self.jina_dense_dimensions
 
     @model_validator(mode="after")
     def _validate_provider_features(self) -> Self:
