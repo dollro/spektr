@@ -122,12 +122,22 @@ class JinaV4Embedder:
         texts: list[str],
         task: str = "passage",
         dimensions: int | None = None,
+        late_chunking: bool = False,
     ) -> list[list[float]]:
         """Batch text -> list of dense vectors.
 
         Automatically splits large lists into sub-batches of
         ``settings.jina_batch_size`` to stay within API token limits.
+
+        When *late_chunking* is ``True`` the entire list is sent as a
+        single API call (no batching) so the model can apply
+        contextualised late-chunking across all texts.
         """
+        if late_chunking:
+            return await self._embed_text_batch(
+                texts, task, dimensions, late_chunking=True,
+            )
+
         batch_size = settings.jina_batch_size
         if len(texts) <= batch_size:
             return await self._embed_text_batch(texts, task, dimensions)
@@ -143,11 +153,12 @@ class JinaV4Embedder:
         texts: list[str],
         task: str = "passage",
         dimensions: int | None = None,
+        late_chunking: bool = False,
     ) -> list[list[float]]:
         """Send a single embed_text API call for one batch."""
         jina_task = _TASK_MAP.get(task, task)
         dims = dimensions if dimensions is not None else self._dimensions
-        payload = {
+        payload: dict[str, object] = {
             "model": self._model,
             "task": jina_task,
             "dimensions": dims,
@@ -155,6 +166,8 @@ class JinaV4Embedder:
             "embedding_type": "float",
             "input": [{"text": t} for t in texts],
         }
+        if late_chunking:
+            payload["late_chunking"] = True
         data = await self._request(payload)
         return [item["embedding"] for item in data["data"]]
 
