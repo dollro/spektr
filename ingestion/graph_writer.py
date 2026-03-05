@@ -137,6 +137,15 @@ class GraphitiWriter:
             chunks, target_size=settings.graph_episode_target_size,
         )
 
+        if len(grouped) < len(chunks):
+            logger.info(
+                "Grouped %d chunks into %d episodes for %s (target: %d chars)",
+                len(chunks),
+                len(grouped),
+                source_key,
+                settings.graph_episode_target_size,
+            )
+
         episodes = [
             RawEpisode(
                 name=f"{source_key}:p{chunk.page_number}:c{chunk.chunk_index}",
