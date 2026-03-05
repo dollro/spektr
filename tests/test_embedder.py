@@ -233,6 +233,76 @@ class TestErrorHandling:
             embedder._request_with_retry.retry.wait = original_wait  # type: ignore[attr-defined]
 
 
+DENSE_DIM = 2048
+
+
+class TestLateChunking:
+    async def test_payload_includes_late_chunking(
+        self, embedder: JinaV4Embedder,
+    ) -> None:
+        """When late_chunking=True, payload has 'late_chunking': True."""
+        mock_resp = _mock_response([
+            {"embedding": [0.1] * DENSE_DIM},
+            {"embedding": [0.2] * DENSE_DIM},
+        ])
+        with patch.object(
+            embedder._client,
+            "post",
+            new_callable=AsyncMock,
+            return_value=mock_resp,
+        ) as mock_post:
+            await embedder.embed_text(
+                ["chunk 1", "chunk 2"], late_chunking=True,
+            )
+
+        payload = mock_post.call_args.kwargs["json"]
+        assert payload["late_chunking"] is True
+
+    async def test_no_late_chunking_by_default(
+        self, embedder: JinaV4Embedder,
+    ) -> None:
+        """Default embed_text does NOT include late_chunking."""
+        mock_resp = _mock_response([{"embedding": [0.1] * DENSE_DIM}])
+        with patch.object(
+            embedder._client,
+            "post",
+            new_callable=AsyncMock,
+            return_value=mock_resp,
+        ) as mock_post:
+            await embedder.embed_text(["hello"])
+
+        payload = mock_post.call_args.kwargs["json"]
+        assert "late_chunking" not in payload
+
+    async def test_single_batch_when_late_chunking(
+        self, embedder: JinaV4Embedder,
+    ) -> None:
+        """late_chunking=True sends all texts in one API call."""
+        n_texts = 50
+        mock_resp = _mock_response(
+            [{"embedding": [0.1] * DENSE_DIM}] * n_texts,
+        )
+        with patch.object(
+            embedder._client,
+            "post",
+            new_callable=AsyncMock,
+            return_value=mock_resp,
+        ) as mock_post:
+            with patch("ingestion.embedders.jina.settings") as mock_s:
+                mock_s.jina_batch_size = 10
+                mock_s.jina_api_url = "https://api.jina.ai"
+                mock_s.jina_model = "jina-embeddings-v4"
+                mock_s.jina_dense_dimensions = DENSE_DIM
+                await embedder.embed_text(
+                    [f"chunk {i}" for i in range(n_texts)],
+                    late_chunking=True,
+                )
+
+        assert mock_post.call_count == 1
+        payload = mock_post.call_args.kwargs["json"]
+        assert len(payload["input"]) == n_texts
+
+
 def _fast_limiters(embedder: JinaV4Embedder) -> None:
     """Replace both rate limiters with fast variants for tests."""
     # RPM: burst=2, refill 2 tokens/sec → ~0.5s wait for 3rd request
