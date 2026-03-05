@@ -31,6 +31,7 @@ from ingestion.file_processor import (
 from ingestion.graph_writer import GraphitiWriter
 from ingestion.neo4j_setup import create_neo4j_schema, get_driver
 from ingestion.qdrant_setup import ensure_collections
+from ingestion.target_connector import RagTarget
 
 logger = get_logger(__name__)
 
@@ -637,102 +638,6 @@ def _use_s3_source() -> bool:
     return settings.document_source == "s3"
 
 
-def handle_file_delete(source_key: str) -> None:
-    """Handle file deletion: remove Qdrant points and invalidate graph.
-
-    Works for both S3 and local file sources.
-    Deletes all Qdrant points matching the source_file and invalidates
-    related Graphiti episodes.
-    """
-    logger.info(
-        "Handling file delete for %s",
-        source_key,
-        extra={"file_name": source_key},
-    )
-    qdrant = _get_qdrant_client()
-
-    try:
-        # Delete dense collection points by source_file
-        qdrant.delete(
-            collection_name=DENSE_COLLECTION,
-            points_selector=models.FilterSelector(
-                filter=models.Filter(
-                    must=[
-                        models.FieldCondition(
-                            key="source_file",
-                            match=models.MatchValue(value=source_key),
-                        ),
-                    ],
-                ),
-            ),
-        )
-        # Delete multivec collection points by source_file
-        if settings.multivec_enabled:
-            qdrant.delete(
-                collection_name=MULTIVEC_COLLECTION,
-                points_selector=models.FilterSelector(
-                    filter=models.Filter(
-                        must=[
-                            models.FieldCondition(
-                                key="source_file",
-                                match=models.MatchValue(value=source_key),
-                            ),
-                        ],
-                    ),
-                ),
-            )
-        logger.info(
-            "Deleted Qdrant points for %s",
-            source_key,
-            extra={"file_name": source_key},
-        )
-    except Exception:
-        logger.exception(
-            "Failed to delete Qdrant points for %s",
-            source_key,
-            extra={"file_name": source_key},
-        )
-
-    # Invalidate Graphiti episodes by source_description
-    # Graphiti doesn't expose bulk invalidation by source, so we
-    # search for matching episodes and mark them individually.
-    try:
-
-        async def _invalidate_graph() -> None:
-            from ingestion.graphiti_client import (
-                close_graphiti,
-                get_graphiti,
-            )
-
-            client = await get_graphiti()
-            edges = await client.search(source_key)
-            invalidated = 0
-            for edge in edges:
-                if edge.source_description == source_key:
-                    edge.expired_at = datetime.now(tz=UTC)
-                    await edge.save(client.driver)
-                    invalidated += 1
-            logger.info(
-                "Invalidated %d Graphiti edges for %s",
-                invalidated,
-                source_key,
-                extra={"file_name": source_key},
-            )
-            await close_graphiti()
-
-        run_async(_invalidate_graph())
-    except Exception:
-        logger.exception(
-            "Failed to invalidate Graphiti data for %s",
-            source_key,
-            extra={"file_name": source_key},
-        )
-
-
-# Backward-compatible alias
-handle_s3_delete = handle_file_delete
-
-
 @cocoindex.flow_def(name="RagIngestion")
 def rag_ingestion_flow(
     flow_builder: cocoindex.FlowBuilder,
@@ -778,8 +683,8 @@ def rag_ingestion_flow(
         )
 
     collector.export(
-        "ingestion_log",
-        cocoindex.targets.Postgres(),
+        "rag_target",
+        RagTarget(qdrant_url=settings.qdrant_url),
         primary_key_fields=["filename"],
     )
 
