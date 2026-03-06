@@ -86,6 +86,30 @@ async def _remove_graphiti_episodes(source_key: str) -> None:
     await close_graphiti()
 
 
+async def _remove_gliner_entities(source_key: str) -> None:
+    """Remove GLiNER entities and their relationships for a source file."""
+    from ingestion.neo4j_setup import get_driver
+
+    driver = get_driver()
+    try:
+        async with driver.session() as session:
+            result = await session.run(
+                "MATCH (e:Entity {source: $source}) "
+                "DETACH DELETE e RETURN count(e) AS n",
+                source=source_key,
+            )
+            record = await result.single()
+            removed = record["n"] if record else 0
+        logger.info(
+            "Removed %d GLiNER entities for %s",
+            removed,
+            source_key,
+            extra={"file_name": source_key, "entity_count": removed},
+        )
+    finally:
+        await driver.close()
+
+
 def _handle_delete(source_key: str) -> None:
     """Delete Qdrant points and Graphiti episodes for a source file."""
     logger.info(
@@ -112,10 +136,13 @@ def _handle_delete(source_key: str) -> None:
     if not settings.graph_enabled:
         return
     try:
-        run_async(_remove_graphiti_episodes(source_key))
+        if settings.graph_engine == "gliner":
+            run_async(_remove_gliner_entities(source_key))
+        else:
+            run_async(_remove_graphiti_episodes(source_key))
     except Exception:
         logger.exception(
-            "Failed to remove Graphiti data for %s",
+            "Failed to remove graph data for %s",
             source_key,
             extra={"file_name": source_key},
         )

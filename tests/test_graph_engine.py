@@ -148,9 +148,15 @@ class TestGLiNEREngineIngest:
         """GLiNEREngine.ingest extracts entities + relations and writes to Neo4j."""
         from ingestion.graph_engine import GLiNEREngine
 
+        long_text = (
+            "Tim Cook works for Apple Inc. as the CEO. "
+            "He has been leading the company since 2011 when Steve Jobs stepped down. "
+            "Under his leadership Apple has grown to become one of the most valuable "
+            "companies in the world with products like iPhone and MacBook."
+        )
         chunks = [
             TextChunk(
-                text="Tim Cook works for Apple Inc.",
+                text=long_text,
                 chunk_index=0,
                 page_number=1,
             ),
@@ -210,7 +216,13 @@ class TestGLiNEREngineIngest:
         """Entity names are normalized (stripped, title-cased) before MERGE."""
         from ingestion.graph_engine import GLiNEREngine
 
-        chunks = [TextChunk(text="test", chunk_index=0, page_number=1)]
+        long_text = (
+            "John Doe is a senior engineer at the company. "
+            "He specializes in distributed systems and has contributed to many "
+            "open source projects over the past decade of his career in technology "
+            "and software engineering across multiple organizations worldwide."
+        )
+        chunks = [TextChunk(text=long_text, chunk_index=0, page_number=1)]
 
         mock_extractor = MagicMock()
         mock_extractor.extract.return_value = {

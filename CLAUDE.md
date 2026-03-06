@@ -1,7 +1,5 @@
 # CLAUDE.md — Spektr
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
 ## Project Overview
 
 **Spektr** — a RAG-as-MCP-Server pipeline. Ingests documents (PDF, images) from local filesystem or S3, builds vector embeddings (Qdrant) and a knowledge graph (Neo4j), then exposes search tools via an MCP server for AI agents.
@@ -50,7 +48,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 │       ├── reranker.py
 │       └── vlm_generator.py
 ├── tests/                  # Test suite
-├── docs/                   # MkDocs documentation
+├── docs/                   # MkDocs documentation (architecture, guides, API)
 ├── plans/                  # Disposable brainstorming & implementation plans (NOT source of truth)
 ├── scripts/                # Utility scripts
 ├── docker-compose.yml      # Qdrant + Neo4j + PostgreSQL
@@ -59,24 +57,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 └── mkdocs.yml              # Documentation site config
 ```
 
+**Start here:** When exploring an unfamiliar area, read the relevant `docs/` page first for the "why", then explore the code for the "how".
+
 ## Quick Start
 
-### Infrastructure (Docker)
-
 ```bash
+cp .env.example .env                  # Configure environment (gitignored)
 docker compose up -d                  # Start Qdrant, Neo4j, PostgreSQL
-docker compose down                   # Stop services
-```
-
-### Python (local venv via uv)
-
-```bash
 uv sync                               # Install dependencies
 uv run python -m ingestion.pipeline   # Run ingestion pipeline
 uv run python -m server.mcp_server    # Start MCP server
 ```
-
-### Testing and linting
 
 ```bash
 uv run pytest                          # Unit tests (excludes integration)
@@ -84,44 +75,27 @@ uv run pytest -m integration           # Integration tests (needs Docker service
 uv run ruff check .                    # Lint
 uv run ruff format .                   # Format
 uv run mypy .                          # Type check
-```
-
-### Documentation
-
-```bash
 make docs-serve                        # Serve MkDocs locally
 make docs-build                        # Build docs
 ```
 
 **Access Points:** Qdrant http://localhost:6333 | Neo4j http://localhost:7474 | MCP http://localhost:8080
 
-## Code Style
+## Code Standards
 
-- **Python:** Ruff (95 chars), mypy strict — configured in `pyproject.toml`
-- **Target:** Python 3.13
-- **Package manager:** uv (always use `uv`, never pip directly)
-- **Dependencies:** `pyproject.toml` with `[dependency-groups]` dev
+**Style & tooling:**
+- Python 3.13, Ruff (95 chars), mypy strict — configured in `pyproject.toml`
+- Package manager: uv (always use `uv`, never pip directly)
+- Dependencies: `pyproject.toml` with `[dependency-groups]` dev
 
-## Code Organization Rules
+**Organization:**
+- Max file size: 600 lines. Max function: 60 lines. Max class: 100 lines.
+- Single responsibility: each module/file does ONE thing well
+- Prefer composition: break complex logic into small, composable functions
 
-- **Max file size**: Keep files under 600 lines. Refactor into modules if exceeded.
-- **Max function length**: 60 lines. Extract helpers.
-- **Max class length**: 100 lines. Single concept per class.
-- **Single responsibility**: Each module/file should do ONE thing well.
-- **Prefer composition**: Break complex logic into small, composable functions.
+**Principles:** KISS, YAGNI, fail fast. Each function/class has one clear purpose.
 
-## Core Principles
-
-- **KISS**: Choose straightforward solutions over complex ones
-- **YAGNI**: Implement features only when needed
-- **Single Responsibility**: Each function/class has one clear purpose
-- **Fail Fast**: Raise exceptions immediately when issues occur
-
-## Environment
-
-- **Env file:** `.env` (gitignored), copy from `.env.example`
-- **Python deps:** `pyproject.toml` with dev group
-- **Config:** `config/settings.py` — Pydantic Settings, reads from `.env`
+**Security:** Never commit secrets (use env vars). Validate all user input. Use parameterized queries.
 
 ## Git Workflow
 
@@ -147,30 +121,3 @@ All plan files go into `./plans/` in branch-specific subdirectories. The subdire
 Example: on branch `chore/pydantic` → plans go in `./plans/chore-pydantic/`
 
 Use the `/branch` skill to create a new branch — it automatically creates the corresponding plan directory.
-
-
-## Security
-
-- Never commit secrets → use environment variables
-- Validate all user input
-- Use parameterized queries
-
-## Key Files
-
-| File | Purpose |
-|-|-|
-| `pyproject.toml` | Python deps + tool config (single source of truth) |
-| `config/settings.py` | All runtime settings (Pydantic Settings from `.env`) |
-| `config/constants.py` | Shared constants (collection names, dimensions, entity types) |
-| `docker-compose.yml` | Infrastructure services (Qdrant, Neo4j, PostgreSQL) |
-| `.env.example` | Environment variable template with documentation |
-| `mkdocs.yml` | Documentation site config |
-| `docs/` | Full technical documentation (MkDocs Material) |
-
-## Detailed Documentation
-
-Architecture docs live in `docs/`. Run `make docs-serve` to browse locally.
-
-- Ingestion pipeline, file processing, embeddings, knowledge graph
-- MCP server, search tools, agent integration
-- Configuration and infrastructure setup

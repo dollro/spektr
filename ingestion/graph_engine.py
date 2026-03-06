@@ -89,13 +89,36 @@ class GLiNEREngine:
             .relations(list(relation_map.keys()))
         )
 
+    @staticmethod
+    def _merge_chunks(chunks: list[TextChunk], min_chars: int = 200) -> list[str]:
+        """Merge small consecutive chunks into page-level texts.
+
+        GLiNER needs substantial context; tiny fragments yield no entities.
+        Groups by page_number, concatenates, then splits any text exceeding
+        max_chars on page boundaries.
+        """
+        from itertools import groupby
+
+        pages: dict[int, str] = {}
+        for chunk in chunks:
+            text = (chunk.contextualized_text or chunk.text).strip()
+            if not text:
+                continue
+            page = chunk.page_number or 0
+            pages[page] = f"{pages.get(page, '')} {text}".strip()
+
+        return [text for text in pages.values() if len(text) >= min_chars]
+
     async def ingest(self, chunks: list[TextChunk], source_key: str) -> None:
         if not chunks:
             return
 
+        merged_texts = self._merge_chunks(chunks)
+        if not merged_texts:
+            return
+
         async with self._driver.session() as session:
-            for chunk in chunks:
-                text = chunk.contextualized_text or chunk.text
+            for text in merged_texts:
                 result = self._extractor.extract(text, self._schema)
 
                 entities = result.get("entities", {})
