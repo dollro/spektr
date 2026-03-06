@@ -150,7 +150,49 @@ class GLiNEREngine:
         )
 
     async def search(self, query: str, limit: int = 10) -> list[GraphFact]:
-        raise NotImplementedError("GLiNEREngine.search not yet implemented")
+        """Search Neo4j via full-text index, traverse relationships."""
+        cypher = (
+            "CALL db.index.fulltext.queryNodes('entity_fulltext', $query) "
+            "YIELD node AS e, score "
+            "WITH e, score ORDER BY score DESC LIMIT $limit "
+            "OPTIONAL MATCH (e)-[r]->(t:Entity) "
+            "RETURN e.name AS entity_name, e.type AS entity_type, "
+            "type(r) AS rel_type, t.name AS target_name, "
+            "r.confidence AS confidence, score"
+        )
+        results: list[GraphFact] = []
+        seen: set[str] = set()
+
+        async with self._driver.session() as session:
+            result = await session.run(cypher, query=query, limit=limit)
+            records = await result.data()
+
+        for rec in records:
+            entity = rec["entity_name"]
+            rel = rec.get("rel_type")
+            target = rec.get("target_name")
+
+            if rel and target:
+                fact_str = f"{entity} {rel.lower().replace('_', ' ')} {target}"
+                entities = [entity, target]
+            else:
+                fact_str = f"{entity} ({rec['entity_type']})"
+                entities = [entity]
+
+            if fact_str in seen:
+                continue
+            seen.add(fact_str)
+
+            results.append(
+                GraphFact(
+                    fact=fact_str,
+                    entities=entities,
+                    relation_type=rel,
+                    confidence=rec.get("confidence"),
+                )
+            )
+
+        return results[:limit]
 
     async def close(self) -> None:
         await self._driver.close()

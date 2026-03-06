@@ -222,3 +222,139 @@ class TestGLiNEREngineIngest:
         # Check that the MERGE call used normalized name "John Doe"
         calls = mock_session.run.call_args_list
         assert any("John Doe" in str(c) for c in calls)
+
+
+class TestGLiNEREngineSearch:
+    @pytest.mark.asyncio
+    async def test_search_returns_graph_facts(self) -> None:
+        """GLiNEREngine.search queries Neo4j and returns GraphFacts."""
+        from ingestion.graph_engine import GLiNEREngine
+
+        mock_result = AsyncMock()
+        mock_result.data = AsyncMock(
+            return_value=[
+                {
+                    "entity_name": "Apple Inc.",
+                    "entity_type": "ORGANIZATION",
+                    "rel_type": "USES_TECHNOLOGY",
+                    "target_name": "Python",
+                    "confidence": 0.95,
+                    "score": 2.5,
+                },
+            ]
+        )
+
+        mock_session = AsyncMock()
+        mock_session.run = AsyncMock(return_value=mock_result)
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+
+        mock_driver = MagicMock()
+        mock_driver.session.return_value = mock_session
+
+        engine = GLiNEREngine.__new__(GLiNEREngine)
+        engine._driver = mock_driver
+        engine._extractor = MagicMock()
+        engine._schema = MagicMock()
+        engine._entity_map = {}
+        engine._relation_map = {}
+
+        results = await engine.search("Apple", limit=5)
+
+        assert len(results) == 1
+        assert results[0].fact == "Apple Inc. uses technology Python"
+        assert results[0].entities == ["Apple Inc.", "Python"]
+        assert results[0].relation_type == "USES_TECHNOLOGY"
+        assert results[0].confidence == 0.95
+
+        # Verify Cypher uses fulltext index
+        query_str = mock_session.run.call_args.args[0]
+        assert "entity_fulltext" in query_str
+
+    @pytest.mark.asyncio
+    async def test_search_entity_without_relations(self) -> None:
+        """Search returns entity-only facts when no relationships exist."""
+        from ingestion.graph_engine import GLiNEREngine
+
+        mock_result = AsyncMock()
+        mock_result.data = AsyncMock(
+            return_value=[
+                {
+                    "entity_name": "Google",
+                    "entity_type": "ORGANIZATION",
+                    "rel_type": None,
+                    "target_name": None,
+                    "confidence": None,
+                    "score": 1.8,
+                },
+            ]
+        )
+
+        mock_session = AsyncMock()
+        mock_session.run = AsyncMock(return_value=mock_result)
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+
+        mock_driver = MagicMock()
+        mock_driver.session.return_value = mock_session
+
+        engine = GLiNEREngine.__new__(GLiNEREngine)
+        engine._driver = mock_driver
+        engine._extractor = MagicMock()
+        engine._schema = MagicMock()
+        engine._entity_map = {}
+        engine._relation_map = {}
+
+        results = await engine.search("Google", limit=5)
+
+        assert len(results) == 1
+        assert results[0].fact == "Google (ORGANIZATION)"
+        assert results[0].entities == ["Google"]
+        assert results[0].relation_type is None
+
+    @pytest.mark.asyncio
+    async def test_search_deduplicates_facts(self) -> None:
+        """Search deduplicates identical facts from multiple records."""
+        from ingestion.graph_engine import GLiNEREngine
+
+        mock_result = AsyncMock()
+        mock_result.data = AsyncMock(
+            return_value=[
+                {
+                    "entity_name": "Apple",
+                    "entity_type": "ORGANIZATION",
+                    "rel_type": "PRODUCES",
+                    "target_name": "iPhone",
+                    "confidence": 1.0,
+                    "score": 3.0,
+                },
+                {
+                    "entity_name": "Apple",
+                    "entity_type": "ORGANIZATION",
+                    "rel_type": "PRODUCES",
+                    "target_name": "iPhone",
+                    "confidence": 1.0,
+                    "score": 2.5,
+                },
+            ]
+        )
+
+        mock_session = AsyncMock()
+        mock_session.run = AsyncMock(return_value=mock_result)
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+
+        mock_driver = MagicMock()
+        mock_driver.session.return_value = mock_session
+
+        engine = GLiNEREngine.__new__(GLiNEREngine)
+        engine._driver = mock_driver
+        engine._extractor = MagicMock()
+        engine._schema = MagicMock()
+        engine._entity_map = {}
+        engine._relation_map = {}
+
+        results = await engine.search("Apple", limit=5)
+
+        # Should deduplicate to 1 result
+        assert len(results) == 1
