@@ -115,16 +115,42 @@ The `gliner2` package is lazy-imported only when `GRAPH_ENGINE=gliner`, so Graph
 - **NER quality:** 0.59 F1 on CrossNER (matches GPT-4o zero-shot)
 - **Inference:** ~130ms per chunk on CPU
 
+### Schema
+
+Entity and relationship types are defined in `config/constants.py` as dicts with natural language descriptions that guide GLiNER2's extraction accuracy:
+
+```python
+ENTITY_TYPES = {
+    "person": "A named individual, author, developer, ...",
+    "technology": "A programming language, framework, library, tool, ...",
+    ...
+}
+RELATIONSHIP_TYPES = {
+    "created_by": "X was created, authored, or developed by Y",
+    "uses": "X uses, depends on, or integrates Y",
+    ...
+}
+```
+
+These descriptions are passed directly to `GLiNER2.create_schema().entities()` and `.relations()`, which accept `dict[str, str]` for description-enhanced extraction.
+
 ### Ingestion
 
-For each chunk in a single Neo4j session:
+For each merged page text in a single Neo4j session:
 
 1. `extractor.extract(text, schema)` returns entities and relations
-2. Entities are upserted via `MERGE` on `(name, type)` with normalized names (`.strip().title()`)
-3. Entity `description` is set to the first 500 chars of source text (used by full-text search)
-4. Relationships are upserted via `apoc.merge.relationship` with `confidence` and `source` properties
+2. Entities are upserted via `MERGE` on `name` only (not type), with normalized names (`.strip().title()`)
+3. Entity `types` is stored as an array — multiple types accumulate if the same entity is extracted with different types across pages
+4. Entity `description` is set to the first 500 chars of source text (used by full-text search)
+5. Relationships are upserted via `apoc.merge.relationship` with `confidence` and `source` properties
 
-The schema maps `config.constants.ENTITY_TYPES` and `RELATIONSHIP_TYPES` to lowercase for GLiNER2 input, then maps results back to the original casing.
+### Post-Processing
+
+Before writing to Neo4j, extracted data is filtered:
+
+- **Self-referential relationships** (entity → itself) are skipped
+- **Short entity names** (< 2 chars) are discarded
+- **Stopword entities** (common English words like "the", "is", "copy") are filtered out
 
 ### Search
 
@@ -141,7 +167,8 @@ The full-text index is created automatically by `neo4j_setup.py`.
 
 Reuses the existing schema from `neo4j_setup.py`:
 
-- `Entity(name, type, description)` with uniqueness constraint on `(name, type)`
+- `Entity(name, types[], description)` with uniqueness constraint on `(name)`
+- `types` is an array property — entities accumulate types across extractions
 - Typed relationship edges via APOC with `source` and `confidence` properties
 - Full-text index on `Entity.name` + `Entity.description` for search
 
@@ -149,9 +176,9 @@ Reuses the existing schema from `neo4j_setup.py`:
 
 | Aspect | Graphiti | GLiNER2 |
 |-|-|-|
-| Entity extraction | LLM-discovered types | Schema-driven from `constants.py` |
-| Relation extraction | LLM-discovered, temporal | Schema-driven, typed tuples with confidence |
-| Entity dedup | Automatic (Graphiti resolves) | MERGE on normalized `(name, type)` |
+| Entity extraction | LLM-discovered types | Schema-driven with descriptions from `constants.py` |
+| Relation extraction | LLM-discovered, temporal | Schema-driven with descriptions, post-processed |
+| Entity dedup | Automatic (Graphiti resolves) | MERGE on normalized `name`, types accumulated as array |
 | Temporal tracking | Built-in `created_at`/`expired_at` | `first_seen`/`last_seen` only |
 | Dependencies | LLM API key, network | None (local model) |
 

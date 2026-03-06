@@ -14,13 +14,13 @@ logger = logging.getLogger(__name__)
 
 
 EntityType = Literal[
-    "PERSON",
-    "ORGANIZATION",
-    "PRODUCT",
-    "TECHNOLOGY",
-    "LOCATION",
-    "CONCEPT",
-    "EVENT",
+    "person",
+    "organization",
+    "technology",
+    "concept",
+    "metric",
+    "location",
+    "event",
 ]
 
 
@@ -143,10 +143,10 @@ Return JSON with this exact structure:
 }}
 
 Rules:
-- Entity types MUST be one of: PERSON, ORGANIZATION, PRODUCT, \
-TECHNOLOGY, LOCATION, CONCEPT, EVENT
-- Relationship types should be SCREAMING_SNAKE_CASE (e.g. \
-WORKS_AT, PARTNERS_WITH, USES_TECHNOLOGY, LOCATED_IN)
+- Entity types MUST be one of: person, organization, technology, \
+concept, metric, location, event
+- Relationship types should be snake_case (e.g. \
+created_by, uses, part_of, related_to, improves, measured_by, located_in, describes)
 - Normalize entity names (strip whitespace, title case)
 - Only extract clearly stated relationships, don't infer
 - Keep descriptions brief (1 sentence max)

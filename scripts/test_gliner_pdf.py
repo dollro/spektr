@@ -15,7 +15,7 @@ import time
 from gliner2 import GLiNER2
 
 from config.constants import ENTITY_TYPES, RELATIONSHIP_TYPES
-from ingestion.file_processor import TextChunk, docling_chunk, file_to_pages, semantic_chunk
+from ingestion.file_processor import docling_chunk, file_to_pages, semantic_chunk
 from ingestion.graph_engine import GLiNEREngine
 
 
@@ -43,7 +43,8 @@ def main(pdf_path: str) -> None:
 
     # 3. Merge chunks (same logic as GLiNEREngine)
     merged = GLiNEREngine._merge_chunks(chunks)
-    print(f"Merged page texts: {len(merged)} (avg {sum(len(t) for t in merged) // max(len(merged), 1)} chars)")
+    avg = sum(len(t) for t in merged) // max(len(merged), 1)
+    print(f"Merged page texts: {len(merged)} (avg {avg} chars)")
 
     # 4. Load GLiNER2
     print("\nLoading GLiNER2 model...")
@@ -51,13 +52,10 @@ def main(pdf_path: str) -> None:
     extractor = GLiNER2.from_pretrained("fastino/gliner2-base-v1")
     print(f"Model loaded in {time.monotonic() - t0:.1f}s")
 
-    entity_map = {t.lower(): t for t in ENTITY_TYPES}
-    relation_map = {t.lower(): t for t in RELATIONSHIP_TYPES}
-
     schema = (
         extractor.create_schema()
-        .entities(list(entity_map.keys()))
-        .relations(list(relation_map.keys()))
+        .entities(ENTITY_TYPES)
+        .relations(RELATIONSHIP_TYPES)
     )
 
     # 5. Extract
@@ -75,19 +73,22 @@ def main(pdf_path: str) -> None:
         relations = extraction.get("relation_extraction", {})
 
         for etype, names in entities.items():
-            label = entity_map.get(etype, etype.upper())
-            all_entities.setdefault(label, set()).update(
+            all_entities.setdefault(etype, set()).update(
                 n.strip().title() for n in names if n.strip()
             )
 
         for rtype, pairs in relations.items():
-            label = relation_map.get(rtype, rtype.upper())
             for head, tail in pairs:
-                all_relations.append((head.strip().title(), label, tail.strip().title()))
+                all_relations.append(
+                    (head.strip().title(), rtype, tail.strip().title())
+                )
 
         ent_count = sum(len(v) for v in entities.values())
         rel_count = sum(len(v) for v in relations.values())
-        print(f"  Text {i + 1} ({len(text)} chars): {ent_count} entities, {rel_count} relations")
+        print(
+            f"  Text {i + 1} ({len(text)} chars):"
+            f" {ent_count} entities, {rel_count} relations"
+        )
 
     elapsed = time.monotonic() - t0
     print(f"\nExtraction done in {elapsed:.1f}s ({elapsed / max_texts:.2f}s/text)")

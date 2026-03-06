@@ -64,6 +64,18 @@ class GLiNEREngine:
     Zero LLM API calls.
     """
 
+    # Entities shorter than this are noise
+    _MIN_ENTITY_LEN = 2
+    _STOPWORDS = frozenset({
+        "the", "a", "an", "this", "that", "it", "its", "is", "are", "was",
+        "were", "be", "been", "has", "have", "had", "do", "does", "did",
+        "will", "would", "could", "should", "may", "might", "can",
+        "not", "no", "yes", "so", "if", "or", "and", "but", "for",
+        "with", "from", "by", "at", "to", "in", "on", "of", "as",
+        "we", "you", "he", "she", "they", "i", "me", "my", "our",
+        "copy", "e.g", "etc", "also", "here", "there",
+    })
+
     def __init__(self) -> None:
         from gliner2 import GLiNER2
         from neo4j import AsyncGraphDatabase
@@ -77,16 +89,10 @@ class GLiNEREngine:
             auth=(settings.neo4j_user, settings.neo4j_password),
         )
 
-        # Map SCREAMING_CASE to lowercase for GLiNER2 schema
-        entity_map = {t.lower(): t for t in ENTITY_TYPES}
-        relation_map = {t.lower(): t for t in RELATIONSHIP_TYPES}
-        self._entity_map = entity_map
-        self._relation_map = relation_map
-
         self._schema = (
             self._extractor.create_schema()
-            .entities(list(entity_map.keys()))
-            .relations(list(relation_map.keys()))
+            .entities(ENTITY_TYPES)
+            .relations(RELATIONSHIP_TYPES)
         )
 
     @staticmethod
@@ -97,8 +103,6 @@ class GLiNEREngine:
         Groups by page_number, concatenates, then splits any text exceeding
         max_chars on page boundaries.
         """
-        from itertools import groupby
-
         pages: dict[int, str] = {}
         for chunk in chunks:
             text = (chunk.contextualized_text or chunk.text).strip()
@@ -108,6 +112,13 @@ class GLiNEREngine:
             pages[page] = f"{pages.get(page, '')} {text}".strip()
 
         return [text for text in pages.values() if len(text) >= min_chars]
+
+    def _is_noise(self, name: str) -> bool:
+        """Return True if the entity name is too short or a stopword."""
+        return (
+            len(name) < self._MIN_ENTITY_LEN
+            or name.lower() in self._STOPWORDS
+        )
 
     async def ingest(self, chunks: list[TextChunk], source_key: str) -> None:
         if not chunks:
@@ -124,34 +135,39 @@ class GLiNEREngine:
                 entities = result.get("entities", {})
                 relations = result.get("relation_extraction", {})
 
-                # Upsert entities (with description from source text)
-                for entity_type_lower, names in entities.items():
-                    entity_type = self._entity_map.get(
-                        entity_type_lower, entity_type_lower.upper()
-                    )
+                # Upsert entities — MERGE on name only, accumulate types
+                for entity_type, names in entities.items():
                     for name in names:
                         normalized = name.strip().title()
-                        if not normalized:
+                        if not normalized or self._is_noise(normalized):
                             continue
                         await session.run(
-                            "MERGE (e:Entity {name: $name, type: $type}) "
-                            "ON CREATE SET e.first_seen = datetime(), "
+                            "MERGE (e:Entity {name: $name}) "
+                            "ON CREATE SET e.types = [$type], "
+                            "e.first_seen = datetime(), "
                             "e.description = $description "
                             "SET e.last_seen = datetime(), "
-                            "e.source = $source",
+                            "e.source = $source, "
+                            "e.types = CASE "
+                            "WHEN NOT $type IN coalesce(e.types, []) "
+                            "THEN coalesce(e.types, []) + $type "
+                            "ELSE e.types END",
                             name=normalized,
                             type=entity_type,
                             description=text[:500],
                             source=source_key,
                         )
 
-                # Upsert relationships
-                for rel_type_lower, pairs in relations.items():
-                    rel_type = self._relation_map.get(rel_type_lower, rel_type_lower.upper())
+                # Upsert relationships with post-processing filters
+                for rel_type, pairs in relations.items():
                     for head, tail in pairs:
                         head_norm = head.strip().title()
                         tail_norm = tail.strip().title()
                         if not head_norm or not tail_norm:
+                            continue
+                        if head_norm == tail_norm:
+                            continue  # skip self-referential
+                        if self._is_noise(head_norm) or self._is_noise(tail_norm):
                             continue
                         await session.run(
                             "MATCH (s:Entity {name: $source}) "
@@ -161,7 +177,7 @@ class GLiNEREngine:
                             ") YIELD rel RETURN rel",
                             source=head_norm,
                             target=tail_norm,
-                            relation=rel_type,
+                            relation=rel_type.upper().replace(" ", "_"),
                             props={
                                 "source": source_key,
                                 "confidence": 1.0,
@@ -181,7 +197,7 @@ class GLiNEREngine:
             "YIELD node AS e, score "
             "WITH e, score ORDER BY score DESC LIMIT $limit "
             "OPTIONAL MATCH (e)-[r]->(t:Entity) "
-            "RETURN e.name AS entity_name, e.type AS entity_type, "
+            "RETURN e.name AS entity_name, e.types AS entity_types, "
             "type(r) AS rel_type, t.name AS target_name, "
             "r.confidence AS confidence, score"
         )
@@ -196,12 +212,14 @@ class GLiNEREngine:
             entity = rec["entity_name"]
             rel = rec.get("rel_type")
             target = rec.get("target_name")
+            types = rec.get("entity_types") or []
 
             if rel and target:
                 fact_str = f"{entity} {rel.lower().replace('_', ' ')} {target}"
                 entities = [entity, target]
             else:
-                fact_str = f"{entity} ({rec['entity_type']})"
+                type_label = ", ".join(types) if types else "unknown"
+                fact_str = f"{entity} ({type_label})"
                 entities = [entity]
 
             if fact_str in seen:
@@ -249,5 +267,8 @@ async def close_graph_engine() -> None:
     """Shut down the shared graph engine singleton."""
     global _engine  # noqa: PLW0603
     if _engine is not None:
-        await _engine.close()
+        try:
+            await _engine.close()
+        except RuntimeError:
+            pass  # event loop from creation already closed
         _engine = None

@@ -571,6 +571,11 @@ def ingest_file(content: bytes, filename: str) -> str:
                 # Images: sequential (heavy, TPM-sensitive)
                 for task in image_tasks:
                     await task
+            except BaseException:
+                # Close unawaited coroutines to suppress RuntimeWarnings
+                for coro in text_tasks + image_tasks:
+                    coro.close()
+                raise
             finally:
                 if hasattr(embedder, "tokens_used"):
                     logger.info(

@@ -29,7 +29,7 @@ async def create_neo4j_schema(driver: AsyncDriver) -> None:
         )
         await session.run(
             "CREATE CONSTRAINT entity_unique IF NOT EXISTS "
-            "FOR (e:Entity) REQUIRE (e.name, e.type) IS UNIQUE"
+            "FOR (e:Entity) REQUIRE (e.name) IS UNIQUE"
         )
         await session.run(
             "CREATE CONSTRAINT chunk_unique IF NOT EXISTS FOR (c:Chunk) REQUIRE c.id IS UNIQUE"
