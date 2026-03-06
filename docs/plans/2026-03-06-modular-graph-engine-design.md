@@ -1,8 +1,8 @@
 # Modular Graph Engine Design
 
 **Date:** 2026-03-06
-**Status:** Approved
-**Branch:** TBD (feat/modular-graph-engine)
+**Status:** Implemented
+**Branch:** develop (commits b627bdd..6d04bed + review fixes)
 
 ## Problem
 
@@ -44,13 +44,24 @@ class GraphEngine(Protocol):
     async def close(self) -> None: ...
 ```
 
-Factory function dispatches based on `settings.graph_engine`:
+Singleton factory dispatches based on `settings.graph_engine`:
 
 ```python
+_engine: GraphEngine | None = None
+
 def get_graph_engine() -> GraphEngine:
+    """Lazily initialise and return the shared singleton."""
+    global _engine
+    if _engine is not None:
+        return _engine
     if settings.graph_engine == "gliner":
-        return GLiNEREngine()
-    return GraphitiEngine()
+        _engine = GLiNEREngine()
+    else:
+        _engine = GraphitiEngine()
+    return _engine
+
+async def close_graph_engine() -> None:
+    """Shut down the singleton (called at pipeline end)."""
 ```
 
 ### Enriched GraphFact
@@ -79,8 +90,8 @@ Thin wrapper around existing `GraphitiWriter` + `graph_search._search_entities`.
 - **Model loading:** singleton via module-level lazy init (like `get_graphiti()`)
 - **Model:** `GLiNER2.from_pretrained("fastino/gliner2-base-v1")` — 205MB
 - **Schema:** maps `constants.ENTITY_TYPES` and `constants.RELATIONSHIP_TYPES` to GLiNER2 schema format
-- **Ingest flow:** chunks -> `extractor.extract(text, schema)` -> Neo4j MERGE via Cypher (reusing `_LegacyGraphWriter` patterns)
-- **Batch processing:** `batch_extract_entities` + `batch_extract_relations` for multi-chunk throughput
+- **Ingest flow:** single Neo4j session per `ingest()` call; chunks -> `extractor.extract(text, schema)` -> Neo4j MERGE via Cypher (reusing `_LegacyGraphWriter` patterns)
+- **Entity description:** stores first 500 chars of source text as `Entity.description` for full-text search
 - **Search flow:** Neo4j full-text index on `Entity.name`/`Entity.description` -> traverse relationships -> format as `GraphFact`
 - **Lazy import:** `gliner2` only imported when `graph_engine="gliner"`, so Graphiti users don't need the dependency
 
@@ -95,7 +106,7 @@ Reuses existing schema from `neo4j_setup.py`:
 
 ### Pipeline Integration
 
-`pipeline.py` replaces `GraphitiWriter()` with `get_graph_engine()`. The engine handles grouping, extraction, and Neo4j writes internally.
+`pipeline.py` replaces `GraphitiWriter()` with `get_graph_engine()` (singleton). The engine handles grouping, extraction, and Neo4j writes internally. `close_graph_engine()` is called once at pipeline end (not per-file).
 
 `graph_search.py` replaces direct Graphiti import with `get_graph_engine().search()`.
 
@@ -103,7 +114,7 @@ Reuses existing schema from `neo4j_setup.py`:
 
 | File | Change |
 |-|-|
-| `config/settings.py` | Add `graph_engine: str = "graphiti"` |
+| `config/settings.py` | Add `graph_engine: Literal["graphiti", "gliner"] = "graphiti"` |
 | `.env.example` | Add `GRAPH_ENGINE=graphiti` |
 | `ingestion/graph_engine.py` | **New** — Protocol, factory, GraphitiEngine, GLiNEREngine |
 | `ingestion/graph_writer.py` | Keep as-is (wrapped by GraphitiEngine) |

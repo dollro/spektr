@@ -28,7 +28,7 @@ from ingestion.file_processor import (
     file_to_pages,
     semantic_chunk,
 )
-from ingestion.graph_engine import GraphEngine, get_graph_engine
+from ingestion.graph_engine import GraphEngine, close_graph_engine, get_graph_engine
 from ingestion.neo4j_setup import create_neo4j_schema, get_driver
 from ingestion.qdrant_setup import ensure_collections
 from ingestion.target_connector import RagTarget
@@ -583,8 +583,6 @@ def ingest_file(content: bytes, filename: str) -> str:
                         },
                     )
                 await embedder.close()
-                if graph_engine_inst is not None:
-                    await graph_engine_inst.close()
 
         run_async(
             _process_all_pages(),
@@ -701,6 +699,10 @@ def run_pipeline() -> None:
             cocoindex.FlowLiveUpdaterOptions(live_mode=False, print_stats=True),
         )
     )
+
+    # Clean up graph engine singleton (if created)
+    if settings.graph_enabled:
+        run_async(close_graph_engine())
 
     duration_ms = round((time.monotonic() - t0) * 1000)
     logger.info(

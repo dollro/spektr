@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -83,7 +83,7 @@ class Settings(BaseSettings):
     graph_enabled: bool = True
     graph_semaphore_limit: int = 10  # SEMAPHORE_LIMIT for Graphiti LLM concurrency
     graph_episode_target_size: int = 1500  # Target chars per Graphiti episode
-    graph_engine: str = "graphiti"  # "graphiti" | "gliner"
+    graph_engine: Literal["graphiti", "gliner"] = "graphiti"
     image_embed_strategy: str = "smart"  # "smart" | "all"
 
     # Observability

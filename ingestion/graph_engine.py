@@ -93,15 +93,15 @@ class GLiNEREngine:
         if not chunks:
             return
 
-        for chunk in chunks:
-            text = chunk.contextualized_text or chunk.text
-            result = self._extractor.extract(text, self._schema)
+        async with self._driver.session() as session:
+            for chunk in chunks:
+                text = chunk.contextualized_text or chunk.text
+                result = self._extractor.extract(text, self._schema)
 
-            entities = result.get("entities", {})
-            relations = result.get("relation_extraction", {})
+                entities = result.get("entities", {})
+                relations = result.get("relation_extraction", {})
 
-            async with self._driver.session() as session:
-                # Upsert entities
+                # Upsert entities (with description from source text)
                 for entity_type_lower, names in entities.items():
                     entity_type = self._entity_map.get(
                         entity_type_lower, entity_type_lower.upper()
@@ -112,11 +112,13 @@ class GLiNEREngine:
                             continue
                         await session.run(
                             "MERGE (e:Entity {name: $name, type: $type}) "
-                            "ON CREATE SET e.first_seen = datetime() "
+                            "ON CREATE SET e.first_seen = datetime(), "
+                            "e.description = $description "
                             "SET e.last_seen = datetime(), "
                             "e.source = $source",
                             name=normalized,
                             type=entity_type,
+                            description=text[:500],
                             source=source_key,
                         )
 
@@ -198,14 +200,31 @@ class GLiNEREngine:
         await self._driver.close()
 
 
+_engine: GraphEngine | None = None
+
+
 def get_graph_engine() -> GraphEngine:
-    """Factory: create graph engine based on settings."""
+    """Return (and lazily initialise) the shared graph engine singleton."""
+    global _engine  # noqa: PLW0603
+    if _engine is not None:
+        return _engine
+
     from config.settings import settings
 
-    engine = settings.graph_engine.lower()
-    if engine == "graphiti":
-        return GraphitiEngine()
-    if engine == "gliner":
-        return GLiNEREngine()
-    msg = f"Unknown graph engine: {engine!r}. Use 'graphiti' or 'gliner'."
-    raise ValueError(msg)
+    name = settings.graph_engine.lower()
+    if name == "graphiti":
+        _engine = GraphitiEngine()
+    elif name == "gliner":
+        _engine = GLiNEREngine()
+    else:
+        msg = f"Unknown graph engine: {name!r}. Use 'graphiti' or 'gliner'."
+        raise ValueError(msg)
+    return _engine
+
+
+async def close_graph_engine() -> None:
+    """Shut down the shared graph engine singleton."""
+    global _engine  # noqa: PLW0603
+    if _engine is not None:
+        await _engine.close()
+        _engine = None

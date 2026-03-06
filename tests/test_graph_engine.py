@@ -43,6 +43,12 @@ class TestGraphFact:
 
 
 class TestGetGraphEngine:
+    def setup_method(self) -> None:
+        """Reset singleton between tests."""
+        import ingestion.graph_engine as mod
+
+        mod._engine = None
+
     def test_factory_returns_graphiti_by_default(self) -> None:
         """Factory returns GraphitiEngine when graph_engine='graphiti'."""
         from ingestion.graph_engine import GraphitiEngine, get_graph_engine
@@ -63,6 +69,16 @@ class TestGetGraphEngine:
             mock_settings.graph_engine = "gliner"
             engine = get_graph_engine()
         assert isinstance(engine, GLiNEREngine)
+
+    def test_factory_returns_singleton(self) -> None:
+        """Factory returns same instance on repeated calls."""
+        from ingestion.graph_engine import get_graph_engine
+
+        with patch("config.settings.settings") as mock_settings:
+            mock_settings.graph_engine = "graphiti"
+            engine1 = get_graph_engine()
+            engine2 = get_graph_engine()
+        assert engine1 is engine2
 
     def test_factory_raises_on_unknown_engine(self) -> None:
         """Factory raises ValueError for unknown engine."""
