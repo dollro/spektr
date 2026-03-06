@@ -35,6 +35,12 @@ async def create_neo4j_schema(driver: AsyncDriver) -> None:
             "CREATE CONSTRAINT chunk_unique IF NOT EXISTS FOR (c:Chunk) REQUIRE c.id IS UNIQUE"
         )
 
+        # Full-text index for GLiNER engine search path
+        await session.run(
+            "CREATE FULLTEXT INDEX entity_fulltext IF NOT EXISTS "
+            "FOR (e:Entity) ON EACH [e.name, e.description]"
+        )
+
         result = await session.run("RETURN apoc.version() AS version")
         record = await result.single()
         if not record:
