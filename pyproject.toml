@@ -24,6 +24,9 @@ dependencies = [
     "mkdocs-with-pdf>=0.9.3",
 ]
 
+[project.optional-dependencies]
+gliner = ["gliner2>=1.2"]
+
 [dependency-groups]
 dev = [
     "pytest",

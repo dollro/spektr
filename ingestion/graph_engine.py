@@ -59,17 +59,101 @@ class GraphitiEngine:
 class GLiNEREngine:
     """Graph engine backed by GLiNER2 (local CPU extraction).
 
-    Placeholder — full implementation in Task 5.
+    Extracts entities and relationships using a 205MB local model,
+    then writes directly to Neo4j via Cypher MERGE statements.
+    Zero LLM API calls.
     """
 
+    def __init__(self) -> None:
+        from gliner2 import GLiNER2
+        from neo4j import AsyncGraphDatabase
+
+        from config.constants import ENTITY_TYPES, RELATIONSHIP_TYPES
+        from config.settings import settings
+
+        self._extractor = GLiNER2.from_pretrained("fastino/gliner2-base-v1")
+        self._driver = AsyncGraphDatabase.driver(
+            settings.neo4j_uri,
+            auth=(settings.neo4j_user, settings.neo4j_password),
+        )
+
+        # Map SCREAMING_CASE to lowercase for GLiNER2 schema
+        entity_map = {t.lower(): t for t in ENTITY_TYPES}
+        relation_map = {t.lower(): t for t in RELATIONSHIP_TYPES}
+        self._entity_map = entity_map
+        self._relation_map = relation_map
+
+        self._schema = (
+            self._extractor.create_schema()
+            .entities(list(entity_map.keys()))
+            .relations(list(relation_map.keys()))
+        )
+
     async def ingest(self, chunks: list[TextChunk], source_key: str) -> None:
-        raise NotImplementedError("GLiNEREngine.ingest not yet implemented")
+        if not chunks:
+            return
+
+        for chunk in chunks:
+            text = chunk.contextualized_text or chunk.text
+            result = self._extractor.extract(text, self._schema)
+
+            entities = result.get("entities", {})
+            relations = result.get("relation_extraction", {})
+
+            async with self._driver.session() as session:
+                # Upsert entities
+                for entity_type_lower, names in entities.items():
+                    entity_type = self._entity_map.get(
+                        entity_type_lower, entity_type_lower.upper()
+                    )
+                    for name in names:
+                        normalized = name.strip().title()
+                        if not normalized:
+                            continue
+                        await session.run(
+                            "MERGE (e:Entity {name: $name, type: $type}) "
+                            "ON CREATE SET e.first_seen = datetime() "
+                            "SET e.last_seen = datetime(), "
+                            "e.source = $source",
+                            name=normalized,
+                            type=entity_type,
+                            source=source_key,
+                        )
+
+                # Upsert relationships
+                for rel_type_lower, pairs in relations.items():
+                    rel_type = self._relation_map.get(rel_type_lower, rel_type_lower.upper())
+                    for head, tail in pairs:
+                        head_norm = head.strip().title()
+                        tail_norm = tail.strip().title()
+                        if not head_norm or not tail_norm:
+                            continue
+                        await session.run(
+                            "MATCH (s:Entity {name: $source}) "
+                            "MATCH (t:Entity {name: $target}) "
+                            "CALL apoc.merge.relationship("
+                            "s, $relation, $props, {}, t, {}"
+                            ") YIELD rel RETURN rel",
+                            source=head_norm,
+                            target=tail_norm,
+                            relation=rel_type,
+                            props={
+                                "source": source_key,
+                                "confidence": 1.0,
+                            },
+                        )
+
+        logger.info(
+            "GLiNER extracted entities from %d chunks for %s",
+            len(chunks),
+            source_key,
+        )
 
     async def search(self, query: str, limit: int = 10) -> list[GraphFact]:
         raise NotImplementedError("GLiNEREngine.search not yet implemented")
 
     async def close(self) -> None:
-        pass
+        await self._driver.close()
 
 
 def get_graph_engine() -> GraphEngine:

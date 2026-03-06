@@ -56,7 +56,10 @@ class TestGetGraphEngine:
         """Factory returns GLiNEREngine when graph_engine='gliner'."""
         from ingestion.graph_engine import GLiNEREngine, get_graph_engine
 
-        with patch("config.settings.settings") as mock_settings:
+        with (
+            patch("config.settings.settings") as mock_settings,
+            patch.object(GLiNEREngine, "__init__", lambda self: None),
+        ):
             mock_settings.graph_engine = "gliner"
             engine = get_graph_engine()
         assert isinstance(engine, GLiNEREngine)
@@ -121,3 +124,101 @@ class TestGraphitiEngine:
         with patch.object(engine._writer, "close", new_callable=AsyncMock) as mock_close:
             await engine.close()
             mock_close.assert_called_once()
+
+
+class TestGLiNEREngineIngest:
+    @pytest.mark.asyncio
+    async def test_ingest_extracts_entities_and_writes_neo4j(self) -> None:
+        """GLiNEREngine.ingest extracts entities + relations and writes to Neo4j."""
+        from ingestion.graph_engine import GLiNEREngine
+
+        chunks = [
+            TextChunk(
+                text="Tim Cook works for Apple Inc.",
+                chunk_index=0,
+                page_number=1,
+            ),
+        ]
+
+        mock_extractor = MagicMock()
+        mock_extractor.extract.return_value = {
+            "entities": {
+                "person": ["Tim Cook"],
+                "organization": ["Apple Inc."],
+            },
+            "relation_extraction": {
+                "works_for": [("Tim Cook", "Apple Inc.")],
+            },
+        }
+
+        mock_session = AsyncMock()
+        mock_session.run = AsyncMock()
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+
+        mock_driver = MagicMock()
+        mock_driver.session.return_value = mock_session
+
+        engine = GLiNEREngine.__new__(GLiNEREngine)
+        engine._extractor = mock_extractor
+        engine._driver = mock_driver
+        engine._schema = MagicMock()
+        engine._entity_map = {
+            "person": "PERSON",
+            "organization": "ORGANIZATION",
+        }
+        engine._relation_map = {"works_for": "WORKS_AT"}
+
+        await engine.ingest(chunks, "test.pdf")
+
+        # Should have called session.run for MERGE entities (2) + relationships (1)
+        assert mock_session.run.call_count >= 3
+
+    @pytest.mark.asyncio
+    async def test_ingest_empty_chunks_is_noop(self) -> None:
+        """GLiNEREngine.ingest with empty chunks does nothing."""
+        from ingestion.graph_engine import GLiNEREngine
+
+        engine = GLiNEREngine.__new__(GLiNEREngine)
+        engine._extractor = MagicMock()
+        engine._driver = MagicMock()
+        engine._schema = MagicMock()
+        engine._entity_map = {}
+        engine._relation_map = {}
+
+        await engine.ingest([], "test.pdf")
+        engine._extractor.extract.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_ingest_normalizes_entity_names(self) -> None:
+        """Entity names are normalized (stripped, title-cased) before MERGE."""
+        from ingestion.graph_engine import GLiNEREngine
+
+        chunks = [TextChunk(text="test", chunk_index=0, page_number=1)]
+
+        mock_extractor = MagicMock()
+        mock_extractor.extract.return_value = {
+            "entities": {"person": ["  john doe  "]},
+            "relation_extraction": {},
+        }
+
+        mock_session = AsyncMock()
+        mock_session.run = AsyncMock()
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+
+        mock_driver = MagicMock()
+        mock_driver.session.return_value = mock_session
+
+        engine = GLiNEREngine.__new__(GLiNEREngine)
+        engine._extractor = mock_extractor
+        engine._driver = mock_driver
+        engine._schema = MagicMock()
+        engine._entity_map = {"person": "PERSON"}
+        engine._relation_map = {}
+
+        await engine.ingest(chunks, "test.pdf")
+
+        # Check that the MERGE call used normalized name "John Doe"
+        calls = mock_session.run.call_args_list
+        assert any("John Doe" in str(c) for c in calls)
