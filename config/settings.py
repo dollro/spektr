@@ -83,6 +83,7 @@ class Settings(BaseSettings):
     graph_enabled: bool = True
     graph_semaphore_limit: int = 10  # SEMAPHORE_LIMIT for Graphiti LLM concurrency
     graph_episode_target_size: int = 1500  # Target chars per Graphiti episode
+    graph_engine: str = "graphiti"  # "graphiti" | "gliner"
     image_embed_strategy: str = "smart"  # "smart" | "all"
 
     # Observability

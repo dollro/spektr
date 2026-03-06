@@ -28,12 +28,15 @@ class VisualSearchResult(BaseModel):
 
 
 class GraphFact(BaseModel):
-    """Knowledge graph fact from Graphiti search."""
+    """Knowledge graph fact from any graph engine."""
 
     fact: str
     source: str | None = None
     created_at: str | None = None
     expired_at: str | None = None
+    entities: list[str] | None = None
+    relation_type: str | None = None
+    confidence: float | None = None
 
 
 class HybridSearchResponse(BaseModel):
