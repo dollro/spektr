@@ -28,7 +28,7 @@ from ingestion.file_processor import (
     file_to_pages,
     semantic_chunk,
 )
-from ingestion.graph_writer import GraphitiWriter
+from ingestion.graph_engine import GraphEngine, get_graph_engine
 from ingestion.neo4j_setup import create_neo4j_schema, get_driver
 from ingestion.qdrant_setup import ensure_collections
 from ingestion.target_connector import RagTarget
@@ -98,7 +98,7 @@ def _build_page_tasks(
     now: str,
     qdrant: QdrantClient,
     embedder: Embedder,
-    graphiti_writer: GraphitiWriter | None,
+    graph_engine: GraphEngine | None,
     docling_chunks: list[TextChunk] | None = None,
     chunk_collector: list[TextChunk] | None = None,
 ) -> _PageTasks:
@@ -115,7 +115,7 @@ def _build_page_tasks(
                 now,
                 qdrant,
                 embedder,
-                graphiti_writer,
+                graph_engine,
                 docling_chunks=docling_chunks,
                 chunk_collector=chunk_collector,
             )
@@ -131,7 +131,7 @@ def _build_page_tasks(
                     now,
                     qdrant,
                     embedder,
-                    graphiti_writer,
+                    graph_engine,
                     docling_chunks=docling_chunks,
                     chunk_collector=chunk_collector,
                 )
@@ -151,7 +151,7 @@ def _build_page_tasks(
                     now,
                     qdrant,
                     embedder,
-                    graphiti_writer,
+                    graph_engine,
                 )
             )
     else:
@@ -165,7 +165,7 @@ def _build_page_tasks(
                 now,
                 qdrant,
                 embedder,
-                graphiti_writer,
+                graph_engine,
             )
         )
 
@@ -180,7 +180,7 @@ async def _process_text_page(
     now: str,
     qdrant: QdrantClient,
     embedder: Embedder,
-    graphiti_writer: GraphitiWriter | None,
+    graph_engine: GraphEngine | None,
     docling_chunks: list[TextChunk] | None = None,
     chunk_collector: list[TextChunk] | None = None,
 ) -> None:
@@ -269,7 +269,7 @@ async def _process_visual_page(
     now: str,
     qdrant: QdrantClient,
     embedder: Embedder,
-    graphiti_writer: GraphitiWriter | None = None,
+    graph_engine: GraphEngine | None = None,
 ) -> None:
     """Process an image/PDF page: dense + multivec embedding."""
     page_key = f"{source_file}::p{page_number}"
@@ -340,12 +340,12 @@ async def _process_visual_page(
             )
 
     # VLM caption -> Graphiti (when enabled)
-    if settings.vlm_generation_enabled and graphiti_writer is not None:
+    if settings.vlm_generation_enabled and graph_engine is not None:
         await _caption_and_ingest_visual(
             source_file,
             image_bytes,
             page_number,
-            graphiti_writer,
+            graph_engine,
         )
 
 
@@ -438,20 +438,15 @@ async def _caption_and_ingest_visual(
     source_file: str,
     image_bytes: bytes,
     page_number: int,
-    graphiti_writer: GraphitiWriter,
+    graph_engine: GraphEngine,
 ) -> None:
-    """Caption a visual page and ingest the text to Graphiti."""
+    """Caption a visual page and ingest the text to graph."""
     try:
         caption = await _caption_visual_page(image_bytes)
         if not caption or not caption.strip():
             return
-
-        await graphiti_writer.ingest_chunk(
-            chunk_text=caption,
-            source_key=source_file,
-            page_number=page_number,
-            chunk_index=0,
-        )
+        chunk = TextChunk(text=caption, chunk_index=0, page_number=page_number)
+        await graph_engine.ingest([chunk], source_file)
         logger.info(
             "VLM caption ingested for %s page %d (%d chars)",
             source_file,
@@ -466,22 +461,13 @@ async def _caption_and_ingest_visual(
         )
 
 
-async def _ingest_to_graphiti(
+async def _ingest_to_graph(
     source_file: str,
     chunks: list[TextChunk],
-    graphiti_writer: GraphitiWriter,
+    engine: GraphEngine,
 ) -> None:
-    """Ingest chunks as Graphiti episodes using bulk API.
-
-    Uses add_episode_bulk for speed. GraphitiWriter.ingest_bulk
-    handles fallback to sequential on failure.
-    """
-    ref_time = datetime.now(tz=UTC)
-    await graphiti_writer.ingest_bulk(
-        chunks=chunks,
-        source_key=source_file,
-        reference_time=ref_time,
-    )
+    """Ingest chunks via the active graph engine."""
+    await engine.ingest(chunks=chunks, source_key=source_file)
 
 
 @cocoindex.op.function()
@@ -513,7 +499,7 @@ def ingest_file(content: bytes, filename: str) -> str:
     mime = _guess_mime(filename)
     now = datetime.now(tz=UTC).isoformat()
     qdrant = _get_qdrant_client()
-    graphiti_writer: GraphitiWriter | None = None
+    graph_engine_inst: GraphEngine | None = None
 
     # Compute Docling chunks once for the whole document
     dl_chunks = docling_chunk(result.docling_document) if result.docling_document else None
@@ -541,7 +527,7 @@ def ingest_file(content: bytes, filename: str) -> str:
     try:
         has_text = any(p.text.strip() for p in pages)
         if has_text and settings.graph_enabled:
-            graphiti_writer = GraphitiWriter()
+            graph_engine_inst = get_graph_engine()
 
         async def _process_all_pages() -> None:
             embedder = create_embedder()
@@ -563,9 +549,9 @@ def ingest_file(content: bytes, filename: str) -> str:
                         now,
                         qdrant,
                         embedder,
-                        graphiti_writer,
+                        graph_engine_inst,
                         docling_chunks=dl_chunks,
-                        chunk_collector=all_chunks if graphiti_writer else None,
+                        chunk_collector=all_chunks if graph_engine_inst else None,
                     )
                     text_tasks.extend(pt.text)
                     image_tasks.extend(pt.image)
@@ -574,12 +560,12 @@ def ingest_file(content: bytes, filename: str) -> str:
                 if text_tasks:
                     await asyncio.gather(*[_bounded(t) for t in text_tasks])
 
-                # Bulk Graphiti ingestion after all text pages are processed
-                if graphiti_writer and all_chunks:
-                    await _ingest_to_graphiti(
+                # Bulk graph ingestion after all text pages are processed
+                if graph_engine_inst and all_chunks:
+                    await _ingest_to_graph(
                         filename,
                         all_chunks,
-                        graphiti_writer,
+                        graph_engine_inst,
                     )
 
                 # Images: sequential (heavy, TPM-sensitive)
@@ -597,8 +583,8 @@ def ingest_file(content: bytes, filename: str) -> str:
                         },
                     )
                 await embedder.close()
-                if graphiti_writer is not None:
-                    await graphiti_writer.close()
+                if graph_engine_inst is not None:
+                    await graph_engine_inst.close()
 
         run_async(
             _process_all_pages(),

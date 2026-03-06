@@ -241,22 +241,26 @@ class TestVisualSearch:
 
 
 class TestGraphSearch:
-    """Tests for the Graphiti-based graph_search tool."""
+    """Tests for the engine-based graph_search tool."""
 
     async def test_entity_search_returns_facts(self):
-        """Graph search returns fact-based results from Graphiti."""
-        mock_edge = MagicMock()
-        mock_edge.fact = "Python is a programming language"
-        mock_edge.source_description = "doc1.pdf"
-        mock_edge.created_at = "2025-01-01T00:00:00"
-        mock_edge.expired_at = None
+        """Graph search returns fact-based results from graph engine."""
+        from server.models import GraphFact
 
-        mock_graphiti = AsyncMock()
-        mock_graphiti.search = AsyncMock(return_value=[mock_edge])
+        mock_facts = [
+            GraphFact(
+                fact="Python is a programming language",
+                source="doc1.pdf",
+                created_at="2025-01-01T00:00:00",
+            ),
+        ]
+
+        mock_engine = AsyncMock()
+        mock_engine.search = AsyncMock(return_value=mock_facts)
 
         with patch(
-            "server.tools.graph_search.get_graphiti",
-            return_value=mock_graphiti,
+            "server.tools.graph_search.get_graph_engine",
+            return_value=mock_engine,
         ):
             from server.tools.graph_search import graph_search
 
@@ -269,27 +273,28 @@ class TestGraphSearch:
 
     async def test_entity_search_respects_limit(self):
         """Graph search respects the limit parameter."""
-        edges = []
-        for i in range(5):
-            edge = MagicMock()
-            edge.fact = f"Fact {i}"
-            edge.source_description = f"doc{i}.pdf"
-            edge.created_at = "2025-01-01"
-            edge.expired_at = None
-            edges.append(edge)
+        from server.models import GraphFact
 
-        mock_graphiti = AsyncMock()
-        mock_graphiti.search = AsyncMock(return_value=edges)
+        mock_facts = [
+            GraphFact(fact=f"Fact {i}", source=f"doc{i}.pdf", created_at="2025-01-01")
+            for i in range(5)
+        ]
+
+        mock_engine = AsyncMock()
+        mock_engine.search = AsyncMock(return_value=mock_facts)
 
         with patch(
-            "server.tools.graph_search.get_graphiti",
-            return_value=mock_graphiti,
+            "server.tools.graph_search.get_graph_engine",
+            return_value=mock_engine,
         ):
             from server.tools.graph_search import graph_search
 
             results = await graph_search("test", limit=3)
 
-        assert len(results) == 3
+        # The engine returns 5 but engine.search is called with limit=3
+        # The engine mock returns all 5; graph_search trusts engine to limit
+        mock_engine.search.assert_called_once_with("test", limit=3)
+        assert len(results) == 5  # mock returns all; real engine would limit
 
     async def test_unsupported_search_type_raises(self):
         """Unsupported search_type raises ValueError."""
@@ -301,7 +306,7 @@ class TestGraphSearch:
     async def test_graph_search_handles_error(self):
         """Graph search returns error dict on failure."""
         with patch(
-            "server.tools.graph_search.get_graphiti",
+            "server.tools.graph_search.get_graph_engine",
             side_effect=RuntimeError("connection failed"),
         ):
             from server.tools.graph_search import graph_search
@@ -446,7 +451,7 @@ class TestEdgeCases:
     async def test_graph_search_failure_returns_error_dict(self):
         """EC-03: Graph search failure returns error, doesn't crash."""
         with patch(
-            "server.tools.graph_search.get_graphiti",
+            "server.tools.graph_search.get_graph_engine",
             side_effect=RuntimeError("Neo4j down"),
         ):
             from server.tools.graph_search import graph_search
@@ -462,7 +467,6 @@ class TestBearerAuth:
 
     async def test_bearer_auth_middleware_rejects_missing_token(self):
         """Requests without Bearer token are rejected."""
-        from unittest.mock import MagicMock
 
         from server.mcp_server import BearerAuthMiddleware
 
@@ -489,7 +493,6 @@ class TestBearerAuth:
 
     async def test_bearer_auth_middleware_rejects_wrong_token(self):
         """Requests with wrong Bearer token are rejected."""
-        from unittest.mock import MagicMock
 
         from server.mcp_server import BearerAuthMiddleware
 
@@ -515,7 +518,6 @@ class TestBearerAuth:
 
     async def test_bearer_auth_middleware_passes_valid_token(self):
         """Requests with correct Bearer token pass through."""
-        from unittest.mock import MagicMock
 
         from server.mcp_server import BearerAuthMiddleware
 
@@ -543,7 +545,6 @@ class TestBearerAuth:
 
     async def test_bearer_auth_skipped_when_no_key_configured(self):
         """When mcp_api_key is empty, all requests pass through."""
-        from unittest.mock import MagicMock
 
         from server.mcp_server import BearerAuthMiddleware
 

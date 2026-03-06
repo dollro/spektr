@@ -40,7 +40,7 @@ class TestProcessTextPageWithDoclingChunks:
                 now="2026-03-05T00:00:00Z",
                 qdrant=mock_qdrant,
                 embedder=mock_embedder,
-                graphiti_writer=None,
+                graph_engine=None,
                 docling_chunks=dl_chunks,
             )
 
@@ -77,7 +77,7 @@ class TestProcessTextPageWithDoclingChunks:
                 now="2026-03-05T00:00:00Z",
                 qdrant=mock_qdrant,
                 embedder=mock_embedder,
-                graphiti_writer=None,
+                graph_engine=None,
                 docling_chunks=None,
             )
 
@@ -114,7 +114,7 @@ class TestQdrantPayloadContextualizedText:
             now="2026-03-05T00:00:00Z",
             qdrant=mock_qdrant,
             embedder=mock_embedder,
-            graphiti_writer=None,
+            graph_engine=None,
             docling_chunks=dl_chunks,
         )
 
@@ -125,10 +125,10 @@ class TestQdrantPayloadContextualizedText:
         assert payload["contextualized_text"] == "Heading > Sub\nRaw text"
 
 
-class TestGraphitiContextualizedText:
-    async def test_graphiti_receives_contextualized_text(self) -> None:
-        """Graphiti bulk ingestion receives chunks with contextualized_text."""
-        from ingestion.pipeline import _ingest_to_graphiti
+class TestGraphEngineContextualizedText:
+    async def test_engine_receives_contextualized_text(self) -> None:
+        """Graph engine ingestion receives chunks with contextualized_text."""
+        from ingestion.pipeline import _ingest_to_graph
 
         chunks = [
             TextChunk(
@@ -139,16 +139,16 @@ class TestGraphitiContextualizedText:
             ),
         ]
 
-        mock_writer = AsyncMock()
-        await _ingest_to_graphiti("doc.pdf", chunks, mock_writer)
+        mock_engine = AsyncMock()
+        await _ingest_to_graph("doc.pdf", chunks, mock_engine)
 
-        mock_writer.ingest_bulk.assert_called_once()
-        call_kwargs = mock_writer.ingest_bulk.call_args.kwargs
+        mock_engine.ingest.assert_called_once()
+        call_kwargs = mock_engine.ingest.call_args.kwargs
         assert call_kwargs["chunks"][0].contextualized_text == "Heading > Sub\nRaw text"
 
-    async def test_graphiti_falls_back_to_raw_text(self) -> None:
+    async def test_engine_falls_back_to_raw_text(self) -> None:
         """Without contextualized_text, chunk has None contextualized_text."""
-        from ingestion.pipeline import _ingest_to_graphiti
+        from ingestion.pipeline import _ingest_to_graph
 
         chunks = [
             TextChunk(
@@ -158,10 +158,10 @@ class TestGraphitiContextualizedText:
             ),
         ]
 
-        mock_writer = AsyncMock()
-        await _ingest_to_graphiti("doc.pdf", chunks, mock_writer)
+        mock_engine = AsyncMock()
+        await _ingest_to_graph("doc.pdf", chunks, mock_engine)
 
-        mock_writer.ingest_bulk.assert_called_once()
-        call_kwargs = mock_writer.ingest_bulk.call_args.kwargs
+        mock_engine.ingest.assert_called_once()
+        call_kwargs = mock_engine.ingest.call_args.kwargs
         assert call_kwargs["chunks"][0].text == "Raw text only"
         assert call_kwargs["chunks"][0].contextualized_text is None

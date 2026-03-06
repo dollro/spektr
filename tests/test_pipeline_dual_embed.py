@@ -37,7 +37,7 @@ class TestDualEmbedMixedPages:
                 now="2026-03-05T00:00:00Z",
                 qdrant=MagicMock(),
                 embedder=MagicMock(),
-                graphiti_writer=None,
+                graph_engine=None,
             )
 
         assert len(tasks.text) >= 1, "Mixed page should have text tasks"
@@ -67,7 +67,7 @@ class TestDualEmbedMixedPages:
                 now="2026-03-05T00:00:00Z",
                 qdrant=MagicMock(),
                 embedder=MagicMock(),
-                graphiti_writer=None,
+                graph_engine=None,
             )
 
         assert len(tasks.text) == 0, "No-text PDF page should have no text tasks"
@@ -95,7 +95,7 @@ class TestDualEmbedMixedPages:
                 now="2026-03-05T00:00:00Z",
                 qdrant=MagicMock(),
                 embedder=MagicMock(),
-                graphiti_writer=None,
+                graph_engine=None,
             )
 
         assert len(tasks.text) >= 1, "Text page should have text tasks"
@@ -123,7 +123,7 @@ class TestDualEmbedMixedPages:
                 now="2026-03-05T00:00:00Z",
                 qdrant=MagicMock(),
                 embedder=MagicMock(),
-                graphiti_writer=None,
+                graph_engine=None,
             )
 
         assert len(tasks.text) == 0, "Image page should have no text tasks"
@@ -157,7 +157,7 @@ class TestImageEmbedStrategy:
                 now="2026-03-05T00:00:00Z",
                 qdrant=MagicMock(),
                 embedder=MagicMock(),
-                graphiti_writer=None,
+                graph_engine=None,
             )
 
         assert len(tasks.text) >= 1, "Should still have text tasks"
@@ -187,7 +187,7 @@ class TestImageEmbedStrategy:
                 now="2026-03-05T00:00:00Z",
                 qdrant=MagicMock(),
                 embedder=MagicMock(),
-                graphiti_writer=None,
+                graph_engine=None,
             )
 
         assert len(tasks.text) >= 1, "Should have text tasks"
@@ -217,7 +217,7 @@ class TestImageEmbedStrategy:
                 now="2026-03-05T00:00:00Z",
                 qdrant=MagicMock(),
                 embedder=MagicMock(),
-                graphiti_writer=None,
+                graph_engine=None,
             )
 
         assert len(tasks.text) >= 1, "Should have text tasks"

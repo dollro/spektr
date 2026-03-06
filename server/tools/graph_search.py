@@ -1,38 +1,16 @@
 """Knowledge graph search tool for MCP server.
 
-Searches the Neo4j knowledge graph via Graphiti for entities,
-relationships, and temporal metadata.
+Engine-agnostic: dispatches to whichever GraphEngine is configured
+via the GRAPH_ENGINE setting.
 """
 
 from __future__ import annotations
 
 import logging
 
-from ingestion.graphiti_client import get_graphiti
-from server.models import GraphFact
+from ingestion.graph_engine import get_graph_engine
 
 logger = logging.getLogger(__name__)
-
-
-async def _search_entities(
-    query: str,
-    limit: int,
-) -> list[dict]:  # type: ignore[type-arg]
-    """Search Graphiti for relevant facts and entities."""
-    client = await get_graphiti()
-    edges = await client.search(query)
-
-    results: list[dict] = []  # type: ignore[type-arg]
-    for edge in edges[:limit]:
-        results.append(
-            GraphFact(
-                fact=edge.fact,
-                source=edge.source_description,
-                created_at=str(edge.created_at),
-                expired_at=(str(edge.expired_at) if edge.expired_at else None),
-            ).model_dump()
-        )
-    return results
 
 
 async def graph_search(
@@ -42,8 +20,7 @@ async def graph_search(
 ) -> list[dict]:  # type: ignore[type-arg]
     """Search the knowledge graph for entities and relationships.
 
-    Uses Graphiti's semantic search to find relevant facts,
-    entities, and their temporal metadata.
+    Uses the configured graph engine's search method.
 
     Args:
         query: Search text.
@@ -59,7 +36,9 @@ async def graph_search(
     limit = max(1, min(limit, 100))
 
     try:
-        return await _search_entities(query, limit)
+        engine = get_graph_engine()
+        results = await engine.search(query, limit=limit)
+        return [r.model_dump() for r in results]
     except Exception as exc:
         logger.exception("graph_search failed")
         return [
