@@ -4,12 +4,12 @@
 
 ## Features
 
-- **Dual retrieval** -- vector similarity (Qdrant) and temporal knowledge graph (Neo4j/Graphiti) in a single server
+- **Dual retrieval** -- vector similarity (Qdrant) and knowledge graph (Neo4j) in a single server
 - **Multimodal embeddings** -- Jina v4 produces dense 512-d vectors for text and images (Matryoshka truncation), plus ColBERT 128-d multi-vectors for layout-aware visual search
 - **Automatic sync** -- CocoIndex pipeline watches S3 via SQS event notifications; new, updated, and deleted files are processed incrementally
 - **Four MCP search tools** -- `vector_search`, `visual_search`, `graph_search`, `hybrid_search`
 - **Bearer auth middleware** -- optional token-based protection on `tools/call` requests
-- **Temporal awareness** -- Graphiti tracks when facts were created and expired, so agents can reason about time
+- **Pluggable graph engine** -- choose Graphiti (LLM-based, temporal awareness) or GLiNER2 (local CPU, zero API cost) via `GRAPH_ENGINE` setting
 
 ## Architecture
 
@@ -17,7 +17,7 @@
 graph LR
     S3[AWS S3] -->|SQS events| Pipeline[CocoIndex Pipeline]
     Pipeline -->|dense + ColBERT vectors| Qdrant[(Qdrant)]
-    Pipeline -->|episodes / entities| Neo4j[(Neo4j + Graphiti)]
+    Pipeline -->|entities / relations| Neo4j[(Neo4j)]
     Pipeline -->|pipeline state| PG[(PostgreSQL)]
     Qdrant --- MCP[FastMCP Server]
     Neo4j --- MCP
@@ -65,7 +65,7 @@ See [Local Development](deployment/local-development.md) for the full setup guid
 | Ingestion pipeline | CocoIndex |
 | Embeddings | Jina v4 API (dense 512-d + ColBERT 128-d) |
 | Vector store | Qdrant v1.13 |
-| Knowledge graph | Neo4j 5.26 + Graphiti |
+| Knowledge graph | Neo4j 5.26 + Graphiti or GLiNER2 (pluggable via `GRAPH_ENGINE`) |
 | State DB | PostgreSQL 17.2 |
 | MCP server | FastMCP (SSE + stdio) |
 | Agent framework | Pydantic AI |

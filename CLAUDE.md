@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **Ingestion:** CocoIndex pipeline + Docling/PyMuPDF for file processing, Jina/Voyage for embeddings
 - **Vector Store:** Qdrant (dense + optional ColBERT multi-vector)
-- **Knowledge Graph:** Neo4j via Graphiti for entity/relationship extraction
+- **Knowledge Graph:** Neo4j with pluggable engine — Graphiti (LLM) or GLiNER2 (local CPU) via `GRAPH_ENGINE`
 - **MCP Server:** FastMCP (SSE or stdio transport) exposing search tools
 - **Agent:** Pydantic AI agent with MCP tool access
 - **LLM:** Anthropic or OpenAI-compatible (configurable via `LLM_API_TYPE`)
@@ -31,9 +31,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 │   ├── file_processor.py   # PDF/image processing (Docling + PyMuPDF fallback)
 │   ├── embedder.py         # Embedding dispatcher
 │   ├── embedders/          # Provider implementations (jina.py, voyage.py)
+│   ├── graph_engine.py     # GraphEngine protocol + factory (Graphiti/GLiNER2)
 │   ├── entity_extractor.py # LLM-based entity extraction
-│   ├── graph_writer.py     # Neo4j graph writer
-│   ├── graphiti_client.py  # Graphiti adapter for knowledge graph
+│   ├── graph_writer.py     # Graphiti-based graph writer
+│   ├── graphiti_client.py  # Graphiti client singleton
 │   ├── cocoindex_ops.py    # CocoIndex operations
 │   ├── qdrant_setup.py     # Qdrant collection setup
 │   └── neo4j_setup.py      # Neo4j schema setup
@@ -50,7 +51,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 │       └── vlm_generator.py
 ├── tests/                  # Test suite
 ├── docs/                   # MkDocs documentation
-├── plans/                       # Files for brainstorming and further implemenation planning
+├── plans/                  # Disposable brainstorming & implementation plans (NOT source of truth)
 ├── scripts/                # Utility scripts
 ├── docker-compose.yml      # Qdrant + Neo4j + PostgreSQL
 ├── pyproject.toml          # Python config (single source of truth)
@@ -138,6 +139,8 @@ Types: feat, fix, docs, style, refactor, test, chore
 
 
 ## Planning
+
+`plans/` contains disposable brainstorming notes and implementation plans. These are working documents used during development — they are **not** source-of-truth documentation. The authoritative docs live in `docs/`. Do not update plan files when updating actual documentation or code; they can go stale without harm.
 
 All plan files go into `./plans/` in branch-specific subdirectories. The subdirectory name is the branch name with `/` replaced by `-`.
 

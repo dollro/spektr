@@ -52,14 +52,19 @@ Returned by the ColBERT multi-vector visual search tool. Unlike `SearchResult`, 
 
 ## GraphFact
 
-Returned by the knowledge graph search tool. Represents a single fact extracted from the Neo4j temporal knowledge graph via Graphiti.
+Returned by the knowledge graph search tool. Represents a single fact extracted from Neo4j. Fields populated depend on the active graph engine (`GRAPH_ENGINE` setting).
 
 | Field | Type | Default | Description |
 |-|-|-|-|
 | `fact` | `str` | — | The extracted fact or relationship statement |
 | `source` | `str \| None` | `None` | Source document the fact was extracted from |
-| `created_at` | `str \| None` | `None` | ISO 8601 timestamp when the fact was created |
-| `expired_at` | `str \| None` | `None` | ISO 8601 timestamp when the fact was superseded (if applicable) |
+| `created_at` | `str \| None` | `None` | ISO 8601 timestamp when the fact was created (Graphiti) |
+| `expired_at` | `str \| None` | `None` | ISO 8601 timestamp when the fact was superseded (Graphiti) |
+| `entities` | `list[str] \| None` | `None` | Entity names involved in the fact (GLiNER) |
+| `relation_type` | `str \| None` | `None` | Typed relationship label (GLiNER) |
+| `confidence` | `float \| None` | `None` | Extraction confidence score (GLiNER) |
+
+Graphiti example:
 
 ```json
 {
@@ -67,6 +72,17 @@ Returned by the knowledge graph search tool. Represents a single fact extracted 
   "source": "architecture-overview.md",
   "created_at": "2026-01-15T10:30:00Z",
   "expired_at": null
+}
+```
+
+GLiNER example:
+
+```json
+{
+  "fact": "Spektr uses Qdrant",
+  "entities": ["Spektr", "Qdrant"],
+  "relation_type": "USES",
+  "confidence": 1.0
 }
 ```
 

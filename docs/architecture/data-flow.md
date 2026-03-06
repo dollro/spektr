@@ -16,7 +16,7 @@ sequenceDiagram
     participant FP as File Processor
     participant Jina as Jina v4 API
     participant QD as Qdrant
-    participant Gr as Graphiti (Neo4j)
+    participant GE as Graph Engine<br/>(Graphiti or GLiNER2)
     participant PG as PostgreSQL
 
     S3->>SQS: S3 event notification (create/update)
@@ -45,8 +45,8 @@ sequenceDiagram
             Coco->>QD: Upsert to documents_dense
         end
 
-        Coco->>Gr: add_episode(chunk_text, source, time)
-        Note over Gr: Graphiti extracts entities,<br/>discovers relationships,<br/>tracks temporal metadata
+        Coco->>GE: engine.ingest(chunks, source_key)
+        Note over GE: Graphiti: LLM extraction + episodes<br/>GLiNER2: local model + Cypher MERGE
     end
 
     loop Each PDF page
@@ -78,7 +78,7 @@ sequenceDiagram
 
 - **Deterministic IDs** -- chunk and point IDs are derived from `{source_file}::p{page}::c{chunk_idx}` via UUID5, making upserts idempotent.
 - **Dual embedding for visual content** -- images get both a dense single-vector (for standard NN search) and ColBERT multi-vectors (for layout-aware retrieval). Text chunks get only dense vectors.
-- **Graphiti episode ingestion** -- text chunks are submitted as episodes. Graphiti's internal LLM pipeline handles entity extraction, deduplication, and relationship discovery. No separate entity extraction step in Spektr's code.
+- **Pluggable graph engine** -- text chunks are passed to `engine.ingest()`. Graphiti submits them as LLM-processed episodes; GLiNER2 extracts entities and relations locally and writes directly to Neo4j. See [Knowledge Graph](../ingestion/knowledge-graph.md).
 
 ---
 
@@ -94,7 +94,7 @@ sequenceDiagram
     participant Tool as Search Tool
     participant Jina as Jina v4 API
     participant QD as Qdrant
-    participant Gr as Graphiti (Neo4j)
+    participant GE as Graph Engine (Neo4j)
 
     Agent->>MCP: tools/call (MCP protocol)
     MCP->>Auth: Check Authorization header
@@ -118,16 +118,16 @@ sequenceDiagram
             Tool->>Tool: generate_visual_answer(query, results)
         end
     else graph_search
-        Tool->>Gr: client.search(query)
-        Gr-->>Tool: edges with facts, sources, timestamps
+        Tool->>GE: engine.search(query)
+        GE-->>Tool: GraphFact results
     else hybrid_search
         par Parallel execution
             Tool->>QD: vector_search(query)
         and
-            Tool->>Gr: graph_search(query)
+            Tool->>GE: graph_search(query)
         end
         QD-->>Tool: vector results
-        Gr-->>Tool: graph results
+        GE-->>Tool: graph results
         opt Reranking enabled
             Tool->>Tool: rerank(query, vector_results)
         end
@@ -143,7 +143,7 @@ sequenceDiagram
 |-|-|-|-|
 | `vector_search` | Qdrant `documents_dense` | Dense 512-d | General semantic search over text and images |
 | `visual_search` | Qdrant `documents_multivec` | ColBERT 128-d | Charts, diagrams, tables, formatted content |
-| `graph_search` | Neo4j via Graphiti | None (Graphiti semantic) | Entity lookup, temporal facts, relationships |
+| `graph_search` | Neo4j via GraphEngine | Graphiti semantic or Neo4j full-text | Entity lookup, facts, relationships |
 | `hybrid_search` | Both (parallel) | Dense 512-d | Comprehensive retrieval combining both stores |
 
 ### Filtering and reranking

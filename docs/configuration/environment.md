@@ -117,8 +117,9 @@ When `LLM_BASE_URL` is set, the **agent** uses an OpenAI-compatible client regar
 | `RERANK_ENABLED` | `false` | No | Enable Jina reranker for search results |
 | `VLM_GENERATION_ENABLED` | `false` | No | Enable VLM-based generation for visual search |
 | `MULTIVEC_ENABLED` | `false` | No | Enable ColBERT multi-vector embeddings (requires `jina-colbert-v2`, Jina only) |
-| `GRAPH_ENABLED` | `true` | No | Enable Neo4j knowledge graph via Graphiti (LLM-heavy) |
-| `GRAPH_SEMAPHORE_LIMIT` | `10` | No | Max concurrent LLM calls within Graphiti's internal pipeline |
+| `GRAPH_ENABLED` | `true` | No | Enable Neo4j knowledge graph ingestion and search |
+| `GRAPH_ENGINE` | `graphiti` | No | Graph extraction engine: `graphiti` (LLM-based) or `gliner` (local CPU model, zero API cost). See [Knowledge Graph](../ingestion/knowledge-graph.md) |
+| `GRAPH_SEMAPHORE_LIMIT` | `10` | No | Max concurrent LLM calls within Graphiti's internal pipeline (Graphiti engine only) |
 
 ## Observability
 

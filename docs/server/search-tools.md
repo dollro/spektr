@@ -93,7 +93,7 @@ When VLM generation is enabled, the first element may be a VLM answer:
 
 ## `graph_search`
 
-Searches the Neo4j knowledge graph via Graphiti for entities, relationships, and temporal metadata. Returns facts with provenance and validity timestamps.
+Searches the Neo4j knowledge graph for entities and relationships. The search backend depends on the `GRAPH_ENGINE` setting -- Graphiti uses its semantic search API, GLiNER2 uses a Neo4j full-text index with relationship traversal. Both return `GraphFact` results.
 
 ### Parameters
 
@@ -111,8 +111,11 @@ Returns `list[GraphFact]`:
 |-|-|-|
 | `fact` | `str` | The extracted fact or relationship |
 | `source` | `str \| None` | Description of the source |
-| `created_at` | `str \| None` | Timestamp when the fact was created |
-| `expired_at` | `str \| None` | Timestamp when the fact was superseded (null if still valid) |
+| `created_at` | `str \| None` | Timestamp when the fact was created (Graphiti only) |
+| `expired_at` | `str \| None` | Timestamp when the fact was superseded (Graphiti only) |
+| `entities` | `list[str] \| None` | Entity names in the fact (GLiNER only) |
+| `relation_type` | `str \| None` | Typed relationship label (GLiNER only) |
+| `confidence` | `float \| None` | Extraction confidence (GLiNER only) |
 
 ### Example
 

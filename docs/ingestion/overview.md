@@ -1,6 +1,6 @@
 # Ingestion Pipeline Overview
 
-The ingestion pipeline processes documents from AWS S3 (or a local directory) into a dual knowledge store: **Qdrant** for vector search and **Neo4j** (via Graphiti) for temporal knowledge graph queries.
+The ingestion pipeline processes documents from AWS S3 (or a local directory) into a dual knowledge store: **Qdrant** for vector search and **Neo4j** for knowledge graph queries. The graph extraction engine is pluggable via `GRAPH_ENGINE` (Graphiti or GLiNER2).
 
 ## Pipeline Stages
 
@@ -12,7 +12,7 @@ flowchart LR
     Chunk --> EmbedText["Jina v4\nEmbed (text)"]
     Embed --> Qdrant["Qdrant\n(dense + multivec)"]
     EmbedText --> Qdrant
-    Chunk --> Extract["Graphiti\nEpisode Ingest"]
+    Chunk --> Extract["Graph Engine\n(Graphiti or GLiNER2)"]
     Extract --> Neo4j["Neo4j\n(knowledge graph)"]
 
     style S3 fill:#e8f4fd
@@ -29,7 +29,7 @@ flowchart LR
 | Chunk | `file_processor.py` | `semantic_chunk()` splits text on paragraph boundaries |
 | Embed | `embedders/jina.py` or `embedders/voyage.py` | Provider-agnostic dense (512d, Matryoshka) + ColBERT (128d) embeddings |
 | Store | `pipeline.py` | Upsert vectors to Qdrant collections |
-| Graph | `graph_writer.py` / `graphiti_client.py` | Ingest text chunks as Graphiti episodes into Neo4j |
+| Graph | `graph_engine.py` | Ingest text chunks into Neo4j via pluggable engine (Graphiti or GLiNER2) |
 
 ## Supported File Types
 
@@ -57,7 +57,7 @@ flowchart TD
 
     TXT --> SemanticChunk["Semantic chunk\n(512 chars max)"]
     SemanticChunk --> DenseTxt["Dense embed (512d)"]
-    SemanticChunk --> Graphiti["Graphiti episode\ningest"]
+    SemanticChunk --> Graphiti["Graph engine\ningest"]
 
     DenseImg --> QdrantDense["documents_dense"]
     Thumb --> QdrantDense
@@ -73,7 +73,7 @@ flowchart TD
 - **State tracked in PostgreSQL** -- CocoIndex maintains `ingestion_log` for incremental processing.
 - **Text tasks run concurrently, image tasks run sequentially** -- image embeddings consume 50-100k+ tokens each and would blow TPM limits if run in parallel. The pipeline splits tasks by type and processes them accordingly.
 - **Per-file timeout with graceful cancellation** -- each file gets a `PIPELINE_TIMEOUT` (default 3600s). On expiry, `asyncio.wait_for` cancels all in-flight tasks cleanly instead of crashing the executor pool.
-- **Concurrent Graphiti ingestion** -- episode ingestion uses `asyncio.gather` bounded by a semaphore (`GRAPHITI_CONCURRENCY`, default 3), replacing the previous sequential loop. This significantly reduces wall time for large documents with many chunks.
+- **Pluggable graph engine** -- `GRAPH_ENGINE` selects Graphiti (LLM-based, ~29 min/doc) or GLiNER2 (local CPU, ~15 sec/doc). Both implement the same `GraphEngine` protocol. See [Knowledge Graph](knowledge-graph.md).
 - **TPM-aware rate limiting** -- a dual TokenBucket system (RPM + TPM) estimates token cost before each API call and throttles accordingly.
 - **Graphiti uses the same Jina embedder** -- a thin adapter (`_JinaGraphitiEmbedder`) delegates graph embedding requests to the project's Jina/Voyage embedder, sharing rate limiters.
 
@@ -86,6 +86,7 @@ flowchart TD
 | `embedders/jina.py` | [Embeddings](embeddings.md) |
 | `embedders/voyage.py` | [Embeddings](embeddings.md) |
 | `cocoindex_ops.py` | [CocoIndex Pipeline](cocoindex.md) |
+| `graph_engine.py` | [Knowledge Graph](knowledge-graph.md) |
 | `graph_writer.py` | [Knowledge Graph](knowledge-graph.md) |
 | `graphiti_client.py` | [Knowledge Graph](knowledge-graph.md) |
 | `pipeline.py` | [CocoIndex Pipeline](cocoindex.md) |

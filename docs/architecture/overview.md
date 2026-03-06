@@ -1,6 +1,6 @@
 # Architecture Overview
 
-Spektr is a hybrid GraphRAG + multimodal vector search system exposed as an MCP server. Documents flow in from AWS S3, get processed into embeddings and a temporal knowledge graph, and are made searchable by LLM agents through four MCP tools.
+Spektr is a hybrid GraphRAG + multimodal vector search system exposed as an MCP server. Documents flow in from AWS S3, get processed into embeddings and a knowledge graph, and are made searchable by LLM agents through four MCP tools.
 
 ## System diagram
 
@@ -16,12 +16,12 @@ graph TB
         Classify[MIME Classify]
         Chunk[Semantic Chunking]
         Embed[Jina v4 Embedder]
-        Extract[Graphiti Episode Ingest]
+        Extract[Graph Engine\nGraphiti or GLiNER2]
     end
 
     subgraph Storage
         Qdrant[(Qdrant)]
-        Neo4j[(Neo4j + Graphiti)]
+        Neo4j[(Neo4j)]
         PG[(PostgreSQL)]
     end
 
@@ -41,7 +41,7 @@ graph TB
     Chunk --> Extract
     Embed -->|dense 512-d| Qdrant
     Embed -->|ColBERT 128-d| Qdrant
-    Extract -->|episodes| Neo4j
+    Extract -->|entities + relations| Neo4j
     Pipeline -->|state| PG
 
     Agent -->|MCP protocol| Auth
@@ -60,7 +60,7 @@ graph TB
 | **CocoIndex** | Pipeline orchestrator | Manages incremental state, source reading, and lineage tracking via PostgreSQL |
 | **Jina v4 API** | Embedding model | Single model for text and images; produces dense 512-d single-vectors (Matryoshka truncation) and ColBERT 128-d multi-vectors |
 | **Qdrant** | Vector store | Two collections: `documents_dense` (single-vector NN search) and `documents_multivec` (ColBERT late interaction) |
-| **Neo4j + Graphiti** | Knowledge graph | Temporal entity-relationship graph; Graphiti handles entity extraction, deduplication, and temporal metadata via its LLM pipeline |
+| **Neo4j** | Knowledge graph | Entity-relationship graph. Pluggable extraction via `GRAPH_ENGINE`: Graphiti (LLM-based, temporal metadata, deduplication) or GLiNER2 (local 205MB model, zero API cost, ~130ms/chunk on CPU) |
 | **PostgreSQL** | Pipeline state | CocoIndex stores flow state and ingestion logs |
 | **FastMCP** | MCP server | Registers four search tools; supports SSE and stdio transports; optional Bearer auth middleware |
 | **Pydantic AI** | Agent framework | Connects to MCP server, binds tools, orchestrates multi-step retrieval |
@@ -78,9 +78,14 @@ Jina v4 (`jina-embeddings-v4`) handles text and images in a unified embedding sp
 
 Separating collections keeps index configurations independent and avoids mixed-mode query overhead.
 
-### Why Neo4j + Graphiti instead of raw Cypher?
+### Why a pluggable graph engine?
 
-Graphiti provides temporal awareness out of the box. It tracks when entities and relationships were created and when they expired, so agents can distinguish current facts from outdated ones. Graphiti also handles entity extraction, deduplication, and relationship discovery via its own LLM pipeline -- the ingestion code just submits text episodes.
+The graph extraction layer is abstracted behind a `GraphEngine` protocol (`ingestion/graph_engine.py`) with two implementations:
+
+- **Graphiti** (`GRAPH_ENGINE=graphiti`, default) -- LLM-based extraction with temporal awareness. Tracks when facts were created and expired. Rich deduplication and relationship discovery, but each chunk triggers LLM API calls (~29 min for a 74-chunk PDF).
+- **GLiNER2** (`GRAPH_ENGINE=gliner`) -- local 205MB model doing NER + relation extraction in a single forward pass. Zero API cost, ~5-15 seconds for the same PDF. Entities and typed relationships are written directly to Neo4j via Cypher MERGE. Matches GPT-4o NER quality (0.59 F1 on CrossNER).
+
+Both engines implement `ingest()`, `search()`, and `close()`, and return the same `GraphFact` model. Pipeline and search tools are engine-agnostic — swap engines via one env var with zero code changes.
 
 ### Why CocoIndex?
 
