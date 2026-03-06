@@ -78,9 +78,7 @@ class TestRagTargetConnectorMutate:
         spec = RagTarget(qdrant_url="http://localhost:6333")
         values = RagTargetValues(result="keep.pdf")
         with patch("ingestion.target_connector._handle_delete") as mock_del:
-            RagTargetConnector.mutate(
-                (spec, {"delete.pdf": None, "keep.pdf": values})
-            )
+            RagTargetConnector.mutate((spec, {"delete.pdf": None, "keep.pdf": values}))
         mock_del.assert_called_once_with("delete.pdf")
 
 
