@@ -104,7 +104,7 @@ async def vector_search(
             results.append(
                 SearchResult(
                     score=point.score,
-                    text=payload.get("text", ""),
+                    text=payload.get("text_content", payload.get("text", "")),
                     source_file=payload.get("source_file", ""),
                     page_number=payload.get("page_number", 0),
                     content_type=payload.get("content_type", ""),

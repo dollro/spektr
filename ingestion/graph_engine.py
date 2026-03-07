@@ -284,7 +284,7 @@ class GLiNEREngine:
         seen: set[str] = set()
 
         async with self._driver.session() as session:
-            result = await session.run(cypher, query=query, limit=limit)
+            result = await session.run(cypher, parameters={"query": query, "limit": limit})
             records = await result.data()
 
         for rec in records:
