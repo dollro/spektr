@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -132,6 +133,78 @@ class TestIngestTranscript:
         assert data["vector_indexed"] is True
         assert data["graph_status"] == "processing"
         mock_qdrant.upsert.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_graphiti_background_task_called(
+        self,
+        mock_qdrant,
+        mock_embedder,
+        mock_graphiti,
+    ) -> None:
+        """Background task calls Graphiti add_episode with correct args."""
+        import ingestion.live_ingest as mod
+
+        mod._active_session = {"session_id": "meeting-1"}
+
+        with (
+            patch("ingestion.live_ingest._get_qdrant_client", return_value=mock_qdrant),
+            patch("ingestion.live_ingest._get_embedder", return_value=mock_embedder),
+            patch("ingestion.live_ingest.get_graphiti", return_value=mock_graphiti),
+        ):
+            from ingestion.live_ingest import app
+
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                await client.post(
+                    "/ingest/transcript",
+                    json={
+                        "session_id": "meeting-1",
+                        "text": "Alice: Hello everyone.",
+                        "timestamp": "2026-03-06T14:30:00Z",
+                        "speaker": "Alice",
+                    },
+                )
+                # Let the background task complete
+                await asyncio.sleep(0.1)
+
+        mock_graphiti.add_episode.assert_called_once()
+        call_kwargs = mock_graphiti.add_episode.call_args[1]
+        assert call_kwargs["episode_body"] == "Alice: Hello everyone."
+        assert call_kwargs["group_id"] == "meeting-1"
+        assert "Alice" in call_kwargs["source_description"]
+
+    @pytest.mark.asyncio
+    async def test_ingest_session_mismatch_rejected(
+        self,
+        mock_qdrant,
+        mock_embedder,
+    ) -> None:
+        """Ingesting with a mismatched session_id returns 400."""
+        import ingestion.live_ingest as mod
+
+        mod._active_session = {"session_id": "meeting-1"}
+
+        with (
+            patch("ingestion.live_ingest._get_qdrant_client", return_value=mock_qdrant),
+            patch("ingestion.live_ingest._get_embedder", return_value=mock_embedder),
+        ):
+            from ingestion.live_ingest import app
+
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                resp = await client.post(
+                    "/ingest/transcript",
+                    json={
+                        "session_id": "wrong-session",
+                        "text": "Hello",
+                        "timestamp": "2026-03-06T14:30:00Z",
+                    },
+                )
+
+        assert resp.status_code == 400
+        assert "mismatch" in resp.json()["detail"].lower()
 
     @pytest.mark.asyncio
     async def test_ingest_without_active_session_rejected(

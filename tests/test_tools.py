@@ -871,7 +871,7 @@ class TestSessionAwareGraphSearch:
         """When session_id is set, queries both Graphiti and GLiNER."""
         mock_edge = MagicMock()
         mock_edge.fact = "Contract valued at 1.2M"
-        mock_edge.source_description = "graphiti"
+        mock_edge.configure_mock(name="graphiti")
         mock_edge.created_at = "2026-03-06T14:32:00Z"
         mock_edge.expired_at = None
 

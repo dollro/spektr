@@ -58,7 +58,7 @@ class GraphitiEngine:
         return [
             GraphFact(
                 fact=edge.fact,
-                source=edge.source_description,
+                source=edge.name,
                 created_at=str(edge.created_at),
                 expired_at=(str(edge.expired_at) if edge.expired_at else None),
             )

@@ -141,7 +141,7 @@ class TestGraphitiEngine:
 
         mock_edge = MagicMock()
         mock_edge.fact = "Apple is a company"
-        mock_edge.source_description = "report.pdf"
+        mock_edge.configure_mock(name="report.pdf")
         mock_edge.created_at = "2026-01-01"
         mock_edge.expired_at = None
 
