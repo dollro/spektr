@@ -130,9 +130,24 @@ Entity and relationship types are defined in `config/constants.py` as dicts with
 
 **Entity types (14):** `person`, `organization`, `location`, `date_time`, `monetary_value`, `document`, `product`, `technology`, `metric`, `event`, `legal_term`, `role`, `concept`, `requirement`
 
-**Relationship types (12):** `created_by`, `owned_by`, `uses`, `part_of`, `related_to`, `measured_by`, `requires`, `applies_to`, `succeeds`, `conflicts_with`, `valued_at`, `scheduled_for`
+**Relationship types (12):** `created_by`, `owned_by`, `uses`, `part_of`, `mentions`, `measured_by`, `requires`, `applies_to`, `succeeds`, `conflicts_with`, `valued_at`, `scheduled_for`
 
 These descriptions are passed directly to `GLiNER2.create_schema().entities()` and `.relations()`, which accept `dict[str, str]` for description-enhanced extraction.
+
+#### Domain/range constraints
+
+Each relationship type has domain/range constraints (`RELATION_CONSTRAINTS` in `constants.py`) that define which entity types are valid as source and target. During GLiNER ingestion, extracted triples that violate these constraints are silently dropped. This prevents nonsensical edges (e.g. `metric -[valued_at]-> date_time`) from polluting the graph.
+
+Key constraint examples:
+
+| Relationship | Valid sources | Valid targets |
+|-|-|-|
+| `created_by` | person, org, product, tech, document, event | person, org |
+| `valued_at` | product, org, document, event | monetary_value |
+| `scheduled_for` | event, product, document, requirement | date_time |
+| `mentions` | person, org, document, event, product, tech | any |
+
+Schema-induced relationship types (from dynamic induction) bypass constraint checks, since their domain/range is not known at compile time.
 
 #### Dynamic schema induction
 
@@ -171,6 +186,7 @@ For each merged page text in a single Neo4j session:
 
 Before writing to Neo4j, extracted data is filtered:
 
+- **Domain/range constraint violations** — triples where entity types don't match the relationship's allowed sources/targets are dropped
 - **Self-referential relationships** (entity → itself) are skipped
 - **Short entity names** (< 2 chars) are discarded
 - **Stopword entities** (common English words like "the", "is", "copy") are filtered out

@@ -1,5 +1,35 @@
 # CLAUDE.md — Spektr
 
+## ⚠️ Mandatory: Read Docs Before Code
+
+Before modifying or exploring ANY module, you MUST first read the corresponding page(s) in `docs/`. Do NOT start by browsing source files or running `find`/`grep` across the codebase.
+
+**Workflow for every task:**
+
+1. Identify which area of the project the task touches
+2. Read the matching `docs/` page(s) below — they contain the "why" and architectural decisions not visible in code
+3. Only then explore the relevant source files for the "how"
+4. Never skip steps 1–2
+
+**Doc → Code mapping:**
+
+| Area | Read first | Then explore |
+|---|---|---|
+| Ingestion (bulk, Path A) | `docs/ingestion/` | `ingestion/pipeline.py`, `file_processor.py`, `embedder.py`, `graph_engine.py` |
+| Ingestion (live, Path B) | `docs/ingestion/` | `ingestion/live_ingest.py`, `graphiti_client.py` |
+| MCP server & tools | `docs/mcp-server/` | `server/mcp_server.py`, `server/tools/` |
+| Vector store (Qdrant) | `docs/infrastructure/` | `ingestion/qdrant_setup.py`, `ingestion/embedders/` |
+| Knowledge graph (Neo4j) | `docs/infrastructure/` | `ingestion/neo4j_setup.py`, `ingestion/graph_writer.py` |
+| Entity extraction & schema | `docs/ingestion/` | `ingestion/entity_extractor.py`, `schema_inducer.py` |
+| Agent | `docs/agent/` | `agent/` |
+| Configuration | `docs/configuration/` | `config/settings.py`, `config/constants.py` |
+
+> Adjust paths above if your `docs/` structure differs — the principle stands: always docs first.
+
+**`plans/` is disposable brainstorming, NOT authoritative documentation. Do not treat plan files as source of truth. Do not update them when changing code or docs.**
+
+---
+
 ## Project Overview
 
 **Spektr** — a RAG-as-MCP-Server pipeline. Dual-path ingestion: batch documents (PDF, images) from local filesystem or S3, and real-time streaming text via HTTP. Builds vector embeddings (Qdrant) and a knowledge graph (Neo4j), then exposes session-aware search tools via an MCP server for AI agents.
@@ -51,20 +81,14 @@
 │       ├── reranker.py
 │       └── vlm_generator.py
 ├── tests/                  # Test suite
-├── docs/                   # MkDocs documentation (as-is architecture, guides, API)
-├── plans/                  # Disposable brainstorming & implementation plans (NOT source of truth)
+├── docs/                   # MkDocs documentation — READ FIRST (see top of file)
+├── plans/                  # Disposable brainstorming — NOT source of truth
 ├── scripts/                # Utility scripts
 ├── docker-compose.yml      # Qdrant + Neo4j + PostgreSQL
 ├── pyproject.toml          # Python config (single source of truth)
 ├── Makefile                # docs-serve, docs-build
 └── mkdocs.yml              # Documentation site config
 ```
-
-**Start here:** When exploring an unfamiliar area, read the relevant `docs/` page first for the "why", then explore the code for the "how".
-
-IMPORTANT: `plans/` contains disposable brainstorming notes and implementation plans. These are working documents used during development — they are **not** source-of-truth documentation. The authoritative docs live in `docs/`. Do not update plan files when updating actual documentation or code; they can go stale without harm.
-
-
 
 ## Quick Start
 
@@ -108,7 +132,7 @@ make docs-build                        # Build docs
 
 Branches: `main` (production), `develop` (ongoing development), `feat/*`, `fix/*`, `chore/*`
 
-Merge flow: `chore-xyz` → `develop` → `main`
+Merge flow: `feature-branch` → `develop` → `main`
 
 ```
 <type>(<scope>): <subject>
@@ -118,11 +142,11 @@ Types: feat, fix, docs, style, refactor, test, chore
 
 **Never include "claude code" or "written by claude" in commit messages.**
 
-
 ## Planning
 
-IMPORTANT: All plan files go into `./plans/` in branch-specific subdirectories. The subdirectory name is the branch name with `/` replaced by `-`.
-Example: on branch `chore/pydantic` → plans go in `./plans/chore-pydantic/`
-Use the `/branch` skill to create a new branch — it automatically creates the corresponding plan directory.
+All plan files go into `./plans/` in branch-specific subdirectories. The subdirectory name is the branch name with `/` replaced by `-`.
 
+Example: on branch `chore/pydantic` → plans go in `./plans/chore-pydantic/`
+
+Use the `/branch` skill to create a new branch — it automatically creates the corresponding plan directory.
 

@@ -761,7 +761,7 @@ class Entity(BaseModel):
 class Relationship(BaseModel):
     source: str         # entity name
     target: str         # entity name
-    relation: str       # created_by, uses, part_of, related_to, improves, etc.
+    relation: str       # created_by, uses, part_of, mentions, improves, etc.
     properties: dict = {}
 
 class ExtractionResult(BaseModel):
@@ -777,7 +777,7 @@ Return JSON with this exact structure:
     {"name": "...", "type": "person|organization|technology|concept|metric|location|event", "description": "..."}
   ],
   "relationships": [
-    {"source": "entity_name", "target": "entity_name", "relation": "created_by|uses|part_of|related_to|improves|measured_by|located_in|describes", "properties": {}}
+    {"source": "entity_name", "target": "entity_name", "relation": "created_by|uses|part_of|mentions|improves|measured_by|located_in|describes", "properties": {}}
   ]
 }
 

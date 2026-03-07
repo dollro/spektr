@@ -184,6 +184,21 @@ class GLiNEREngine:
         """Return True if the entity name is too short or a stopword."""
         return len(name) < self._MIN_ENTITY_LEN or name.lower() in self._STOPWORDS
 
+    @staticmethod
+    def _violates_constraint(
+        rel_key: str,
+        head_types: set[str],
+        tail_types: set[str],
+    ) -> bool:
+        """Return True if the triple violates domain/range constraints."""
+        from config.constants import RELATION_CONSTRAINTS
+
+        constraint = RELATION_CONSTRAINTS.get(rel_key)
+        if constraint is None:
+            return False  # unknown rel — allow (schema-induced types)
+        allowed_sources, allowed_targets = constraint
+        return not (head_types & allowed_sources and tail_types & allowed_targets)
+
     async def ingest(
         self,
         chunks: list[TextChunk],
@@ -214,6 +229,13 @@ class GLiNEREngine:
                 entities = result.get("entities", {})
                 relations = result.get("relation_extraction", {})
 
+                # Build name → types reverse map for constraint validation
+                name_types: dict[str, set[str]] = {}
+                for entity_type, names in entities.items():
+                    for name in names:
+                        normalized = name.strip().title()
+                        name_types.setdefault(normalized, set()).add(entity_type)
+
                 # Upsert entities — MERGE on name only, accumulate types
                 for entity_type, names in entities.items():
                     for name in names:
@@ -239,6 +261,7 @@ class GLiNEREngine:
 
                 # Upsert relationships with post-processing filters
                 for rel_type, pairs in relations.items():
+                    rel_key = rel_type.lower().replace(" ", "_")
                     for head, tail in pairs:
                         head_norm = head.strip().title()
                         tail_norm = tail.strip().title()
@@ -247,6 +270,17 @@ class GLiNEREngine:
                         if head_norm == tail_norm:
                             continue  # skip self-referential
                         if self._is_noise(head_norm) or self._is_noise(tail_norm):
+                            continue
+                        # Domain/range constraint validation
+                        h_types = name_types.get(head_norm, set())
+                        t_types = name_types.get(tail_norm, set())
+                        if self._violates_constraint(rel_key, h_types, t_types):
+                            logger.debug(
+                                "Dropped %s -[%s]-> %s (constraint violation)",
+                                head_norm,
+                                rel_key,
+                                tail_norm,
+                            )
                             continue
                         await session.run(
                             "MATCH (s:Entity {name: $source}) "

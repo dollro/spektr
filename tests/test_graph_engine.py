@@ -416,6 +416,140 @@ class TestGLiNEREngineSearch:
         assert len(results) == 1
 
 
+class TestRelationConstraints:
+    def test_constraints_cover_all_relationship_types(self) -> None:
+        """Every relationship type has a domain/range constraint entry."""
+        from config.constants import RELATION_CONSTRAINTS, RELATIONSHIP_TYPES
+
+        for rel in RELATIONSHIP_TYPES:
+            assert rel in RELATION_CONSTRAINTS, f"Missing constraint for '{rel}'"
+
+    def test_constraint_types_are_valid_entity_types(self) -> None:
+        """All types referenced in constraints exist in ENTITY_TYPES."""
+        from config.constants import ENTITY_TYPES, RELATION_CONSTRAINTS
+
+        valid = set(ENTITY_TYPES)
+        for rel, (sources, targets) in RELATION_CONSTRAINTS.items():
+            invalid_src = sources - valid
+            invalid_tgt = targets - valid
+            assert not invalid_src, f"{rel} has invalid source types: {invalid_src}"
+            assert not invalid_tgt, f"{rel} has invalid target types: {invalid_tgt}"
+
+    def test_valued_at_requires_monetary_target(self) -> None:
+        """valued_at only allows monetary_value as target."""
+        from config.constants import RELATION_CONSTRAINTS
+
+        _, targets = RELATION_CONSTRAINTS["valued_at"]
+        assert targets == frozenset({"monetary_value"})
+
+    def test_scheduled_for_requires_datetime_target(self) -> None:
+        """scheduled_for only allows date_time as target."""
+        from config.constants import RELATION_CONSTRAINTS
+
+        _, targets = RELATION_CONSTRAINTS["scheduled_for"]
+        assert targets == frozenset({"date_time"})
+
+    def test_created_by_target_is_agent(self) -> None:
+        """created_by target must be person or organization."""
+        from config.constants import RELATION_CONSTRAINTS
+
+        _, targets = RELATION_CONSTRAINTS["created_by"]
+        assert targets == frozenset({"person", "organization"})
+
+
+class TestGLiNERConstraintValidation:
+    def test_violates_constraint_drops_invalid_triple(self) -> None:
+        """Invalid domain/range pair is rejected."""
+        from ingestion.graph_engine import GLiNEREngine
+
+        # concept -[valued_at]-> date_time should be rejected
+        assert GLiNEREngine._violates_constraint(
+            "valued_at",
+            head_types={"concept"},
+            tail_types={"date_time"},
+        )
+
+    def test_violates_constraint_allows_valid_triple(self) -> None:
+        """Valid domain/range pair is accepted."""
+        from ingestion.graph_engine import GLiNEREngine
+
+        # product -[valued_at]-> monetary_value should pass
+        assert not GLiNEREngine._violates_constraint(
+            "valued_at",
+            head_types={"product"},
+            tail_types={"monetary_value"},
+        )
+
+    def test_violates_constraint_allows_unknown_rel(self) -> None:
+        """Schema-induced relationship types (not in base) are allowed."""
+        from ingestion.graph_engine import GLiNEREngine
+
+        assert not GLiNEREngine._violates_constraint(
+            "governs",
+            head_types={"document"},
+            tail_types={"organization"},
+        )
+
+    def test_violates_constraint_multi_typed_entity(self) -> None:
+        """Entity with multiple types passes if ANY type matches."""
+        from ingestion.graph_engine import GLiNEREngine
+
+        # entity typed as both concept and product — product is valid source for valued_at
+        assert not GLiNEREngine._violates_constraint(
+            "valued_at",
+            head_types={"concept", "product"},
+            tail_types={"monetary_value"},
+        )
+
+    @pytest.mark.asyncio
+    async def test_ingest_drops_constraint_violating_relations(self) -> None:
+        """Relations violating domain/range constraints are not written to Neo4j."""
+        from ingestion.graph_engine import GLiNEREngine
+
+        long_text = (
+            "The quarterly revenue metric of $5M was reported on January 15th 2026. "
+            "The financial report covers all divisions across North America and Europe "
+            "including manufacturing facilities and corporate offices worldwide."
+        )
+        chunks = [TextChunk(text=long_text, chunk_index=0, page_number=1)]
+
+        mock_extractor = MagicMock()
+        mock_extractor.extract.return_value = {
+            "entities": {
+                "metric": ["Revenue"],
+                "date_time": ["January 15Th 2026"],
+                "organization": ["Acme Corp"],
+            },
+            "relation_extraction": {
+                # valid: organization -[valued_at]-> monetary_value? NO — metric is not monetary_value
+                # invalid: metric -[valued_at]-> date_time
+                "valued_at": [("Revenue", "January 15th 2026")],
+                # valid: organization -[scheduled_for]-> date_time? NO — org not in sources
+                "scheduled_for": [("Acme Corp", "January 15th 2026")],
+            },
+        }
+
+        mock_session = AsyncMock()
+        mock_session.run = AsyncMock()
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+
+        mock_driver = MagicMock()
+        mock_driver.session.return_value = mock_session
+
+        engine = GLiNEREngine.__new__(GLiNEREngine)
+        engine._extractor = mock_extractor
+        engine._driver = mock_driver
+        engine._schema = MagicMock()
+
+        await engine.ingest(chunks, "report.pdf")
+
+        # Only entity MERGEs should be written (3 entities), zero relationships
+        calls = [str(c) for c in mock_session.run.call_args_list]
+        rel_calls = [c for c in calls if "apoc.merge.relationship" in c]
+        assert len(rel_calls) == 0
+
+
 class TestGLiNEREngineDynamicSchema:
     @pytest.mark.asyncio
     async def test_ingest_with_custom_schema(self) -> None:
