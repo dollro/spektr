@@ -87,6 +87,7 @@ class Settings(BaseSettings):
 
     # Live ingestion
     live_ingest_port: int = 8001
+    ingest_api_key: str = ""
 
     # Schema induction
     schema_induction_enabled: bool = True

@@ -56,8 +56,31 @@ When authentication fails, the server raises a `PermissionError`. FastMCP conver
 | Missing or malformed header | `"Authentication required"` |
 | Token does not match | `"Invalid token"` |
 
+## Live Ingest Authentication
+
+The live ingest API (`ingestion/live_ingest.py`) uses a two-layer auth scheme: a global API key gates session creation, and per-session tokens gate data ingestion.
+
+### Configuration
+
+| Variable | Default | Description |
+|-|-|-|
+| `INGEST_API_KEY` | `""` (empty) | API key for `/session/start`. When empty, auth is disabled. |
+
+### Flow
+
+1. **Start session** — `POST /session/start` with `Authorization: Bearer <INGEST_API_KEY>`. Returns a `session_token`.
+2. **Ingest chunks** — `POST /ingest/transcript` with `Authorization: Bearer <session_token>`.
+3. **End session** — `POST /session/end` with `Authorization: Bearer <session_token>`. Token is invalidated.
+
+### Design
+
+- **Session tokens are ephemeral** — generated via `secrets.token_urlsafe(32)`, scoped to one session, wiped on session end
+- **Blast radius is limited** — a leaked session token only grants access to that one session, not the pipeline
+- **MCP and ingest auth are independent** — different credentials, different concerns (read vs write)
+- **Timing-safe comparison** — both API key and session token validation use `secrets.compare_digest`
+
 ## Security Notes
 
-- Store `MCP_API_KEY` in your `.env` file. Never commit it to version control.
-- When running in `stdio` transport mode, the middleware still activates but the request context may not carry HTTP headers. Bearer auth is primarily effective with the `sse` transport.
-- For production deployments, consider placing the MCP server behind a reverse proxy with TLS termination.
+- Store `MCP_API_KEY` and `INGEST_API_KEY` in your `.env` file. Never commit them to version control.
+- When running in `stdio` transport mode, the MCP middleware still activates but the request context may not carry HTTP headers. Bearer auth is primarily effective with the `sse` transport.
+- For production deployments, consider placing both servers behind a reverse proxy with TLS termination.

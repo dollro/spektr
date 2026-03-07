@@ -8,6 +8,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+_TEST_API_KEY = "test-ingest-key-42"
+
 
 @pytest.fixture
 def mock_qdrant():
@@ -295,3 +297,190 @@ class TestSessionEnd:
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "discarded"
+
+
+class TestSessionAuth:
+    @pytest.mark.asyncio
+    async def test_start_session_rejected_without_key(self, mock_qdrant, mock_embedder) -> None:
+        """POST /session/start without Bearer token returns 401 when auth enabled."""
+        with (
+            patch("ingestion.live_ingest._get_qdrant_client", return_value=mock_qdrant),
+            patch("ingestion.live_ingest._get_embedder", return_value=mock_embedder),
+            patch("ingestion.live_ingest.settings") as mock_settings,
+        ):
+            mock_settings.ingest_api_key = _TEST_API_KEY
+            from ingestion.live_ingest import app
+
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                resp = await client.post(
+                    "/session/start",
+                    json={"session_id": "meeting-1"},
+                )
+
+        assert resp.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_start_session_rejected_with_wrong_key(
+        self, mock_qdrant, mock_embedder
+    ) -> None:
+        """POST /session/start with wrong API key returns 403."""
+        with (
+            patch("ingestion.live_ingest._get_qdrant_client", return_value=mock_qdrant),
+            patch("ingestion.live_ingest._get_embedder", return_value=mock_embedder),
+            patch("ingestion.live_ingest.settings") as mock_settings,
+        ):
+            mock_settings.ingest_api_key = _TEST_API_KEY
+            from ingestion.live_ingest import app
+
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                resp = await client.post(
+                    "/session/start",
+                    json={"session_id": "meeting-1"},
+                    headers={"Authorization": "Bearer wrong-key"},
+                )
+
+        assert resp.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_start_session_returns_session_token(
+        self, mock_qdrant, mock_embedder
+    ) -> None:
+        """POST /session/start with valid API key returns a session_token."""
+        with (
+            patch("ingestion.live_ingest._get_qdrant_client", return_value=mock_qdrant),
+            patch("ingestion.live_ingest._get_embedder", return_value=mock_embedder),
+            patch("ingestion.live_ingest.settings") as mock_settings,
+        ):
+            mock_settings.ingest_api_key = _TEST_API_KEY
+            from ingestion.live_ingest import app
+
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                resp = await client.post(
+                    "/session/start",
+                    json={"session_id": "meeting-1"},
+                    headers={"Authorization": f"Bearer {_TEST_API_KEY}"},
+                )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "session_token" in data
+        assert len(data["session_token"]) > 20
+
+    @pytest.mark.asyncio
+    async def test_ingest_rejected_without_session_token(
+        self, mock_qdrant, mock_embedder
+    ) -> None:
+        """POST /ingest/transcript without session token returns 401."""
+        import ingestion.live_ingest as mod
+
+        mod._active_session = {"session_id": "meeting-1", "session_token": "real-token"}
+
+        with (
+            patch("ingestion.live_ingest._get_qdrant_client", return_value=mock_qdrant),
+            patch("ingestion.live_ingest._get_embedder", return_value=mock_embedder),
+            patch("ingestion.live_ingest.settings") as mock_settings,
+        ):
+            mock_settings.ingest_api_key = _TEST_API_KEY
+            from ingestion.live_ingest import app
+
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                resp = await client.post(
+                    "/ingest/transcript",
+                    json={
+                        "session_id": "meeting-1",
+                        "text": "Hello",
+                        "timestamp": "2026-03-06T14:30:00Z",
+                    },
+                )
+
+        assert resp.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_ingest_rejected_with_wrong_session_token(
+        self, mock_qdrant, mock_embedder
+    ) -> None:
+        """POST /ingest/transcript with wrong session token returns 403."""
+        import ingestion.live_ingest as mod
+
+        mod._active_session = {"session_id": "meeting-1", "session_token": "real-token"}
+
+        with (
+            patch("ingestion.live_ingest._get_qdrant_client", return_value=mock_qdrant),
+            patch("ingestion.live_ingest._get_embedder", return_value=mock_embedder),
+            patch("ingestion.live_ingest.settings") as mock_settings,
+        ):
+            mock_settings.ingest_api_key = _TEST_API_KEY
+            from ingestion.live_ingest import app
+
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                resp = await client.post(
+                    "/ingest/transcript",
+                    json={
+                        "session_id": "meeting-1",
+                        "text": "Hello",
+                        "timestamp": "2026-03-06T14:30:00Z",
+                    },
+                    headers={"Authorization": "Bearer wrong-token"},
+                )
+
+        assert resp.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_full_auth_flow(
+        self, mock_qdrant, mock_embedder, mock_graphiti
+    ) -> None:
+        """Full flow: start with API key, ingest with session token, end with session token."""
+        with (
+            patch("ingestion.live_ingest._get_qdrant_client", return_value=mock_qdrant),
+            patch("ingestion.live_ingest._get_embedder", return_value=mock_embedder),
+            patch("ingestion.live_ingest.get_graphiti", return_value=mock_graphiti),
+            patch("ingestion.live_ingest.settings") as mock_settings,
+        ):
+            mock_settings.ingest_api_key = _TEST_API_KEY
+            mock_settings.qdrant_url = "http://localhost:6333"
+            from ingestion.live_ingest import app
+
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                # 1. Start session with API key
+                resp = await client.post(
+                    "/session/start",
+                    json={"session_id": "meeting-1"},
+                    headers={"Authorization": f"Bearer {_TEST_API_KEY}"},
+                )
+                assert resp.status_code == 200
+                session_token = resp.json()["session_token"]
+
+                # 2. Ingest with session token
+                resp = await client.post(
+                    "/ingest/transcript",
+                    json={
+                        "session_id": "meeting-1",
+                        "text": "Alice: Hello everyone.",
+                        "timestamp": "2026-03-06T14:30:00Z",
+                        "speaker": "Alice",
+                    },
+                    headers={"Authorization": f"Bearer {session_token}"},
+                )
+                assert resp.status_code == 200
+                assert resp.json()["status"] == "accepted"
+
+                # 3. End session with session token
+                resp = await client.post(
+                    "/session/end",
+                    json={"session_id": "meeting-1", "archive": True},
+                    headers={"Authorization": f"Bearer {session_token}"},
+                )
+                assert resp.status_code == 200
+                assert resp.json()["status"] == "archived"

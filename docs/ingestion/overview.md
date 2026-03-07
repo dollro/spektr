@@ -78,9 +78,18 @@ A standalone FastAPI app (`ingestion/live_ingest.py`) on port `LIVE_INGEST_PORT`
 
 | Endpoint | Method | Description |
 |-|-|-|
-| `/session/start` | POST | Creates a session with a `session_id` and optional metadata |
+| `/session/start` | POST | Creates a session with a `session_id` and optional metadata. Returns a `session_token` for subsequent calls |
 | `/ingest/transcript` | POST | Ingests a text chunk: embeds to Qdrant immediately (~200ms), ingests to Graphiti as a background task (~2-5s) |
 | `/session/end` | POST | Ends a session. `archive=true` keeps data permanently; `archive=false` purges all session data from Qdrant and Neo4j |
+
+### Authentication
+
+When `INGEST_API_KEY` is set, all live ingest endpoints are protected:
+
+- **`/session/start`** requires `Authorization: Bearer <INGEST_API_KEY>` and returns a `session_token`
+- **`/ingest/transcript`** and **`/session/end`** require `Authorization: Bearer <session_token>`
+
+Session tokens are ephemeral — generated per session, scoped to that session only, and wiped on session end. When `INGEST_API_KEY` is empty (default), authentication is disabled.
 
 ### Processing flow
 

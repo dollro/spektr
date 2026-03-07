@@ -115,6 +115,7 @@ When `LLM_BASE_URL` is set, the **agent** uses an OpenAI-compatible client regar
 | Variable | Default | Required | Description |
 |-|-|-|-|
 | `LIVE_INGEST_PORT` | `8001` | No | Port for the live ingestion FastAPI server |
+| `INGEST_API_KEY` | `""` | No | Bearer token for `/session/start`. When set, enables per-session token auth on all live ingest endpoints. See [Authentication](../server/authentication.md). |
 
 ## Schema Induction
 

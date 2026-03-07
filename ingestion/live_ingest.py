@@ -1,19 +1,20 @@
 """Live transcript ingestion via FastAPI.
 
 Provides HTTP endpoints for real-time meeting transcript ingestion:
-- POST /session/start — create a meeting session
-- POST /ingest/transcript — ingest a transcript chunk
-- POST /session/end — end session (archive or discard)
+- POST /session/start — create a meeting session (requires INGEST_API_KEY)
+- POST /ingest/transcript — ingest a transcript chunk (requires session token)
+- POST /session/end — end session (requires session token)
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import secrets
 import uuid
 from datetime import UTC, datetime
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from qdrant_client import QdrantClient, models
 
 from config.constants import DENSE_COLLECTION
@@ -36,6 +37,34 @@ _embedder: Embedder | None = None
 _active_session: dict | None = None  # type: ignore[type-arg]
 
 
+def _extract_bearer(request: Request) -> str:
+    """Extract Bearer token from Authorization header."""
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing Bearer token")
+    return auth.removeprefix("Bearer ")
+
+
+def _require_ingest_api_key(request: Request) -> None:
+    """Validate INGEST_API_KEY on session start."""
+    if not settings.ingest_api_key:
+        return  # auth disabled
+    token = _extract_bearer(request)
+    if not secrets.compare_digest(token, settings.ingest_api_key):
+        raise HTTPException(status_code=403, detail="Invalid API key")
+
+
+def _require_session_token(request: Request) -> None:
+    """Validate the per-session token on ingest/end calls."""
+    if not settings.ingest_api_key:
+        return  # auth disabled
+    if _active_session is None:
+        raise HTTPException(status_code=404, detail="No active session")
+    token = _extract_bearer(request)
+    if not secrets.compare_digest(token, _active_session["session_token"]):
+        raise HTTPException(status_code=403, detail="Invalid session token")
+
+
 def _get_qdrant_client() -> QdrantClient:
     global _qdrant_client  # noqa: PLW0603
     if _qdrant_client is None:
@@ -55,9 +84,9 @@ def _make_point_id(key: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, key))
 
 
-@app.post("/session/start")
+@app.post("/session/start", dependencies=[Depends(_require_ingest_api_key)])
 async def start_session(req: SessionStartRequest) -> dict:  # type: ignore[type-arg]
-    """Create a new meeting session."""
+    """Create a new meeting session. Returns a session_token for subsequent calls."""
     global _active_session  # noqa: PLW0603
 
     if _active_session is not None:
@@ -66,8 +95,10 @@ async def start_session(req: SessionStartRequest) -> dict:  # type: ignore[type-
             detail=f"Active session already exists: {_active_session['session_id']}",
         )
 
+    session_token = secrets.token_urlsafe(32)
     _active_session = {
         "session_id": req.session_id,
+        "session_token": session_token,
         "metadata": req.metadata,
         "created_at": datetime.now(tz=UTC).isoformat(),
     }
@@ -75,12 +106,13 @@ async def start_session(req: SessionStartRequest) -> dict:  # type: ignore[type-
     logger.info("Session started: %s", req.session_id)
     return {
         "session_id": req.session_id,
+        "session_token": session_token,
         "status": "active",
         "created_at": _active_session["created_at"],
     }
 
 
-@app.post("/ingest/transcript")
+@app.post("/ingest/transcript", dependencies=[Depends(_require_session_token)])
 async def ingest_transcript(chunk: TranscriptChunk) -> IngestResponse:
     """Ingest a single transcript chunk."""
     if _active_session is None:
@@ -144,7 +176,7 @@ async def _graphiti_ingest(chunk: TranscriptChunk) -> None:
         logger.exception("Graphiti background ingest failed for %s", chunk.session_id)
 
 
-@app.post("/session/end")
+@app.post("/session/end", dependencies=[Depends(_require_session_token)])
 async def end_session(req: SessionEndRequest) -> dict:  # type: ignore[type-arg]
     """End a session: archive (keep data) or discard (delete data)."""
     global _active_session  # noqa: PLW0603
