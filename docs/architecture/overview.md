@@ -99,7 +99,9 @@ The graph extraction layer is abstracted behind a `GraphEngine` protocol (`inges
 - **Graphiti** (`GRAPH_ENGINE=graphiti`, default) -- LLM-based extraction with temporal awareness. Tracks when facts were created and expired. Rich deduplication and relationship discovery, but each chunk triggers LLM API calls (~29 min for a 74-chunk PDF). **Primary engine for Path B** (live ingestion), where temporal episodic memory is essential.
 - **GLiNER2** (`GRAPH_ENGINE=gliner`) -- local 205MB model doing NER + relation extraction in a single forward pass. Zero API cost, ~5-15 seconds for the same PDF. Entities and typed relationships are written directly to Neo4j via Cypher MERGE. Matches GPT-4o NER quality (0.59 F1 on CrossNER). **Primary engine for Path A** (bulk KB), enhanced with dynamic schema induction.
 
-Both engines implement `ingest()`, `search()`, and `close()`, and return the same `GraphFact` model. Pipeline and search tools are engine-agnostic — swap engines via one env var with zero code changes.
+Both engines implement `ingest()`, `search()`, and `close()`, and return the same `GraphFact` model. The bulk pipeline and search tools are engine-agnostic — swap engines via one env var with zero code changes.
+
+> **Important:** The `GRAPH_ENGINE` setting only controls the **bulk ingestion path** (Path A). Live streaming (Path B) **always uses Graphiti directly** — it bypasses the `GraphEngine` abstraction entirely, calling `get_graphiti()` and `client.add_episode()` for temporal episodic memory. This means a working LLM API key and Graphiti service are required for live ingestion even when `GRAPH_ENGINE=gliner`.
 
 ### Why dynamic schema induction?
 

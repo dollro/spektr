@@ -2,25 +2,39 @@
 
 RAG-as-MCP-Server with dual-path ingestion. Batch-processes documents from S3 or local filesystem into a dual knowledge store (Qdrant + Neo4j), and accepts streaming text data in real time via HTTP. Exposes session-aware search tools to LLM agents via the MCP protocol.
 
+**Ingestion**
 ```
-                   Path A: Bulk KB                    Path B: Live
-              ┌──────────────────────┐          ┌──────────────────┐
-              │ S3 / Local Directory │          │ HTTP POST        │
-              │        ▼             │          │    ▼             │
-              │ CocoIndex Pipeline   │          │ FastAPI          │
-              │   ▼          ▼       │          │  ▼         ▼     │
-              │ Jina/Voyage  Schema  │          │ Jina     Graphiti│
-              │ (embed)      Inducer │          │ (embed)  (tempo- │
-              │   ▼          ▼       │          │   ▼      ral KG) │
-              │ Qdrant    GLiNER2    │          │ Qdrant   Neo4j   │
-              └──────┬───────┬───────┘          └───┬───────┬──────┘
-                     │       │                      │       │
-                     └───────┴──────────┬───────────┴───────┘
-                                        ▼
-                              FastMCP Server (SSE/stdio)
-                                session-aware search
-                                        ▼
-                                   LLM Agents
+      Path A: Bulk KB                         Path B: Live
+  S3 / Local Directory                       HTTP POST
+          |                                      |
+  CocoIndex Pipeline                         FastAPI
+      |            |                         |          |
+  Jina/Voyage   GLiNER2 or Graphiti*     Jina/Voyage   Graphiti (always)
+   (embed)      (GRAPH_ENGINE setting)    (embed)      (temporal KG)
+      |            |                         |          |
+      v            v                         v          v
+    Qdrant       Neo4j                     Qdrant     Neo4j
+
+  * GRAPH_ENGINE only controls Path A. Path B always uses Graphiti.
+```
+
+**Search**
+```
+                       LLM Agent
+                           |
+                   FastMCP (SSE/stdio)
+                           |
+        +----------+-------+-------+-----------+
+        |          |               |            |
+  vector_search  graph_search  hybrid_search  visual_search
+   (Qdrant)       (Neo4j)      (both)         (ColBERT)
+        |          |               |            |
+        v          v               v            v
+      Qdrant     Neo4j       Qdrant+Neo4j    Qdrant
+                              (parallel)
+
+  All tools except visual_search support session_id
+  for combining bulk KB with live session data.
 ```
 
 ## Quick Start
@@ -80,9 +94,11 @@ Set `GRAPH_ENGINE` in `.env`:
 | Engine | Setting | Use case | Speed | Cost |
 |-|-|-|-|-|
 | GLiNER2 | `gliner` | Bulk documents (Path A) | ~15 sec / doc | $0.00 |
-| Graphiti | `graphiti` | Streaming data (Path B, always) | ~2-5s / chunk | ~$0.001 / chunk |
+| Graphiti | `graphiti` | Bulk documents (Path A, default) | ~29 min / doc | ~$0.001 / chunk |
 
 GLiNER2 runs a 205MB local model — no API calls, deterministic. Graphiti uses an LLM for temporal entity extraction with fact evolution tracking (bi-temporal model: `created_at` / `expired_at`).
+
+> **Note:** `GRAPH_ENGINE` only controls the **bulk ingestion** path (Path A). Live streaming (Path B) **always uses Graphiti** regardless of this setting — it requires a working LLM API key and Graphiti service even when `GRAPH_ENGINE=gliner`.
 
 **Dynamic schema induction** (GLiNER2 only): when `SCHEMA_INDUCTION_ENABLED=true`, a cheap LLM call per document proposes domain-specific entity types, improving extraction quality for specialized content (legal, financial, medical, etc.). Results are cached.
 
