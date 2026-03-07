@@ -172,6 +172,18 @@ When `SCHEMA_INDUCTION_ENABLED=true` (default) and `GRAPH_ENGINE=gliner`, the pi
 
 **Fallbacks:** If the document has < 200 chars of text (badly degraded scan), or if the LLM call fails, the base schema is used without induction.
 
+#### Schema bootstrapping from sample documents
+
+Dynamic schema induction runs per-document at ingestion time, which adds an LLM call per doc. For stable corpora (e.g. a company's standard contract templates, technical documentation), you can eliminate this runtime cost by bootstrapping the base schema once:
+
+1. Run schema induction on ~500 representative documents from your target corpus
+2. Aggregate all proposed entity and relationship types across documents
+3. Rank by frequency — types proposed across many documents are domain-stable
+4. Add the top 5-10 most frequent domain-specific types to the base schema in `config/constants.py`
+5. Disable `SCHEMA_INDUCTION_ENABLED` (or leave it on for long-tail documents)
+
+This gives Claude-level schema quality at GLiNER's $0.00 extraction cost. The base schema becomes tuned to your domain without any runtime LLM dependency.
+
 ### Ingestion
 
 For each merged page text in a single Neo4j session:
