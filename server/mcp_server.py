@@ -62,6 +62,10 @@ if __name__ == "__main__":
         settings.mcp_port,
         ", ".join(_REGISTERED_TOOLS),
     )
+    logger.info(
+        "Live ingest available on port %d (run separately)",
+        settings.live_ingest_port,
+    )
     mcp.run(
         transport=settings.mcp_transport,
         port=settings.mcp_port,

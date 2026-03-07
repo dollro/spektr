@@ -33,12 +33,12 @@ VALID_JSON = json.dumps(
         "entities": [
             {
                 "name": "Google",
-                "type": "ORGANIZATION",
+                "type": "organization",
                 "description": "Tech company.",
             },
             {
                 "name": "Python",
-                "type": "TECHNOLOGY",
+                "type": "technology",
                 "description": "Programming language.",
             },
         ],
@@ -46,7 +46,7 @@ VALID_JSON = json.dumps(
             {
                 "source": "Google",
                 "target": "Python",
-                "relation": "USES_TECHNOLOGY",
+                "relation": "uses",
                 "properties": {},
             },
         ],
@@ -61,9 +61,9 @@ async def test_extract_valid_json() -> None:
 
     assert len(result.entities) == 2
     assert result.entities[0].name == "Google"
-    assert result.entities[0].type == "ORGANIZATION"
+    assert result.entities[0].type == "organization"
     assert len(result.relationships) == 1
-    assert result.relationships[0].relation == "USES_TECHNOLOGY"
+    assert result.relationships[0].relation == "uses"
 
 
 async def test_extract_malformed_json_retries() -> None:
@@ -118,12 +118,12 @@ async def test_normalization_in_relationships() -> None:
             "entities": [
                 {
                     "name": "  google ",
-                    "type": "ORGANIZATION",
+                    "type": "organization",
                     "description": "Tech co.",
                 },
                 {
                     "name": " python  ",
-                    "type": "TECHNOLOGY",
+                    "type": "technology",
                     "description": "Lang.",
                 },
             ],
@@ -131,7 +131,7 @@ async def test_normalization_in_relationships() -> None:
                 {
                     "source": "  google ",
                     "target": " python  ",
-                    "relation": "USES_TECHNOLOGY",
+                    "relation": "uses",
                 },
             ],
         }

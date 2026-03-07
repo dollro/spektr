@@ -2,14 +2,15 @@
 
 ## Project Overview
 
-**Spektr** — a RAG-as-MCP-Server pipeline. Ingests documents (PDF, images) from local filesystem or S3, builds vector embeddings (Qdrant) and a knowledge graph (Neo4j), then exposes search tools via an MCP server for AI agents.
+**Spektr** — a RAG-as-MCP-Server pipeline. Dual-path ingestion: batch documents (PDF, images) from local filesystem or S3, and real-time streaming text via HTTP. Builds vector embeddings (Qdrant) and a knowledge graph (Neo4j), then exposes session-aware search tools via an MCP server for AI agents.
 
 ## Architecture
 
-- **Ingestion:** CocoIndex pipeline + Docling/PyMuPDF for file processing, Jina/Voyage for embeddings
-- **Vector Store:** Qdrant (dense + optional ColBERT multi-vector)
-- **Knowledge Graph:** Neo4j with pluggable engine — Graphiti (LLM) or GLiNER2 (local CPU) via `GRAPH_ENGINE`
-- **MCP Server:** FastMCP (SSE or stdio transport) exposing search tools
+- **Ingestion (Path A — Bulk):** CocoIndex pipeline + Docling/PyMuPDF for file processing, Jina/Voyage for embeddings, GLiNER2 for entity extraction with dynamic schema induction
+- **Ingestion (Path B — Live):** FastAPI HTTP endpoint for streaming text, Jina for embeddings, Graphiti for temporal episodic memory
+- **Vector Store:** Qdrant (dense + optional ColBERT multi-vector). Both paths write to `documents_dense`; live data tagged with `session_id` and `is_live`
+- **Knowledge Graph:** Neo4j with dual engines — GLiNER2 (Path A, schema-driven CPU extraction) and Graphiti (Path B, LLM-based temporal episodes). Coexist in same instance
+- **MCP Server:** FastMCP (SSE or stdio transport) exposing session-aware search tools
 - **Agent:** Pydantic AI agent with MCP tool access
 - **LLM:** Anthropic or OpenAI-compatible (configurable via `LLM_API_TYPE`)
 - **Config:** Pydantic Settings from `.env`
@@ -22,7 +23,7 @@
 │   └── api.py              # Agent API endpoints
 ├── config/                 # Configuration
 │   ├── settings.py         # Pydantic Settings (single source of truth)
-│   ├── constants.py        # Shared constants (collections, dimensions, entity types)
+│   ├── constants.py        # Shared constants (collections, dimensions, 14 entity types, 12 relationship types)
 │   └── logging.py          # Logging configuration
 ├── ingestion/              # Document ingestion pipeline
 │   ├── pipeline.py         # Main ingestion orchestrator
@@ -33,6 +34,8 @@
 │   ├── entity_extractor.py # LLM-based entity extraction
 │   ├── graph_writer.py     # Graphiti-based graph writer
 │   ├── graphiti_client.py  # Graphiti client singleton
+│   ├── schema_inducer.py   # LLM-based per-document schema induction
+│   ├── live_ingest.py      # Live streaming ingestion (FastAPI, Path B)
 │   ├── cocoindex_ops.py    # CocoIndex operations
 │   ├── qdrant_setup.py     # Qdrant collection setup
 │   └── neo4j_setup.py      # Neo4j schema setup
@@ -48,7 +51,7 @@
 │       ├── reranker.py
 │       └── vlm_generator.py
 ├── tests/                  # Test suite
-├── docs/                   # MkDocs documentation (architecture, guides, API)
+├── docs/                   # MkDocs documentation (as-is architecture, guides, API)
 ├── plans/                  # Disposable brainstorming & implementation plans (NOT source of truth)
 ├── scripts/                # Utility scripts
 ├── docker-compose.yml      # Qdrant + Neo4j + PostgreSQL
@@ -58,6 +61,10 @@
 ```
 
 **Start here:** When exploring an unfamiliar area, read the relevant `docs/` page first for the "why", then explore the code for the "how".
+
+IMPORTANT: `plans/` contains disposable brainstorming notes and implementation plans. These are working documents used during development — they are **not** source-of-truth documentation. The authoritative docs live in `docs/`. Do not update plan files when updating actual documentation or code; they can go stale without harm.
+
+
 
 ## Quick Start
 
@@ -114,10 +121,8 @@ Types: feat, fix, docs, style, refactor, test, chore
 
 ## Planning
 
-`plans/` contains disposable brainstorming notes and implementation plans. These are working documents used during development — they are **not** source-of-truth documentation. The authoritative docs live in `docs/`. Do not update plan files when updating actual documentation or code; they can go stale without harm.
-
-All plan files go into `./plans/` in branch-specific subdirectories. The subdirectory name is the branch name with `/` replaced by `-`.
-
+IMPORTANT: All plan files go into `./plans/` in branch-specific subdirectories. The subdirectory name is the branch name with `/` replaced by `-`.
 Example: on branch `chore/pydantic` → plans go in `./plans/chore-pydantic/`
-
 Use the `/branch` skill to create a new branch — it automatically creates the corresponding plan directory.
+
+

@@ -94,8 +94,7 @@ async def _remove_gliner_entities(source_key: str) -> None:
     try:
         async with driver.session() as session:
             result = await session.run(
-                "MATCH (e:Entity {source: $source}) "
-                "DETACH DELETE e RETURN count(e) AS n",
+                "MATCH (e:Entity {source: $source}) DETACH DELETE e RETURN count(e) AS n",
                 source=source_key,
             )
             record = await result.single()

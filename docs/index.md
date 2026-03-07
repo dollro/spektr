@@ -4,8 +4,11 @@
 
 ## Features
 
+- **Dual-path ingestion** -- batch pipeline for bulk documents (CocoIndex + GLiNER2) and real-time HTTP endpoint for streaming text data with temporal tracking (Graphiti episodes)
 - **Dual retrieval** -- vector similarity (Qdrant) and knowledge graph (Neo4j) in a single server
+- **Session-aware search** -- MCP tools accept an optional `session_id` to combine live session context with bulk KB results
 - **Multimodal embeddings** -- Jina v4 produces dense 512-d vectors for text and images (Matryoshka truncation), plus ColBERT 128-d multi-vectors for layout-aware visual search
+- **Dynamic schema induction** -- per-document LLM call proposes domain-specific entity types for GLiNER2, improving extraction quality across diverse document types
 - **Automatic sync** -- CocoIndex pipeline watches S3 via SQS event notifications; new, updated, and deleted files are processed incrementally
 - **Four MCP search tools** -- `vector_search`, `visual_search`, `graph_search`, `hybrid_search`
 - **Bearer auth middleware** -- optional token-based protection on `tools/call` requests
@@ -15,10 +18,12 @@
 
 ```mermaid
 graph LR
-    S3[AWS S3] -->|SQS events| Pipeline[CocoIndex Pipeline]
+    S3[AWS S3] -->|SQS events| Pipeline[CocoIndex Pipeline\nPath A: Bulk KB]
     Pipeline -->|dense + ColBERT vectors| Qdrant[(Qdrant)]
     Pipeline -->|entities / relations| Neo4j[(Neo4j)]
     Pipeline -->|pipeline state| PG[(PostgreSQL)]
+    Live[HTTP POST\nPath B: Live] -->|dense vectors| Qdrant
+    Live -->|temporal episodes| Neo4j
     Qdrant --- MCP[FastMCP Server]
     Neo4j --- MCP
     MCP -->|MCP protocol| Agent[LLM Agents]
@@ -34,11 +39,14 @@ docker compose up -d
 # Copy and fill environment variables
 cp .env.example .env
 
-# Ingest documents
+# Ingest documents (bulk KB)
 uv run python -m ingestion.pipeline
 
 # Start the MCP server
 uv run python -m server.mcp_server
+
+# Start the live ingestion server (optional, for streaming text data)
+uv run uvicorn ingestion.live_ingest:app --port 8001
 ```
 
 See [Local Development](deployment/local-development.md) for the full setup guide.
@@ -48,10 +56,10 @@ See [Local Development](deployment/local-development.md) for the full setup guid
 | Section | Description |
 |-|-|
 | [Architecture Overview](architecture/overview.md) | System diagram, component roles, technology rationale |
-| [Data Flow](architecture/data-flow.md) | Ingest, query, and delete paths with sequence diagrams |
-| [Ingestion Pipeline](ingestion/overview.md) | CocoIndex, Jina v4, Graphiti integration |
+| [Data Flow](architecture/data-flow.md) | Bulk ingest, live ingest, query, and delete paths with sequence diagrams |
+| [Ingestion Pipeline](ingestion/overview.md) | Bulk KB pipeline (CocoIndex + schema induction) and live streaming ingestion |
 | [MCP Server](server/overview.md) | Tool registration, transport, authentication |
-| [Search Tools](server/search-tools.md) | Per-tool reference for all four search endpoints |
+| [Search Tools](server/search-tools.md) | Per-tool reference with session-aware search |
 | [Agent](agent/overview.md) | Pydantic AI agent and HTTP API |
 | [Configuration](configuration/environment.md) | Environment variables and infrastructure setup |
 | [AWS Setup](deployment/aws-setup.md) | S3 event notifications, SQS, IAM |

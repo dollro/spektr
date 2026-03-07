@@ -1,12 +1,12 @@
 # Data Flow
 
-Three data paths define how documents move through Spektr: **ingest** (S3 to stores), **query** (agent searches), and **delete/invalidation** (removing stale data).
+Four data paths define how data moves through Spektr: **bulk ingest** (S3 to stores), **live ingest** (streaming text to stores), **query** (agent searches), and **delete/invalidation** (removing stale data).
 
 ---
 
-## Ingest path
+## Bulk ingest path (Path A)
 
-A document lands in S3, triggers an SQS event, and flows through the CocoIndex pipeline into Qdrant and Neo4j.
+A document lands in S3, triggers an SQS event, and flows through the CocoIndex pipeline into Qdrant and Neo4j. When `SCHEMA_INDUCTION_ENABLED=true` and `GRAPH_ENGINE=gliner`, a per-document LLM call proposes domain-specific entity types before GLiNER2 extraction.
 
 ```mermaid
 sequenceDiagram
@@ -74,11 +74,60 @@ sequenceDiagram
     Coco->>PG: Update pipeline state + ingestion log
 ```
 
-### Key design decisions in the ingest path
+### Key design decisions in the bulk ingest path
 
 - **Deterministic IDs** -- chunk and point IDs are derived from `{source_file}::p{page}::c{chunk_idx}` via UUID5, making upserts idempotent.
 - **Dual embedding for visual content** -- images get both a dense single-vector (for standard NN search) and ColBERT multi-vectors (for layout-aware retrieval). Text chunks get only dense vectors.
+- **Dynamic schema induction** -- when enabled, a single LLM call per document proposes domain-specific entity/relationship types for GLiNER2. Results are cached by content hash. See [Knowledge Graph](../ingestion/knowledge-graph.md).
 - **Pluggable graph engine** -- text chunks are passed to `engine.ingest()`. Graphiti submits them as LLM-processed episodes; GLiNER2 extracts entities and relations locally and writes directly to Neo4j. See [Knowledge Graph](../ingestion/knowledge-graph.md).
+
+---
+
+## Live ingest path (Path B)
+
+Streaming text data arrives via HTTP POST to the live ingestion FastAPI server and is indexed into Qdrant immediately. Graphiti temporal graph ingestion runs as a background task.
+
+```mermaid
+sequenceDiagram
+    participant Src as External Source
+    participant API as Live Ingest API<br/>(FastAPI, port 8001)
+    participant Jina as Jina v4 API
+    participant QD as Qdrant
+    participant Graphiti as Graphiti
+    participant Neo4j as Neo4j
+
+    Src->>API: POST /session/start {session_id, metadata}
+    API-->>Src: {status: "active"}
+
+    loop Each text chunk (~every 30s)
+        Src->>API: POST /ingest/transcript {session_id, text, timestamp, speaker}
+        API->>Jina: embed_text(text)
+        Jina-->>API: dense vector (512-d)
+        API->>QD: Upsert to documents_dense<br/>(is_live=true, session_id, speaker, timestamp)
+        API-->>Src: {status: "accepted", vector_indexed: true, graph_status: "processing"}
+
+        Note over API,Graphiti: Background task (does not block response)
+        API->>Graphiti: add_episode(text, group_id=session_id, reference_time=timestamp)
+        Graphiti->>Neo4j: Create/update temporal entities and edges
+    end
+
+    Src->>API: POST /session/end {session_id, archive}
+    alt archive = true
+        API->>QD: Set is_live=false on session points
+        Note over Neo4j: Graphiti data kept permanently
+    else archive = false
+        API->>QD: Delete points by session_id
+        API->>Graphiti: Delete episodes by group_id
+    end
+    API-->>Src: {status: "ended"}
+```
+
+### Key design decisions in the live ingest path
+
+- **Immediate vector availability** -- the HTTP response returns after Qdrant upsert (~200ms). Graphiti runs in the background (~2-5s per chunk).
+- **Session isolation** -- all live data is tagged with `session_id` and `is_live=true`. Graphiti partitions by `group_id=session_id`.
+- **Clean lifecycle** -- sessions can be archived (data becomes permanent KB) or discarded (full purge from both Qdrant and Neo4j).
+- **Single active session** -- v1 supports one active session at a time to avoid LLM rate limit contention.
 
 ---
 

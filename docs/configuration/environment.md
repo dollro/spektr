@@ -110,6 +110,20 @@ When `LLM_BASE_URL` is set, the **agent** uses an OpenAI-compatible client regar
 | `IMAGE_EMBED_MAX_PX` | `400` | No | Max pixels on longest side before embedding (reduces token cost) |
 | `IMAGE_EMBED_STRATEGY` | `smart` | No | `smart` (Docling-gated), `all` (every page), `none` (skip images) |
 
+## Live Ingestion
+
+| Variable | Default | Required | Description |
+|-|-|-|-|
+| `LIVE_INGEST_PORT` | `8001` | No | Port for the live ingestion FastAPI server |
+
+## Schema Induction
+
+| Variable | Default | Required | Description |
+|-|-|-|-|
+| `SCHEMA_INDUCTION_ENABLED` | `true` | No | Enable per-document LLM schema induction for GLiNER2 (Path A only) |
+| `SCHEMA_INDUCTION_MODEL` | `claude-haiku-4-5-20251001` | No | Fast/cheap model used for schema proposals |
+| `SCHEMA_CACHE_TTL` | `3600` | No | Seconds to cache induced schemas before re-inducing |
+
 ## Feature Flags
 
 | Variable | Default | Required | Description |

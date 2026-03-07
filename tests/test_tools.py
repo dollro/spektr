@@ -709,3 +709,283 @@ class TestVLMGenerator:
             answer = await generate_visual_answer("query", results)
 
         assert answer is None
+
+
+# ---------------------------------------------------------------------------
+# Live ingest model tests
+# ---------------------------------------------------------------------------
+
+
+class TestLiveIngestModels:
+    def test_transcript_chunk_model(self) -> None:
+        """TranscriptChunk validates required fields."""
+        from server.models import TranscriptChunk
+
+        chunk = TranscriptChunk(
+            session_id="meeting-1",
+            text="Alice: Hello",
+            timestamp="2026-03-06T14:30:00Z",
+            speaker="Alice",
+        )
+        assert chunk.session_id == "meeting-1"
+        assert chunk.speaker == "Alice"
+
+    def test_transcript_chunk_optional_speaker(self) -> None:
+        """TranscriptChunk speaker is optional."""
+        from server.models import TranscriptChunk
+
+        chunk = TranscriptChunk(
+            session_id="meeting-1",
+            text="Hello",
+            timestamp="2026-03-06T14:30:00Z",
+        )
+        assert chunk.speaker is None
+
+    def test_session_start_request(self) -> None:
+        """SessionStartRequest validates fields."""
+        from server.models import SessionStartRequest
+
+        req = SessionStartRequest(
+            session_id="meeting-1",
+            metadata={"title": "Q1 Review"},
+        )
+        assert req.session_id == "meeting-1"
+
+    def test_session_end_request(self) -> None:
+        """SessionEndRequest defaults archive to False."""
+        from server.models import SessionEndRequest
+
+        req = SessionEndRequest(session_id="meeting-1")
+        assert req.archive is False
+
+    def test_ingest_response(self) -> None:
+        """IngestResponse model."""
+        from server.models import IngestResponse
+
+        resp = IngestResponse(
+            status="accepted",
+            vector_indexed=True,
+            graph_status="processing",
+        )
+        assert resp.status == "accepted"
+
+    def test_hybrid_search_response_with_session(self) -> None:
+        """HybridSearchResponse supports session_id and transcript_results."""
+        from server.models import HybridSearchResponse
+
+        resp = HybridSearchResponse(
+            query="test",
+            session_id="meeting-1",
+            transcript_results=[],
+        )
+        assert resp.session_id == "meeting-1"
+        assert resp.transcript_results == []
+
+
+# ---------------------------------------------------------------------------
+# Session-aware vector search tests
+# ---------------------------------------------------------------------------
+
+
+class TestSessionAwareVectorSearch:
+    @pytest.mark.asyncio
+    async def test_vector_search_with_session_id(self) -> None:
+        """When session_id is set, runs dual Qdrant queries."""
+        mock_embedder = MagicMock()
+        mock_embedder.embed_text_query = AsyncMock(return_value=[0.1] * 512)
+
+        # Mock Qdrant to return different results per call
+        transcript_point = MagicMock()
+        transcript_point.score = 0.9
+        transcript_point.payload = {
+            "text_content": "Alice: Contract terms",
+            "source_file": "session:meeting-1",
+            "page_number": 0,
+            "content_type": "transcript",
+            "metadata": {},
+            "timestamp": "2026-03-06T14:32:00Z",
+            "speaker": "Alice",
+        }
+        kb_point = MagicMock()
+        kb_point.score = 0.85
+        kb_point.payload = {
+            "text": "Payment policy doc",
+            "source_file": "policies/payment.pdf",
+            "page_number": 1,
+            "content_type": "text_chunk",
+            "metadata": {},
+        }
+
+        mock_response_transcript = MagicMock()
+        mock_response_transcript.points = [transcript_point]
+        mock_response_kb = MagicMock()
+        mock_response_kb.points = [kb_point]
+
+        mock_qdrant = MagicMock()
+        mock_qdrant.query_points = MagicMock(
+            side_effect=[mock_response_transcript, mock_response_kb]
+        )
+
+        with (
+            patch("server.tools.vector_search._qdrant_client", mock_qdrant),
+            patch("server.tools.vector_search._embedder", mock_embedder),
+        ):
+            from server.tools.vector_search import vector_search
+
+            results = await vector_search("contract", session_id="meeting-1")
+
+        assert len(results) == 2
+        assert mock_qdrant.query_points.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_vector_search_without_session_unchanged(self) -> None:
+        """Without session_id, behavior is unchanged (single query)."""
+        mock_embedder = MagicMock()
+        mock_embedder.embed_text_query = AsyncMock(return_value=[0.1] * 512)
+
+        mock_response = MagicMock()
+        mock_response.points = []
+
+        mock_qdrant = MagicMock()
+        mock_qdrant.query_points = MagicMock(return_value=mock_response)
+
+        with (
+            patch("server.tools.vector_search._qdrant_client", mock_qdrant),
+            patch("server.tools.vector_search._embedder", mock_embedder),
+        ):
+            from server.tools.vector_search import vector_search
+
+            await vector_search("test")
+
+        assert mock_qdrant.query_points.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Session-aware graph search tests
+# ---------------------------------------------------------------------------
+
+
+class TestSessionAwareGraphSearch:
+    @pytest.mark.asyncio
+    async def test_graph_search_with_session_id(self) -> None:
+        """When session_id is set, queries both Graphiti and GLiNER."""
+        mock_edge = MagicMock()
+        mock_edge.fact = "Contract valued at 1.2M"
+        mock_edge.source_description = "graphiti"
+        mock_edge.created_at = "2026-03-06T14:32:00Z"
+        mock_edge.expired_at = None
+
+        mock_graphiti = AsyncMock()
+        mock_graphiti.search = AsyncMock(return_value=[mock_edge])
+
+        from server.models import GraphFact
+
+        gliner_facts = [
+            GraphFact(
+                fact="Acme Corp (organization)",
+                entities=["Acme Corp"],
+                confidence=0.9,
+            ),
+        ]
+        mock_engine = AsyncMock()
+        mock_engine.search = AsyncMock(return_value=gliner_facts)
+
+        with (
+            patch(
+                "ingestion.graphiti_client.get_graphiti",
+                return_value=mock_graphiti,
+            ),
+            patch(
+                "server.tools.graph_search.get_graph_engine",
+                return_value=mock_engine,
+            ),
+        ):
+            from server.tools.graph_search import graph_search
+
+            results = await graph_search("contract", session_id="meeting-1")
+
+        # Should have results from both engines
+        assert len(results) >= 2
+
+    @pytest.mark.asyncio
+    async def test_graph_search_without_session_unchanged(self) -> None:
+        """Without session_id, behavior delegates to engine only."""
+        from server.models import GraphFact
+
+        mock_engine = AsyncMock()
+        mock_engine.search = AsyncMock(return_value=[GraphFact(fact="Test fact")])
+
+        with patch(
+            "server.tools.graph_search.get_graph_engine",
+            return_value=mock_engine,
+        ):
+            from server.tools.graph_search import graph_search
+
+            results = await graph_search("test")
+
+        assert len(results) == 1
+        mock_engine.search.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Session-aware hybrid search tests
+# ---------------------------------------------------------------------------
+
+
+class TestSessionAwareHybridSearch:
+    @pytest.mark.asyncio
+    async def test_hybrid_search_with_session_id(self) -> None:
+        """Hybrid search passes session_id to both sub-searches."""
+        mock_vector = AsyncMock(
+            return_value=[
+                {
+                    "score": 0.9,
+                    "text": "transcript",
+                    "metadata": {"source_type": "transcript"},
+                },
+                {"score": 0.8, "text": "kb doc", "metadata": {}},
+            ]
+        )
+        mock_graph = AsyncMock(return_value=[{"fact": "X related Y"}])
+
+        with (
+            patch("server.tools.hybrid_search.vector_search", mock_vector),
+            patch("server.tools.hybrid_search.graph_search", mock_graph),
+        ):
+            from server.tools.hybrid_search import hybrid_search
+
+            result = await hybrid_search("test", session_id="meeting-1")
+
+        # vector_search should receive session_id
+        mock_vector.assert_called_once()
+        assert mock_vector.call_args.kwargs.get("session_id") == "meeting-1"
+        # graph_search should receive session_id
+        mock_graph.assert_called_once()
+        assert mock_graph.call_args.kwargs.get("session_id") == "meeting-1"
+        assert result["session_id"] == "meeting-1"
+
+    @pytest.mark.asyncio
+    async def test_hybrid_search_separates_transcript_results(self) -> None:
+        """Hybrid search separates transcript from KB results."""
+        mock_vector = AsyncMock(
+            return_value=[
+                {
+                    "score": 0.9,
+                    "text": "transcript chunk",
+                    "metadata": {"source_type": "transcript"},
+                },
+                {"score": 0.8, "text": "kb doc", "metadata": {}},
+            ]
+        )
+        mock_graph = AsyncMock(return_value=[])
+
+        with (
+            patch("server.tools.hybrid_search.vector_search", mock_vector),
+            patch("server.tools.hybrid_search.graph_search", mock_graph),
+        ):
+            from server.tools.hybrid_search import hybrid_search
+
+            result = await hybrid_search("test", session_id="meeting-1")
+
+        assert len(result["transcript_results"]) == 1
+        assert len(result["vector_results"]) == 1

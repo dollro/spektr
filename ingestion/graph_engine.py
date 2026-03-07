@@ -8,10 +8,13 @@ Switch between engines via the GRAPH_ENGINE setting:
 from __future__ import annotations
 
 import logging
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from ingestion.file_processor import TextChunk
 from server.models import GraphFact
+
+if TYPE_CHECKING:
+    from ingestion.schema_inducer import MergedSchema
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +22,12 @@ logger = logging.getLogger(__name__)
 class GraphEngine(Protocol):
     """Unified interface for knowledge graph ingestion and search."""
 
-    async def ingest(self, chunks: list[TextChunk], source_key: str) -> None: ...
+    async def ingest(
+        self,
+        chunks: list[TextChunk],
+        source_key: str,
+        schema: MergedSchema | None = None,
+    ) -> None: ...
 
     async def search(self, query: str, limit: int = 10) -> list[GraphFact]: ...
 
@@ -34,7 +42,12 @@ class GraphitiEngine:
 
         self._writer = GraphitiWriter()
 
-    async def ingest(self, chunks: list[TextChunk], source_key: str) -> None:
+    async def ingest(
+        self,
+        chunks: list[TextChunk],
+        source_key: str,
+        schema: MergedSchema | None = None,
+    ) -> None:
         await self._writer.ingest_bulk(chunks=chunks, source_key=source_key)
 
     async def search(self, query: str, limit: int = 10) -> list[GraphFact]:
@@ -66,15 +79,69 @@ class GLiNEREngine:
 
     # Entities shorter than this are noise
     _MIN_ENTITY_LEN = 2
-    _STOPWORDS = frozenset({
-        "the", "a", "an", "this", "that", "it", "its", "is", "are", "was",
-        "were", "be", "been", "has", "have", "had", "do", "does", "did",
-        "will", "would", "could", "should", "may", "might", "can",
-        "not", "no", "yes", "so", "if", "or", "and", "but", "for",
-        "with", "from", "by", "at", "to", "in", "on", "of", "as",
-        "we", "you", "he", "she", "they", "i", "me", "my", "our",
-        "copy", "e.g", "etc", "also", "here", "there",
-    })
+    _STOPWORDS = frozenset(
+        {
+            "the",
+            "a",
+            "an",
+            "this",
+            "that",
+            "it",
+            "its",
+            "is",
+            "are",
+            "was",
+            "were",
+            "be",
+            "been",
+            "has",
+            "have",
+            "had",
+            "do",
+            "does",
+            "did",
+            "will",
+            "would",
+            "could",
+            "should",
+            "may",
+            "might",
+            "can",
+            "not",
+            "no",
+            "yes",
+            "so",
+            "if",
+            "or",
+            "and",
+            "but",
+            "for",
+            "with",
+            "from",
+            "by",
+            "at",
+            "to",
+            "in",
+            "on",
+            "of",
+            "as",
+            "we",
+            "you",
+            "he",
+            "she",
+            "they",
+            "i",
+            "me",
+            "my",
+            "our",
+            "copy",
+            "e.g",
+            "etc",
+            "also",
+            "here",
+            "there",
+        }
+    )
 
     def __init__(self) -> None:
         from gliner2 import GLiNER2
@@ -115,12 +182,14 @@ class GLiNEREngine:
 
     def _is_noise(self, name: str) -> bool:
         """Return True if the entity name is too short or a stopword."""
-        return (
-            len(name) < self._MIN_ENTITY_LEN
-            or name.lower() in self._STOPWORDS
-        )
+        return len(name) < self._MIN_ENTITY_LEN or name.lower() in self._STOPWORDS
 
-    async def ingest(self, chunks: list[TextChunk], source_key: str) -> None:
+    async def ingest(
+        self,
+        chunks: list[TextChunk],
+        source_key: str,
+        schema: MergedSchema | None = None,
+    ) -> None:
         if not chunks:
             return
 
@@ -128,9 +197,19 @@ class GLiNEREngine:
         if not merged_texts:
             return
 
+        # Build schema for extraction
+        if schema is not None:
+            active_schema = (
+                self._extractor.create_schema()
+                .entities(schema.entity_types)
+                .relations(schema.relationship_types)
+            )
+        else:
+            active_schema = self._schema
+
         async with self._driver.session() as session:
             for text in merged_texts:
-                result = self._extractor.extract(text, self._schema)
+                result = self._extractor.extract(text, active_schema)
 
                 entities = result.get("entities", {})
                 relations = result.get("relation_extraction", {})

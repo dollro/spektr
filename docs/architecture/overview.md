@@ -1,6 +1,6 @@
 # Architecture Overview
 
-Spektr is a hybrid GraphRAG + multimodal vector search system exposed as an MCP server. Documents flow in from AWS S3, get processed into embeddings and a knowledge graph, and are made searchable by LLM agents through four MCP tools.
+Spektr is a hybrid GraphRAG + multimodal vector search system exposed as an MCP server. It supports two ingestion paths: a **bulk pipeline** (CocoIndex + GLiNER2) for batch document processing from S3, and a **live ingestion** endpoint for streaming text data with temporal tracking via Graphiti. Both paths write to shared Qdrant and Neo4j stores, and are made searchable by LLM agents through four session-aware MCP tools.
 
 ## System diagram
 
@@ -11,12 +11,19 @@ graph TB
         SQS[AWS SQS Queue]
     end
 
-    subgraph Ingestion
+    subgraph "Path A: Bulk KB"
         Pipeline[CocoIndex Pipeline]
         Classify[MIME Classify]
         Chunk[Semantic Chunking]
+        SchemaInd[Schema Inducer\nper-document LLM]
         Embed[Jina v4 Embedder]
-        Extract[Graph Engine\nGraphiti or GLiNER2]
+        Extract[GLiNER2\nlocal CPU extraction]
+    end
+
+    subgraph "Path B: Live Ingestion"
+        LiveAPI[FastAPI\nHTTP POST]
+        LiveEmbed[Jina v4 Embed]
+        Graphiti[Graphiti\ntemporal episodes]
     end
 
     subgraph Storage
@@ -38,11 +45,16 @@ graph TB
     S3 -->|event notification| SQS
     SQS -->|push events| Pipeline
     Pipeline --> Classify --> Chunk --> Embed
-    Chunk --> Extract
+    Chunk --> SchemaInd --> Extract
     Embed -->|dense 512-d| Qdrant
     Embed -->|ColBERT 128-d| Qdrant
     Extract -->|entities + relations| Neo4j
     Pipeline -->|state| PG
+
+    LiveAPI -->|text chunks| LiveEmbed
+    LiveEmbed -->|dense 512-d| Qdrant
+    LiveAPI -->|episodes| Graphiti
+    Graphiti -->|temporal graph| Neo4j
 
     Agent -->|MCP protocol| Auth
     Auth --> VS & VIS & GS & HS
@@ -55,14 +67,16 @@ graph TB
 
 | Component | Role | Key details |
 |-|-|-|
-| **AWS S3** | Document source | PDFs, images, markdown, CSV, JSON, XML, HTML, YAML |
-| **AWS SQS** | Event delivery | Receives S3 create/update/delete notifications; provides push-based trigger to pipeline |
-| **CocoIndex** | Pipeline orchestrator | Manages incremental state, source reading, and lineage tracking via PostgreSQL |
-| **Jina v4 API** | Embedding model | Single model for text and images; produces dense 512-d single-vectors (Matryoshka truncation) and ColBERT 128-d multi-vectors |
-| **Qdrant** | Vector store | Two collections: `documents_dense` (single-vector NN search) and `documents_multivec` (ColBERT late interaction) |
-| **Neo4j** | Knowledge graph | Entity-relationship graph. Pluggable extraction via `GRAPH_ENGINE`: Graphiti (LLM-based, temporal metadata, deduplication) or GLiNER2 (local 205MB model, zero API cost, ~130ms/chunk on CPU) |
+| **AWS S3** | Document source (Path A) | PDFs, images, markdown, CSV, JSON, XML, HTML, YAML |
+| **AWS SQS** | Event delivery (Path A) | Receives S3 create/update/delete notifications; provides push-based trigger to pipeline |
+| **CocoIndex** | Pipeline orchestrator (Path A) | Manages incremental state, source reading, and lineage tracking via PostgreSQL |
+| **FastAPI** | Live ingestion server (Path B) | HTTP POST endpoint for streaming text chunks; session lifecycle management (start/ingest/end) |
+| **Schema Inducer** | Dynamic schema (Path A) | Per-document LLM call proposes domain-specific entity types for GLiNER2; cached by content hash |
+| **Jina v4 API** | Embedding model | Single model for text and images; produces dense 512-d single-vectors (Matryoshka truncation) and ColBERT 128-d multi-vectors. Used by both paths |
+| **Qdrant** | Vector store | Two collections: `documents_dense` (single-vector NN search) and `documents_multivec` (ColBERT late interaction). Both paths write to `documents_dense`; live data tagged with `session_id` and `is_live` |
+| **Neo4j** | Knowledge graph | Dual-engine: GLiNER2 (Path A, schema-driven CPU extraction) writes flat entities; Graphiti (Path B, LLM-based) writes temporal episodes with fact evolution tracking. Both coexist in the same instance |
 | **PostgreSQL** | Pipeline state | CocoIndex stores flow state and ingestion logs |
-| **FastMCP** | MCP server | Registers four search tools; supports SSE and stdio transports; optional Bearer auth middleware |
+| **FastMCP** | MCP server | Registers four session-aware search tools; supports SSE and stdio transports; optional Bearer auth middleware |
 | **Pydantic AI** | Agent framework | Connects to MCP server, binds tools, orchestrates multi-step retrieval |
 
 ## Technology rationale
@@ -82,10 +96,18 @@ Separating collections keeps index configurations independent and avoids mixed-m
 
 The graph extraction layer is abstracted behind a `GraphEngine` protocol (`ingestion/graph_engine.py`) with two implementations:
 
-- **Graphiti** (`GRAPH_ENGINE=graphiti`, default) -- LLM-based extraction with temporal awareness. Tracks when facts were created and expired. Rich deduplication and relationship discovery, but each chunk triggers LLM API calls (~29 min for a 74-chunk PDF).
-- **GLiNER2** (`GRAPH_ENGINE=gliner`) -- local 205MB model doing NER + relation extraction in a single forward pass. Zero API cost, ~5-15 seconds for the same PDF. Entities and typed relationships are written directly to Neo4j via Cypher MERGE. Matches GPT-4o NER quality (0.59 F1 on CrossNER).
+- **Graphiti** (`GRAPH_ENGINE=graphiti`, default) -- LLM-based extraction with temporal awareness. Tracks when facts were created and expired. Rich deduplication and relationship discovery, but each chunk triggers LLM API calls (~29 min for a 74-chunk PDF). **Primary engine for Path B** (live ingestion), where temporal episodic memory is essential.
+- **GLiNER2** (`GRAPH_ENGINE=gliner`) -- local 205MB model doing NER + relation extraction in a single forward pass. Zero API cost, ~5-15 seconds for the same PDF. Entities and typed relationships are written directly to Neo4j via Cypher MERGE. Matches GPT-4o NER quality (0.59 F1 on CrossNER). **Primary engine for Path A** (bulk KB), enhanced with dynamic schema induction.
 
 Both engines implement `ingest()`, `search()`, and `close()`, and return the same `GraphFact` model. Pipeline and search tools are engine-agnostic — swap engines via one env var with zero code changes.
+
+### Why dynamic schema induction?
+
+GLiNER2's extraction quality is directly tied to schema description richness. The base schema (14 entity types, 12 relationship types in `constants.py`) covers common domains, but specialized documents (legal contracts, financial reports, medical records) benefit from domain-specific types. The schema inducer makes a single cheap LLM call per document (~$0.001) to propose additional entity and relationship types, which are merged on top of the base schema. Results are cached by content hash to avoid redundant LLM calls for similar documents.
+
+### Why a separate live ingestion path?
+
+The bulk pipeline (CocoIndex) is batch-oriented — it manages incremental state, reads from S3/filesystem, and processes multimodal content. Live streaming data has fundamentally different requirements: push-based delivery (HTTP POST), sub-second vector indexing, temporal episodic memory, and session lifecycle management. A lightweight FastAPI endpoint on a separate port serves this path without adding complexity to the batch pipeline.
 
 ### Why CocoIndex?
 

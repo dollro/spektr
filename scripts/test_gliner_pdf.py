@@ -52,11 +52,7 @@ def main(pdf_path: str) -> None:
     extractor = GLiNER2.from_pretrained("fastino/gliner2-base-v1")
     print(f"Model loaded in {time.monotonic() - t0:.1f}s")
 
-    schema = (
-        extractor.create_schema()
-        .entities(ENTITY_TYPES)
-        .relations(RELATIONSHIP_TYPES)
-    )
+    schema = extractor.create_schema().entities(ENTITY_TYPES).relations(RELATIONSHIP_TYPES)
 
     # 5. Extract
     max_texts = min(15, len(merged))
@@ -79,15 +75,12 @@ def main(pdf_path: str) -> None:
 
         for rtype, pairs in relations.items():
             for head, tail in pairs:
-                all_relations.append(
-                    (head.strip().title(), rtype, tail.strip().title())
-                )
+                all_relations.append((head.strip().title(), rtype, tail.strip().title()))
 
         ent_count = sum(len(v) for v in entities.values())
         rel_count = sum(len(v) for v in relations.values())
         print(
-            f"  Text {i + 1} ({len(text)} chars):"
-            f" {ent_count} entities, {rel_count} relations"
+            f"  Text {i + 1} ({len(text)} chars): {ent_count} entities, {rel_count} relations"
         )
 
     elapsed = time.monotonic() - t0

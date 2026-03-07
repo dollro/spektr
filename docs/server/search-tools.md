@@ -2,6 +2,8 @@
 
 The MCP server exposes four search tools. Each tool returns structured JSON and handles errors gracefully by returning an error object instead of raising exceptions.
 
+Three of the four tools (`vector_search`, `graph_search`, `hybrid_search`) support an optional `session_id` parameter for session-aware search. When provided, search results combine data from the active session (live-ingested chunks) with bulk KB results.
+
 ---
 
 ## `vector_search`
@@ -16,6 +18,7 @@ Dense semantic search against the Qdrant `documents_dense` collection. Embeds th
 | `limit` | `int` | `10` | Maximum number of results |
 | `content_type` | `str \| None` | `None` | MIME type filter (e.g. `application/pdf`) |
 | `source_file` | `str \| None` | `None` | Source file name filter |
+| `session_id` | `str \| None` | `None` | When set, runs dual queries: one for session data (filtered by `session_id`), one for bulk KB (excluding live data). Session results are sorted chronologically by timestamp |
 
 ### Return Schema
 
@@ -102,6 +105,7 @@ Searches the Neo4j knowledge graph for entities and relationships. The search ba
 | `query` | `str` | required | Search text |
 | `search_type` | `str` | `"entity"` | Search mode. Currently only `"entity"` is supported; reserved for future modes |
 | `limit` | `int` | `10` | Maximum number of results |
+| `session_id` | `str \| None` | `None` | When set, also queries Graphiti with `group_ids=[session_id]` for temporal facts from the active session, in addition to standard engine search |
 
 ### Return Schema
 
@@ -143,6 +147,7 @@ When `RERANK_ENABLED=true`, vector results are reranked before being included in
 |-|-|-|-|
 | `query` | `str` | required | Natural language search query |
 | `limit` | `int` | `10` | Maximum results per backend |
+| `session_id` | `str \| None` | `None` | When set, separates live session results into `transcript_results` and bulk KB results into `vector_results` |
 
 ### Return Schema
 
@@ -150,9 +155,11 @@ Returns `HybridSearchResponse`:
 
 | Field | Type | Description |
 |-|-|-|
-| `vector_results` | `list[SearchResult]` | Dense vector search results |
-| `graph_results` | `list[GraphFact]` | Knowledge graph facts |
+| `vector_results` | `list[SearchResult]` | Dense vector search results (bulk KB) |
+| `transcript_results` | `list[SearchResult]` | Session transcript results, sorted chronologically (only populated when `session_id` is set) |
+| `graph_results` | `list[GraphFact]` | Knowledge graph facts (combined from both engines when session-aware) |
 | `query` | `str` | Original query |
+| `session_id` | `str \| None` | Session ID if session-aware search was used |
 | `strategy` | `str` | Always `"parallel"` |
 | `errors` | `list[str]` | Present only if one or both backends failed |
 

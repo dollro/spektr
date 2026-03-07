@@ -9,10 +9,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+from config.settings import settings
 from ingestion.embedder import Embedder, TokenBucket, create_embedder
 from ingestion.embedders.jina import JinaV4Embedder
 
 FIXTURES = Path(__file__).parent / "fixtures"
+DIMS = settings.jina_dense_dimensions
 
 
 @pytest.fixture
@@ -74,7 +76,7 @@ class TestProtocolCompliance:
 
 class TestEmbedText:
     async def test_correct_payload(self, embedder: JinaV4Embedder) -> None:
-        mock_resp = _mock_response([{"embedding": [0.1] * 2048}, {"embedding": [0.2] * 2048}])
+        mock_resp = _mock_response([{"embedding": [0.1] * DIMS}, {"embedding": [0.2] * DIMS}])
         with patch.object(
             embedder._client,
             "post",
@@ -87,14 +89,14 @@ class TestEmbedText:
         payload = call_kwargs.kwargs["json"]
         assert payload["model"] == "jina-embeddings-v4"
         assert payload["task"] == "retrieval.passage"
-        assert payload["dimensions"] == 2048
+        assert payload["dimensions"] == DIMS
         assert payload["normalized"] is True
         assert payload["input"] == [{"text": "hello"}, {"text": "world"}]
         assert len(result) == 2
-        assert len(result[0]) == 2048
+        assert len(result[0]) == DIMS
 
     async def test_url_is_correct(self, embedder: JinaV4Embedder) -> None:
-        mock_resp = _mock_response([{"embedding": [0.1] * 2048}])
+        mock_resp = _mock_response([{"embedding": [0.1] * DIMS}])
         with patch.object(
             embedder._client,
             "post",
@@ -108,7 +110,7 @@ class TestEmbedText:
 
 class TestEmbedTextQuery:
     async def test_uses_retrieval_query_task(self, embedder: JinaV4Embedder) -> None:
-        mock_resp = _mock_response([{"embedding": [0.1] * 2048}])
+        mock_resp = _mock_response([{"embedding": [0.1] * DIMS}])
         with patch.object(
             embedder._client,
             "post",
@@ -119,14 +121,14 @@ class TestEmbedTextQuery:
 
         payload = mock_post.call_args.kwargs["json"]
         assert payload["task"] == "retrieval.query"
-        assert len(result) == 2048
+        assert len(result) == DIMS
 
 
 class TestEmbedImage:
     async def test_correct_payload(self, embedder: JinaV4Embedder) -> None:
         image_bytes = b"\x89PNG\r\n\x1a\nfakedata"
         expected_b64 = base64.b64encode(image_bytes).decode()
-        mock_resp = _mock_response([{"embedding": [0.1] * 2048}])
+        mock_resp = _mock_response([{"embedding": [0.1] * DIMS}])
         with patch.object(
             embedder._client,
             "post",
@@ -139,10 +141,10 @@ class TestEmbedImage:
         assert payload["task"] == "retrieval.passage"
         expected_uri = f"data:image/png;base64,{expected_b64}"
         assert payload["input"] == [{"image": expected_uri}]
-        assert len(result) == 2048
+        assert len(result) == DIMS
 
     async def test_custom_timeout(self, embedder: JinaV4Embedder) -> None:
-        mock_resp = _mock_response([{"embedding": [0.1] * 2048}])
+        mock_resp = _mock_response([{"embedding": [0.1] * DIMS}])
         with patch.object(
             embedder._client,
             "post",
@@ -233,7 +235,7 @@ class TestErrorHandling:
             embedder._request_with_retry.retry.wait = original_wait  # type: ignore[attr-defined]
 
 
-DENSE_DIM = 2048
+DENSE_DIM = DIMS
 
 
 class TestLateChunking:
@@ -321,7 +323,7 @@ class TestRateLimiter:
     async def test_rpm_throttling(self, embedder: JinaV4Embedder) -> None:
         """Requests beyond RPM limit are delayed."""
         _fast_limiters(embedder)
-        mock_resp = _mock_response([{"embedding": [0.1] * 2048}])
+        mock_resp = _mock_response([{"embedding": [0.1] * DIMS}])
 
         with patch.object(
             embedder._client,
@@ -348,7 +350,7 @@ class TestRateLimiter:
         # RPM: unlimited. TPM: burst=10 tokens, refill 20 tokens/sec.
         embedder._rpm_limiter = TokenBucket(tokens_per_sec=1e9, burst=int(1e9))
         embedder._tpm_limiter = TokenBucket(tokens_per_sec=20, burst=10)
-        mock_resp = _mock_response([{"embedding": [0.1] * 2048}])
+        mock_resp = _mock_response([{"embedding": [0.1] * DIMS}])
 
         with patch.object(
             embedder._client,
@@ -389,7 +391,7 @@ class TestRateLimiter:
                 max_concurrent = current
             await asyncio.sleep(0.1)
             call_count -= 1
-            return _mock_response([{"embedding": [0.1] * 2048}])
+            return _mock_response([{"embedding": [0.1] * DIMS}])
 
         embedder._semaphore = asyncio.Semaphore(2)
         with patch.object(
@@ -465,7 +467,7 @@ class TestEstimateTokens:
 class TestTokenCounter:
     async def test_tracks_estimated_tokens(self, embedder: JinaV4Embedder) -> None:
         """Token counter accumulates across calls."""
-        mock_resp = _mock_response([{"embedding": [0.1] * 2048}])
+        mock_resp = _mock_response([{"embedding": [0.1] * DIMS}])
         with patch.object(
             embedder._client,
             "post",
@@ -484,7 +486,7 @@ class TestTokenCounter:
 
     async def test_reset_clears_counter(self, embedder: JinaV4Embedder) -> None:
         """reset_token_counter zeroes the accumulator."""
-        mock_resp = _mock_response([{"embedding": [0.1] * 2048}])
+        mock_resp = _mock_response([{"embedding": [0.1] * DIMS}])
         with patch.object(
             embedder._client,
             "post",
@@ -508,17 +510,17 @@ class TestEmbedderIntegration:
     async def test_embed_text_returns_2048d(self, live_embedder: JinaV4Embedder) -> None:
         result = await live_embedder.embed_text(["hello world"])
         assert len(result) == 1
-        assert len(result[0]) == 2048
+        assert len(result[0]) == DIMS
         assert all(isinstance(v, float) for v in result[0])
 
     async def test_embed_text_query_returns_2048d(self, live_embedder: JinaV4Embedder) -> None:
         result = await live_embedder.embed_text_query("test query")
-        assert len(result) == 2048
+        assert len(result) == DIMS
 
     async def test_embed_image_returns_2048d(self, live_embedder: JinaV4Embedder) -> None:
         png = (FIXTURES / "sample.png").read_bytes()
         result = await live_embedder.embed_image(png)
-        assert len(result) == 2048
+        assert len(result) == DIMS
 
     @pytest.mark.skipif(
         not __import__("config.settings", fromlist=["settings"]).settings.multivec_enabled,

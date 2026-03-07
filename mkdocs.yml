@@ -42,7 +42,7 @@ nav:
     - Overview: ingestion/overview.md
     - File Processing: ingestion/file-processing.md
     - Embeddings (Jina v4): ingestion/embeddings.md
-    - Knowledge Graph (Graphiti): ingestion/knowledge-graph.md
+    - Knowledge Graph: ingestion/knowledge-graph.md
     - CocoIndex Pipeline: ingestion/cocoindex.md
   - MCP Server:
     - Overview: server/overview.md

@@ -31,6 +31,7 @@ from ingestion.file_processor import (
 from ingestion.graph_engine import GraphEngine, close_graph_engine, get_graph_engine
 from ingestion.neo4j_setup import create_neo4j_schema, get_driver
 from ingestion.qdrant_setup import ensure_collections
+from ingestion.schema_inducer import SchemaInducer
 from ingestion.target_connector import RagTarget
 
 logger = get_logger(__name__)
@@ -470,6 +471,35 @@ async def _ingest_to_graph(
     await engine.ingest(chunks=chunks, source_key=source_file)
 
 
+_schema_inducer: SchemaInducer | None = None
+
+
+def _get_schema_inducer() -> SchemaInducer:
+    global _schema_inducer  # noqa: PLW0603
+    if _schema_inducer is None:
+        _schema_inducer = SchemaInducer()
+    return _schema_inducer
+
+
+async def _ingest_to_graph_with_schema(
+    source_file: str,
+    chunks: list[TextChunk],
+    engine: GraphEngine,
+) -> None:
+    """Ingest chunks via graph engine, optionally with induced schema."""
+    schema = None
+
+    if settings.schema_induction_enabled and settings.graph_engine == "gliner" and chunks:
+        # Use first chunks' text as sample for schema induction
+        sample = " ".join((c.contextualized_text or c.text) for c in chunks[:3])
+        inducer = _get_schema_inducer()
+        induced = await inducer.induce(sample)
+        if induced.entity_types or induced.relationship_types:
+            schema = inducer.merge_with_base(induced)
+
+    await engine.ingest(chunks=chunks, source_key=source_file, schema=schema)
+
+
 @cocoindex.op.function()
 def ingest_file(content: bytes, filename: str) -> str:
     """Process a single file: classify, embed, store to Qdrant + Neo4j.
@@ -562,7 +592,7 @@ def ingest_file(content: bytes, filename: str) -> str:
 
                 # Bulk graph ingestion after all text pages are processed
                 if graph_engine_inst and all_chunks:
-                    await _ingest_to_graph(
+                    await _ingest_to_graph_with_schema(
                         filename,
                         all_chunks,
                         graph_engine_inst,

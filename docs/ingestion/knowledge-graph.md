@@ -31,10 +31,17 @@ Both engines implement the `GraphEngine` protocol and return `GraphFact` results
 
 ```python
 class GraphEngine(Protocol):
-    async def ingest(self, chunks: list[TextChunk], source_key: str) -> None: ...
+    async def ingest(
+        self,
+        chunks: list[TextChunk],
+        source_key: str,
+        schema: MergedSchema | None = None,
+    ) -> None: ...
     async def search(self, query: str, limit: int = 10) -> list[GraphFact]: ...
     async def close(self) -> None: ...
 ```
+
+The optional `schema` parameter allows per-document dynamic schemas from the schema inducer. GLiNER2 uses it when provided; Graphiti ignores it (discovers entity types autonomously via its own LLM).
 
 The factory `get_graph_engine()` lazily creates a singleton based on `settings.graph_engine`. Call `close_graph_engine()` at shutdown.
 
@@ -117,22 +124,38 @@ The `gliner2` package is lazy-imported only when `GRAPH_ENGINE=gliner`, so Graph
 
 ### Schema
 
-Entity and relationship types are defined in `config/constants.py` as dicts with natural language descriptions that guide GLiNER2's extraction accuracy:
+#### Base schema
 
-```python
-ENTITY_TYPES = {
-    "person": "A named individual, author, developer, ...",
-    "technology": "A programming language, framework, library, tool, ...",
-    ...
-}
-RELATIONSHIP_TYPES = {
-    "created_by": "X was created, authored, or developed by Y",
-    "uses": "X uses, depends on, or integrates Y",
-    ...
-}
-```
+Entity and relationship types are defined in `config/constants.py` as dicts with natural language descriptions that guide GLiNER2's extraction accuracy. The base schema covers 14 entity types and 12 relationship types across business, legal, financial, and technical domains:
+
+**Entity types (14):** `person`, `organization`, `location`, `date_time`, `monetary_value`, `document`, `product`, `technology`, `metric`, `event`, `legal_term`, `role`, `concept`, `requirement`
+
+**Relationship types (12):** `created_by`, `owned_by`, `uses`, `part_of`, `related_to`, `measured_by`, `requires`, `applies_to`, `succeeds`, `conflicts_with`, `valued_at`, `scheduled_for`
 
 These descriptions are passed directly to `GLiNER2.create_schema().entities()` and `.relations()`, which accept `dict[str, str]` for description-enhanced extraction.
+
+#### Dynamic schema induction
+
+When `SCHEMA_INDUCTION_ENABLED=true` (default) and `GRAPH_ENGINE=gliner`, the pipeline runs a single LLM call per document to propose additional domain-specific types.
+
+**Module:** `ingestion/schema_inducer.py`
+
+| Class | Description |
+|-|-|
+| `SchemaInducer` | Orchestrator: calls LLM with a sample of document text, parses proposed types |
+| `InducedSchema` | Dataclass holding LLM-proposed entity and relationship types with descriptions |
+| `MergedSchema` | Base schema + induced types merged together (induced types are additive only) |
+
+**How it works:**
+
+1. The pipeline takes a sample from the first 3 chunks of a document
+2. `SchemaInducer.induce(sample_text)` calls the LLM (`SCHEMA_INDUCTION_MODEL`, default Haiku) with a prompt asking for 3-8 entity types and 3-6 relationship types specific to the document's domain
+3. `merge_with_base(induced)` merges proposed types on top of the base schema (base types are never removed)
+4. The merged schema is passed to `GLiNEREngine.ingest(chunks, source_key, schema=merged)`
+
+**Caching:** Results are cached by SHA256 hash of the first 500 chars with a configurable TTL (`SCHEMA_CACHE_TTL`, default 3600s). Documents with similar openings (e.g. contracts from the same template) hit the cache and skip the LLM call.
+
+**Fallbacks:** If the document has < 200 chars of text (badly degraded scan), or if the LLM call fails, the base schema is used without induction.
 
 ### Ingestion
 

@@ -84,6 +84,14 @@ class Settings(BaseSettings):
     graph_semaphore_limit: int = 10  # SEMAPHORE_LIMIT for Graphiti LLM concurrency
     graph_episode_target_size: int = 1500  # Target chars per Graphiti episode
     graph_engine: Literal["graphiti", "gliner"] = "graphiti"
+
+    # Live ingestion
+    live_ingest_port: int = 8001
+
+    # Schema induction
+    schema_induction_enabled: bool = True
+    schema_induction_model: str = "claude-haiku-4-5-20251001"
+    schema_cache_ttl: int = 3600  # seconds
     image_embed_strategy: str = "smart"  # "smart" | "all"
 
     # Observability

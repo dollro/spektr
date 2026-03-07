@@ -1,6 +1,6 @@
 # Response Models
 
-Pydantic models used by MCP search tools, defined in `server/models.py`.
+Pydantic models used by MCP search tools and the live ingestion API, defined in `server/models.py`.
 
 ## SearchResult
 
@@ -88,14 +88,17 @@ GLiNER example:
 
 ## HybridSearchResponse
 
-Returned by the hybrid search tool, which executes vector and graph searches in parallel and fuses the results.
+Returned by the hybrid search tool, which executes vector and graph searches in parallel and fuses the results. When `session_id` is provided, live session data is separated into `transcript_results`.
 
 | Field | Type | Default | Description |
 |-|-|-|-|
-| `vector_results` | `list[SearchResult]` | `[]` | Dense vector search results |
+| `vector_results` | `list[SearchResult]` | `[]` | Dense vector search results (bulk KB) |
 | `graph_results` | `list[GraphFact]` | `[]` | Knowledge graph facts |
+| `transcript_results` | `list[SearchResult]` | `[]` | Live session results, sorted chronologically (only populated with `session_id`) |
 | `query` | `str` | — | The original search query |
+| `session_id` | `str \| None` | `None` | Session ID if session-aware search was used |
 | `strategy` | `str` | `"parallel"` | Fusion strategy used |
+| `errors` | `list[str] \| None` | `None` | Present only if one or both backends failed |
 
 ```json
 {
@@ -109,6 +112,7 @@ Returned by the hybrid search tool, which executes vector and graph searches in 
       "metadata": {}
     }
   ],
+  "transcript_results": [],
   "graph_results": [
     {
       "fact": "Transformers replaced recurrent architectures for NLP tasks",
@@ -118,6 +122,46 @@ Returned by the hybrid search tool, which executes vector and graph searches in 
     }
   ],
   "query": "transformer architecture attention mechanism",
+  "session_id": null,
   "strategy": "parallel"
 }
 ```
+
+## TranscriptChunk
+
+Request model for live ingestion (`POST /ingest/transcript`).
+
+| Field | Type | Default | Description |
+|-|-|-|-|
+| `session_id` | `str` | — | Active session identifier |
+| `text` | `str` | — | Text content of the chunk |
+| `timestamp` | `datetime` | — | When the chunk was produced |
+| `speaker` | `str \| None` | `None` | Speaker identifier (optional) |
+
+## SessionStartRequest
+
+Request model for starting a live session (`POST /session/start`).
+
+| Field | Type | Default | Description |
+|-|-|-|-|
+| `session_id` | `str` | — | Unique session identifier |
+| `metadata` | `dict` | `{}` | Arbitrary session metadata (title, participants, etc.) |
+
+## SessionEndRequest
+
+Request model for ending a live session (`POST /session/end`).
+
+| Field | Type | Default | Description |
+|-|-|-|-|
+| `session_id` | `str` | — | Session to end |
+| `archive` | `bool` | `false` | `true` keeps data permanently; `false` purges all session data |
+
+## IngestResponse
+
+Response from live transcript ingestion.
+
+| Field | Type | Default | Description |
+|-|-|-|-|
+| `status` | `str` | — | `"accepted"` on success |
+| `vector_indexed` | `bool` | — | Whether the chunk was indexed in Qdrant |
+| `graph_status` | `str` | — | `"processing"` (Graphiti runs as background task) |

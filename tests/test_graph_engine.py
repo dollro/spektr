@@ -10,6 +10,34 @@ from ingestion.file_processor import TextChunk
 from server.models import GraphFact
 
 
+class TestExpandedSchema:
+    def test_entity_types_count(self) -> None:
+        """Base schema has 14 entity types covering diverse domains."""
+        from config.constants import ENTITY_TYPES
+
+        assert len(ENTITY_TYPES) == 14
+
+    def test_relationship_types_count(self) -> None:
+        """Base schema has 12 relationship types."""
+        from config.constants import RELATIONSHIP_TYPES
+
+        assert len(RELATIONSHIP_TYPES) == 12
+
+    def test_entity_types_have_descriptions(self) -> None:
+        """Every entity type has a non-empty description."""
+        from config.constants import ENTITY_TYPES
+
+        for name, desc in ENTITY_TYPES.items():
+            assert desc.strip(), f"Empty description for entity type '{name}'"
+
+    def test_relationship_types_have_descriptions(self) -> None:
+        """Every relationship type has a non-empty description."""
+        from config.constants import RELATIONSHIP_TYPES
+
+        for name, desc in RELATIONSHIP_TYPES.items():
+            assert desc.strip(), f"Empty description for rel type '{name}'"
+
+
 class TestGraphFact:
     def test_graphfact_minimal(self) -> None:
         """GraphFact works with just fact field (backward compat)."""
@@ -309,7 +337,7 @@ class TestGLiNEREngineSearch:
             return_value=[
                 {
                     "entity_name": "Google",
-                    "entity_type": "ORGANIZATION",
+                    "entity_types": ["ORGANIZATION"],
                     "rel_type": None,
                     "target_name": None,
                     "confidence": None,
@@ -386,3 +414,85 @@ class TestGLiNEREngineSearch:
 
         # Should deduplicate to 1 result
         assert len(results) == 1
+
+
+class TestGLiNEREngineDynamicSchema:
+    @pytest.mark.asyncio
+    async def test_ingest_with_custom_schema(self) -> None:
+        """GLiNEREngine.ingest uses provided schema instead of base."""
+        from ingestion.graph_engine import GLiNEREngine
+        from ingestion.schema_inducer import MergedSchema
+
+        long_text = (
+            "The Master Service Agreement between Acme Corp and Widget Inc "
+            "establishes payment terms of net-30 for all deliverables under "
+            "the contract scope including software development and consulting "
+            "services. This agreement is effective from January 2026 onwards."
+        )
+        chunks = [TextChunk(text=long_text, chunk_index=0, page_number=1)]
+
+        custom_schema = MergedSchema(
+            entity_types={"clause": "A legal clause", "person": "A person"},
+            relationship_types={"governs": "X governs Y"},
+        )
+
+        mock_extractor = MagicMock()
+        mock_extractor.create_schema.return_value = mock_extractor
+        mock_extractor.entities.return_value = mock_extractor
+        mock_extractor.relations.return_value = mock_extractor
+        mock_extractor.extract.return_value = {
+            "entities": {"clause": ["Net-30"]},
+            "relation_extraction": {},
+        }
+
+        mock_session = AsyncMock()
+        mock_session.run = AsyncMock()
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+
+        mock_driver = MagicMock()
+        mock_driver.session.return_value = mock_session
+
+        engine = GLiNEREngine.__new__(GLiNEREngine)
+        engine._extractor = mock_extractor
+        engine._driver = mock_driver
+        engine._schema = MagicMock()  # base schema (should NOT be used)
+        engine._entity_map = {}
+        engine._relation_map = {}
+
+        await engine.ingest(chunks, "contract.pdf", schema=custom_schema)
+
+        # Verify extractor.create_schema was called (for custom schema)
+        mock_extractor.create_schema.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_ingest_without_schema_uses_base(self) -> None:
+        """GLiNEREngine.ingest without schema parameter uses base schema."""
+        from ingestion.graph_engine import GLiNEREngine
+
+        long_text = "x" * 250
+        chunks = [TextChunk(text=long_text, chunk_index=0, page_number=1)]
+
+        mock_extractor = MagicMock()
+        base_schema = MagicMock()
+        mock_extractor.extract.return_value = {
+            "entities": {},
+            "relation_extraction": {},
+        }
+
+        mock_session = AsyncMock()
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+
+        mock_driver = MagicMock()
+        mock_driver.session.return_value = mock_session
+
+        engine = GLiNEREngine.__new__(GLiNEREngine)
+        engine._extractor = mock_extractor
+        engine._driver = mock_driver
+        engine._schema = base_schema
+
+        await engine.ingest(chunks, "test.pdf")
+
+        # Should use base schema (self._schema), not create_schema
+        mock_extractor.extract.assert_called_once_with(long_text, base_schema)
