@@ -5,8 +5,12 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from config.settings import settings
+from fastapi import HTTPException
+
 import pytest
 from httpx import ASGITransport, AsyncClient
+from starlette.requests import Request
 
 _TEST_API_KEY = "test-ingest-key-42"
 
@@ -44,6 +48,125 @@ def _reset_active_session():
     mod._active_session = None
     yield
     mod._active_session = None
+
+
+@pytest.fixture(autouse=True)
+def _disable_ingest_auth():
+    """Disable ingest auth so non-auth tests aren't affected by .env values."""
+    with patch.object(settings, "ingest_api_key", ""):
+        yield
+
+
+def _fake_request(auth_header: str | None = None) -> Request:
+    """Build a minimal Starlette Request with an optional Authorization header."""
+    headers: list[tuple[bytes, bytes]] = []
+    if auth_header is not None:
+        headers.append((b"authorization", auth_header.encode()))
+    scope = {"type": "http", "method": "GET", "path": "/", "headers": headers}
+    return Request(scope)
+
+
+class TestExtractBearer:
+    """Unit tests for _extract_bearer."""
+
+    def test_valid_bearer(self) -> None:
+        from ingestion.live_ingest import _extract_bearer
+
+        assert _extract_bearer(_fake_request("Bearer my-token")) == "my-token"
+
+    def test_missing_header_raises_401(self) -> None:
+        from ingestion.live_ingest import _extract_bearer
+
+        with pytest.raises(HTTPException) as exc_info:
+            _extract_bearer(_fake_request())
+        assert exc_info.value.status_code == 401
+
+    def test_malformed_header_raises_401(self) -> None:
+        from ingestion.live_ingest import _extract_bearer
+
+        with pytest.raises(HTTPException) as exc_info:
+            _extract_bearer(_fake_request("Token abc"))
+        assert exc_info.value.status_code == 401
+
+
+class TestRequireIngestApiKey:
+    """Unit tests for _require_ingest_api_key."""
+
+    def test_auth_disabled_allows_any_request(self) -> None:
+        from ingestion.live_ingest import _require_ingest_api_key
+
+        with patch.object(settings, "ingest_api_key", ""):
+            _require_ingest_api_key(_fake_request())  # no error
+
+    def test_missing_token_raises_401(self) -> None:
+        from ingestion.live_ingest import _require_ingest_api_key
+
+        with patch.object(settings, "ingest_api_key", _TEST_API_KEY):
+            with pytest.raises(HTTPException) as exc_info:
+                _require_ingest_api_key(_fake_request())
+            assert exc_info.value.status_code == 401
+
+    def test_wrong_key_raises_403(self) -> None:
+        from ingestion.live_ingest import _require_ingest_api_key
+
+        with patch.object(settings, "ingest_api_key", _TEST_API_KEY):
+            with pytest.raises(HTTPException) as exc_info:
+                _require_ingest_api_key(_fake_request("Bearer wrong"))
+            assert exc_info.value.status_code == 403
+
+    def test_correct_key_passes(self) -> None:
+        from ingestion.live_ingest import _require_ingest_api_key
+
+        with patch.object(settings, "ingest_api_key", _TEST_API_KEY):
+            _require_ingest_api_key(
+                _fake_request(f"Bearer {_TEST_API_KEY}")
+            )  # no error
+
+
+class TestRequireSessionToken:
+    """Unit tests for _require_session_token."""
+
+    def test_auth_disabled_allows_any_request(self) -> None:
+        from ingestion.live_ingest import _require_session_token
+
+        with patch.object(settings, "ingest_api_key", ""):
+            _require_session_token(_fake_request())  # no error
+
+    def test_no_active_session_raises_404(self) -> None:
+        import ingestion.live_ingest as mod
+        from ingestion.live_ingest import _require_session_token
+
+        mod._active_session = None
+        with patch.object(settings, "ingest_api_key", _TEST_API_KEY):
+            with pytest.raises(HTTPException) as exc_info:
+                _require_session_token(_fake_request("Bearer any"))
+            assert exc_info.value.status_code == 404
+
+    def test_wrong_token_raises_403(self) -> None:
+        import ingestion.live_ingest as mod
+        from ingestion.live_ingest import _require_session_token
+
+        mod._active_session = {
+            "session_id": "s1",
+            "session_token": "real-token",
+        }
+        with patch.object(settings, "ingest_api_key", _TEST_API_KEY):
+            with pytest.raises(HTTPException) as exc_info:
+                _require_session_token(_fake_request("Bearer wrong"))
+            assert exc_info.value.status_code == 403
+
+    def test_correct_token_passes(self) -> None:
+        import ingestion.live_ingest as mod
+        from ingestion.live_ingest import _require_session_token
+
+        mod._active_session = {
+            "session_id": "s1",
+            "session_token": "real-token",
+        }
+        with patch.object(settings, "ingest_api_key", _TEST_API_KEY):
+            _require_session_token(
+                _fake_request("Bearer real-token")
+            )  # no error
 
 
 class TestSessionStart:
