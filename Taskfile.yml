@@ -22,9 +22,14 @@ tasks:
       - docker compose down
 
   ingest:
-    desc: Run the bulk ingestion pipeline (Path A)
+    desc: Run the bulk ingestion pipeline (Path A, one-shot batch)
     cmds:
       - uv run python -m ingestion.pipeline
+
+  ingest-live:
+    desc: "Run the pipeline in live mode (watches SQS for S3 events, stays running)"
+    cmds:
+      - uv run python -m ingestion.pipeline --live
 
   serve:
     desc: Start the MCP server

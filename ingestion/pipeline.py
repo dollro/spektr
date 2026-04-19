@@ -704,7 +704,6 @@ def rag_ingestion_flow(
                 included_patterns=_SUPPORTED_PATTERNS,
             ),
         )
-        filename_field = "key"
     else:
         data_scope["files"] = flow_builder.add_source(
             cocoindex.sources.LocalFile(
@@ -713,7 +712,8 @@ def rag_ingestion_flow(
                 included_patterns=_SUPPORTED_PATTERNS,
             ),
         )
-        filename_field = "filename"
+    # Both LocalFile and AmazonS3 sources expose "filename" as the row key.
+    filename_field = "filename"
 
     collector = data_scope.add_collector()
 
@@ -735,14 +735,34 @@ def rag_ingestion_flow(
     )
 
 
-def run_pipeline() -> None:
-    """Initialize and run the ingestion pipeline."""
+def run_pipeline(live: bool = False) -> None:
+    """Initialize and run the ingestion pipeline.
+
+    When ``live`` is True, CocoIndex stays running and watches the
+    configured source (SQS for S3, filesystem events for local) until
+    the process is interrupted. Use Ctrl-C to stop.
+    """
     from config.observability import setup_observability
 
     setup_observability()
     t0 = time.monotonic()
-    logger.info("Pipeline starting")
+    logger.info("Pipeline starting (live=%s)", live)
     os.environ.setdefault("COCOINDEX_DATABASE_URL", settings.database_url)
+
+    # Export AWS credentials to os.environ so CocoIndex's Rust-based S3
+    # client can see them (pydantic-settings reads .env into Settings but
+    # does NOT populate process env). Only needed when using the S3 source.
+    if _use_s3_source():
+        if settings.aws_access_key_id:
+            os.environ["AWS_ACCESS_KEY_ID"] = settings.aws_access_key_id
+        if settings.aws_secret_access_key:
+            os.environ["AWS_SECRET_ACCESS_KEY"] = settings.aws_secret_access_key
+        if settings.aws_region:
+            os.environ["AWS_REGION"] = settings.aws_region
+            os.environ["AWS_DEFAULT_REGION"] = settings.aws_region
+        if settings.aws_endpoint_url:
+            os.environ["AWS_ENDPOINT_URL"] = settings.aws_endpoint_url
+
     cocoindex.init()
 
     # Provision infrastructure
@@ -759,9 +779,17 @@ def run_pipeline() -> None:
 
     # Setup and run pipeline
     cocoindex.setup_all_flows()
+    if live:
+        logger.info(
+            "Entering live mode — watching %s for changes. Press Ctrl-C to stop.",
+            "SQS" if _use_s3_source() else "local filesystem",
+        )
     run_async(
         cocoindex.update_all_flows_async(
-            cocoindex.FlowLiveUpdaterOptions(live_mode=False, print_stats=True),
+            cocoindex.FlowLiveUpdaterOptions(
+                live_mode=live,
+                print_stats=True,
+            ),
         )
     )
 
@@ -778,7 +806,10 @@ def run_pipeline() -> None:
 
 
 if __name__ == "__main__":
+    import sys
+
     from config.logging import setup_logging
 
     setup_logging()
-    run_pipeline()
+    live = "--live" in sys.argv[1:]
+    run_pipeline(live=live)
