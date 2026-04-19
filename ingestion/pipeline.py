@@ -737,6 +737,9 @@ def rag_ingestion_flow(
 
 def run_pipeline() -> None:
     """Initialize and run the ingestion pipeline."""
+    from config.observability import setup_observability
+
+    setup_observability()
     t0 = time.monotonic()
     logger.info("Pipeline starting")
     os.environ.setdefault("COCOINDEX_DATABASE_URL", settings.database_url)

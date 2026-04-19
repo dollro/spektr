@@ -13,6 +13,9 @@ from agent.agent import create_rag_agent
 
 
 async def main(question: str) -> None:
+    from config.observability import setup_observability
+
+    setup_observability()
     agent, server = await create_rag_agent()
     async with server:
         result = await agent.run(question)

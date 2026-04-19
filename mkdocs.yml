@@ -59,6 +59,8 @@ nav:
     - Local Development: deployment/local-development.md
   - API Reference:
     - Response Models: api/models.md
+  - Operations:
+    - Observability: operations/observability.md
   - Evaluation:
     - Golden Set: eval/golden-set.md
   - Resources:

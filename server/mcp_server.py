@@ -6,6 +6,7 @@ from fastmcp import FastMCP
 from fastmcp.server.middleware import Middleware, MiddlewareContext
 
 from config.logging import get_logger, setup_logging
+from config.observability import setup_observability
 from config.settings import settings
 from server.tools.graph_search import graph_search
 from server.tools.hybrid_search import hybrid_search
@@ -14,6 +15,7 @@ from server.tools.vector_search import vector_search
 from server.tools.visual_search import visual_search
 
 setup_logging()
+setup_observability()
 logger = get_logger(__name__)
 
 

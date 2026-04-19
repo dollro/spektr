@@ -99,6 +99,9 @@ class Settings(BaseSettings):
     # Observability
     log_level: str = "INFO"
     log_format: str = "json"
+    logfire_token: str = ""
+    observability_local_only: bool = True
+    service_name: str = "spektr"
 
     @property
     def dense_dimensions(self) -> int:

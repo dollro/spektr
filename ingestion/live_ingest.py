@@ -30,7 +30,11 @@ from server.models import (
 
 logger = logging.getLogger(__name__)
 
+from config.observability import instrument_fastapi, setup_observability  # noqa: E402
+
+setup_observability()
 app = FastAPI(title="Spektr Live Ingest")
+instrument_fastapi(app)
 
 _qdrant_client: QdrantClient | None = None
 _embedder: Embedder | None = None
