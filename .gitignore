@@ -12,3 +12,4 @@ site/
 state/
 eval-reports/
 backups/
+.mcp.json
