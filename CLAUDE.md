@@ -105,12 +105,25 @@ task serve               # Start MCP server
 ```bash
 task test                # Unit tests (excludes integration)
 task test-integration    # Integration tests (needs Docker services)
+task eval                # RAGAS retrieval-quality eval (needs `uv sync --extra eval`)
 task lint                # Ruff lint
 task format              # Ruff format
 task typecheck           # mypy
 task check               # lint + typecheck + test
 task docs-serve          # Serve MkDocs locally
 task docs-build          # Build docs
+```
+
+**Daily drivers:**
+
+```bash
+task smoke               # Direct vector_search smoke test (no MCP/LLM)
+task smoke-graph         # Direct graph_search smoke test
+task ask -- "question"   # End-to-end through agent + MCP + LLM (needs `task serve`)
+task doctor              # Diff CocoIndex tracking vs Qdrant; flags drift
+task doctor-fix          # Repair drift (deletes orphan tracking rows)
+task backup              # Snapshot Qdrant + Neo4j + Postgres to ./backups/<ts>/
+task restore -- --from backups/<ts> --target all --yes-i-know-this-wipes-things
 ```
 
 **Access Points:** Qdrant http://localhost:6333 | Neo4j http://localhost:7474 | MCP http://localhost:8080
@@ -130,6 +143,35 @@ task docs-build          # Build docs
 **Principles:** KISS, YAGNI, fail fast. Each function/class has one clear purpose.
 
 **Security:** Never commit secrets (use env vars). Validate all user input. Use parameterized queries.
+
+## Production contracts
+
+These are load-bearing invariants introduced by the `feat/prod-hardening` work. Don't break them silently.
+
+**Ingestion failure semantics** (`ingestion/pipeline.py` + `ingestion/_failure_tracker.py`):
+- A failing `ingest_file` re-raises so CocoIndex leaves the tracking row out and retries next run.
+- After `PIPELINE_MAX_RETRIES` (default 3) failures for the same file, the poison-pill kicks in: log CRITICAL, swallow, let CocoIndex mark it processed so the rest of the batch proceeds.
+- Failure counts live in `state/ingestion_failures.db` (sqlite, gitignored). Successful ingest resets the count.
+
+**Qdrant payload schema:**
+- Every dense point carries `embedder_model` (str) and `embedder_dim` (int). Never write points without them — `scripts/doctor.py` flags mixed values.
+- `source_file` is the logical key; `metadata.source_key` duplicates it for compatibility.
+
+**Eval gate** (`tests/eval/`, `task eval`):
+- PRs that touch `ingestion/`, `server/tools/`, `config/`, or the agent must not drop any metric below `tests/eval/thresholds.yaml`.
+- Thresholds are raised over time, never silently lowered. A drop needs a reason in the commit message.
+
+**Observability** (`config/observability.py`):
+- Every process entrypoint calls `setup_observability()` (idempotent). FastAPI apps additionally call `instrument_fastapi(app)`.
+- Local-only by default. Set `LOGFIRE_TOKEN` + `OBSERVABILITY_LOCAL_ONLY=false` to ship to Logfire Cloud.
+- JSON log records carry `trace_id`/`span_id` when emitted inside an active span.
+
+**Backup cadence** (`scripts/backup.py`):
+- `task backup` captures Qdrant + Neo4j + Postgres + a `manifest.json`. Recommended nightly via cron.
+- Neo4j dump requires ~10-30s downtime (Community Edition has no online backup).
+- `task restore` refuses without `--yes-i-know-this-wipes-things`.
+
+See `docs/operations/` for runbooks, `docs/eval/golden-set.md` for eval details.
 
 ## Git Workflow
 
