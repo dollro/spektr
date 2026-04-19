@@ -61,3 +61,4 @@ nav:
     - Response Models: api/models.md
   - Resources:
     - Architecture Blueprint: resources/rag-mcp-architecture-blueprint.md
+    - Learning Material (Deep Dive): resources/spektr-learning-material.md

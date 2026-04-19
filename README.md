@@ -186,16 +186,17 @@ Full reference: [Environment Variables](docs/configuration/environment.md)
 ## Testing
 
 ```bash
-uv run pytest                   # Unit tests
-uv run pytest -m integration    # Integration tests (needs Docker services)
-uv run ruff check . && uv run ruff format --check .   # Lint
-uv run mypy .                   # Type check
+task test                # Unit tests
+task test-integration    # Integration tests (needs Docker services)
+task lint                # Ruff
+task typecheck           # mypy
+task check               # lint + typecheck + test
 ```
 
 ## Documentation
 
 ```bash
-make docs-serve                 # MkDocs dev server
+task docs-serve          # MkDocs dev server
 ```
 
 ## Stack

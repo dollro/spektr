@@ -92,22 +92,25 @@ Before modifying or exploring ANY module, you MUST first read the corresponding 
 
 ## Quick Start
 
+Use [go-task](https://taskfile.dev) as the task runner. `task --list` shows all tasks.
+
 ```bash
-cp .env.example .env                  # Configure environment (gitignored)
-docker compose up -d                  # Start Qdrant, Neo4j, PostgreSQL
-uv sync                               # Install dependencies
-uv run python -m ingestion.pipeline   # Run ingestion pipeline
-uv run python -m server.mcp_server    # Start MCP server
+cp .env.example .env     # Configure environment (gitignored)
+task setup               # Install uv and project dependencies
+task up                  # Start Qdrant, Neo4j, PostgreSQL
+task ingest              # Run bulk ingestion pipeline
+task serve               # Start MCP server
 ```
 
 ```bash
-uv run pytest                          # Unit tests (excludes integration)
-uv run pytest -m integration           # Integration tests (needs Docker services)
-uv run ruff check .                    # Lint
-uv run ruff format .                   # Format
-uv run mypy .                          # Type check
-make docs-serve                        # Serve MkDocs locally
-make docs-build                        # Build docs
+task test                # Unit tests (excludes integration)
+task test-integration    # Integration tests (needs Docker services)
+task lint                # Ruff lint
+task format              # Ruff format
+task typecheck           # mypy
+task check               # lint + typecheck + test
+task docs-serve          # Serve MkDocs locally
+task docs-build          # Build docs
 ```
 
 **Access Points:** Qdrant http://localhost:6333 | Neo4j http://localhost:7474 | MCP http://localhost:8080

@@ -33,7 +33,10 @@ async def create_rag_agent() -> tuple[Agent, MCPServerSSE]:
     Returns a tuple of (agent, mcp_server). The caller must manage
     the server lifecycle via ``async with server:``.
     """
-    server = MCPServerSSE(f"http://localhost:{settings.mcp_port}/sse")
+    headers = (
+        {"Authorization": f"Bearer {settings.mcp_api_key}"} if settings.mcp_api_key else None
+    )
+    server = MCPServerSSE(f"http://localhost:{settings.mcp_port}/sse", headers=headers)
 
     if settings.llm_base_url:
         model = OpenAIModel(

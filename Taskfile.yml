@@ -1,0 +1,94 @@
+version: '3'
+
+# Spektr — task runner
+# Install go-task: https://taskfile.dev/installation/
+# Run `task --list` to see all available tasks.
+
+tasks:
+  setup:
+    desc: Install uv and project dependencies
+    cmds:
+      - command -v uv >/dev/null 2>&1 || { echo "Installing uv..."; curl -LsSf https://astral.sh/uv/install.sh | sh; }
+      - uv sync
+
+  up:
+    desc: Start Qdrant, Neo4j, PostgreSQL via docker compose
+    cmds:
+      - docker compose up -d
+
+  down:
+    desc: Stop docker compose services
+    cmds:
+      - docker compose down
+
+  ingest:
+    desc: Run the bulk ingestion pipeline (Path A)
+    cmds:
+      - uv run python -m ingestion.pipeline
+
+  serve:
+    desc: Start the MCP server
+    cmds:
+      - uv run python -m server.mcp_server
+
+  smoke:
+    desc: "Quick vector-search smoke test. Pass queries: task smoke -- 'q1' 'q2'"
+    cmds:
+      - uv run python -m scripts.smoke_search {{.CLI_ARGS}}
+
+  smoke-graph:
+    desc: "Quick graph-search smoke test. Pass queries: task smoke-graph -- 'q1'"
+    cmds:
+      - uv run python -m scripts.smoke_graph {{.CLI_ARGS}}
+
+  ask:
+    desc: "Ask the RAG agent a question (needs MCP server running). Usage: task ask -- 'your question'"
+    cmds:
+      - uv run python -m scripts.ask {{.CLI_ARGS}}
+
+  doctor:
+    desc: "Diff CocoIndex tracking against Qdrant contents; flag ingestion drift"
+    cmds:
+      - uv run python -m scripts.doctor
+
+  test:
+    desc: Run unit tests (excludes integration)
+    cmds:
+      - uv run pytest
+
+  test-integration:
+    desc: Run integration tests (requires docker services running)
+    cmds:
+      - uv run pytest -m integration
+
+  lint:
+    desc: Run ruff lint checks
+    cmds:
+      - uv run ruff check .
+
+  format:
+    desc: Format code with ruff
+    cmds:
+      - uv run ruff format .
+
+  typecheck:
+    desc: Run mypy type checks
+    cmds:
+      - uv run mypy .
+
+  check:
+    desc: Run lint, typecheck, and unit tests
+    cmds:
+      - task: lint
+      - task: typecheck
+      - task: test
+
+  docs-serve:
+    desc: Serve MkDocs locally at http://127.0.0.1:8000
+    cmds:
+      - uv run mkdocs serve
+
+  docs-build:
+    desc: Build static docs site
+    cmds:
+      - uv run mkdocs build
