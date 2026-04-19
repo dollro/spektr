@@ -83,6 +83,8 @@ def mock_embedder() -> MagicMock:
         return_value=[[0.5] * MULTIVEC_DIM] * 5,
     )
     embedder.close = AsyncMock()
+    embedder.model_name = "mock-model"
+    embedder.dim = DENSE_DIM
     return embedder
 
 

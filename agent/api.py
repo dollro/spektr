@@ -42,6 +42,9 @@ _server = None
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Manage MCP server connection across app lifetime."""
+    from config.observability import setup_observability
+
+    setup_observability()
     global _agent, _server  # noqa: PLW0603
     _agent, _server = await create_rag_agent()
     async with _server:
@@ -51,6 +54,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="Spektr RAG Agent", lifespan=lifespan)
+
+# Instrument eagerly — setup_observability in lifespan covers runtime spans,
+# but FastAPI-level instrumentation hooks on the app object need the app
+# to exist first.
+from config.observability import instrument_fastapi  # noqa: E402
+
+instrument_fastapi(app)
 
 app.add_middleware(
     CORSMiddleware,

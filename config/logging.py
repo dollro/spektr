@@ -11,6 +11,22 @@ import logging
 import os
 
 
+def _current_trace_ids() -> tuple[str, str] | None:
+    """Return (trace_id, span_id) as hex strings from OTEL context, if any."""
+    try:
+        from opentelemetry import trace
+
+        span = trace.get_current_span()
+        ctx = span.get_span_context()
+        if ctx.is_valid:
+            return (format(ctx.trace_id, "032x"), format(ctx.span_id, "016x"))
+    except ImportError:
+        pass
+    except Exception:
+        pass
+    return None
+
+
 class JSONFormatter(logging.Formatter):
     """Emit log records as single-line JSON objects."""
 
@@ -25,6 +41,10 @@ class JSONFormatter(logging.Formatter):
             log_data["exception"] = self.formatException(
                 record.exc_info,
             )
+        # Correlate with distributed traces when OTEL context is active
+        trace_ids = _current_trace_ids()
+        if trace_ids is not None:
+            log_data["trace_id"], log_data["span_id"] = trace_ids
         for key in (
             "duration_ms",
             "file_name",

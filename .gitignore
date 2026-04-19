@@ -9,3 +9,6 @@ data/
 *.egg-info/
 site/
 .worktrees/
+state/
+eval-reports/
+backups/

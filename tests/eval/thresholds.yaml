@@ -1,0 +1,11 @@
+# Minimum RAGAS metric scores for a green eval run.
+# Raise over time as the system matures; never silently lower.
+#
+# v1 bars (2026-04): calibrated to the current single-doc corpus + limit=5
+# retrieval. context_precision is the weakest because hybrid_search returns
+# 5 candidates and our chunker is generic; tighten after adding a reranker
+# scoring cutoff or chunking improvements. The 2026 production aspiration
+# is 0.70+ on every metric.
+faithfulness: 0.80          # every claim in the answer must be grounded in retrieved context
+context_precision: 0.50     # retrieved chunks should be relevant to the question
+answer_relevancy: 0.75      # the answer should actually address the question

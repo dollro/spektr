@@ -51,6 +51,21 @@ tasks:
     cmds:
       - uv run python -m scripts.doctor
 
+  doctor-fix:
+    desc: "Repair drift: delete orphan CocoIndex tracking rows so next ingest retries"
+    cmds:
+      - uv run python -m scripts.doctor --fix --yes
+
+  backup:
+    desc: "Snapshot Qdrant + Neo4j + Postgres to ./backups/<timestamp>/"
+    cmds:
+      - uv run python -m scripts.backup {{.CLI_ARGS}}
+
+  restore:
+    desc: "Restore from a backup dir. Pass: task restore -- --from backups/<ts> --target all --yes-i-know-this-wipes-things"
+    cmds:
+      - uv run python -m scripts.restore {{.CLI_ARGS}}
+
   test:
     desc: Run unit tests (excludes integration)
     cmds:
@@ -60,6 +75,11 @@ tasks:
     desc: Run integration tests (requires docker services running)
     cmds:
       - uv run pytest -m integration
+
+  eval:
+    desc: "Run RAG retrieval-quality eval (RAGAS). Needs ingested corpus + LLM key."
+    cmds:
+      - uv run pytest -m eval -v
 
   lint:
     desc: Run ruff lint checks

@@ -101,6 +101,16 @@ class Embedder(Protocol):
     def tokens_used(self) -> float: ...
     def reset_token_counter(self) -> None: ...
 
+    @property
+    def model_name(self) -> str:
+        """Human-readable model identifier (e.g. 'jina-embeddings-v4')."""
+        ...
+
+    @property
+    def dim(self) -> int:
+        """Dense vector dimensionality used by this embedder."""
+        ...
+
 
 def create_embedder(**kwargs: object) -> Embedder:
     """Instantiate the configured embedding provider.

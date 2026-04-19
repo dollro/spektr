@@ -117,6 +117,14 @@ class JinaV4Embedder:
         """Reset the token consumption counter to zero."""
         self._tokens_used = 0.0
 
+    @property
+    def model_name(self) -> str:
+        return self._model
+
+    @property
+    def dim(self) -> int:
+        return self._dimensions
+
     async def embed_text(
         self,
         texts: list[str],

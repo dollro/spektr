@@ -1,0 +1,99 @@
+# Curated Q&A fixtures for retrieval quality evaluation.
+#
+# Schema per item:
+#   id:          stable unique slug (never rename; used for per-Q tracking over time)
+#   question:    natural-language query as a user would ask it
+#   expected_context_substrings: one or more strings that MUST appear in the
+#                retrieved chunk text for the retrieval to be considered correct.
+#                Used by context_precision and as a human-sanity check.
+#   expected_answer_hint: free-form cue about what a good answer contains.
+#                Used only by reviewers; RAGAS does not consume this.
+#   required_source: filename that must be present in the ingested corpus;
+#                if absent, the Q is skipped rather than failed.
+#   tags:        free-form labels for filtering (e.g. retrieval-only, multi-hop, negative).
+
+items:
+  # --- arxiv.pdf (multi-robot exploration paper) ---
+  - id: arxiv-topic
+    question: What is the main topic of the arxiv paper?
+    expected_context_substrings:
+      - multi
+      - robot
+    expected_answer_hint: multi-robot exploration / decentralized teams
+    required_source: arxiv.pdf
+    tags: [topic, arxiv]
+
+  - id: arxiv-team-formation
+    question: How do the robots form teams during exploration?
+    expected_context_substrings:
+      - team
+    expected_answer_hint: self-organization algorithm for dynamic team formation, no central coordinator
+    required_source: arxiv.pdf
+    tags: [methodology, arxiv]
+
+  - id: arxiv-llm-role
+    question: What role do large language models play in the paper's approach?
+    expected_context_substrings:
+      - LLM
+    expected_answer_hint: destination selection — a novel use of LLMs in multi-robot exploration
+    required_source: arxiv.pdf
+    tags: [methodology, arxiv]
+
+  - id: arxiv-decentralization
+    question: Why is decentralization important in this work?
+    expected_context_substrings:
+      - decentralized
+    expected_answer_hint: robustness, flexibility, no central coordinator needed
+    required_source: arxiv.pdf
+    tags: [motivation, arxiv]
+
+  - id: arxiv-simulator
+    question: What simulation setup do the authors use?
+    expected_context_substrings:
+      - simula
+    expected_answer_hint: 3D simulator, around 100 robots, limited communication conditions
+    required_source: arxiv.pdf
+    tags: [experiments, arxiv]
+
+  - id: arxiv-sensors
+    question: What kind of sensors do the robots use?
+    expected_context_substrings:
+      - sensor
+    expected_answer_hint: limited / short-range; sparsely sampled sensors to simulate limited sensing
+    required_source: arxiv.pdf
+    tags: [setup, arxiv]
+
+  - id: arxiv-related-methods
+    question: Which classical methods does the paper reference or compare against?
+    expected_context_substrings:
+      - frontier
+    expected_answer_hint: frontier-based exploration, random/graph-based methods, deep RL approaches
+    required_source: arxiv.pdf
+    tags: [related-work, arxiv]
+
+  - id: arxiv-openai-usage
+    question: Which LLM provider or model does the paper use?
+    expected_context_substrings:
+      - GPT
+    expected_answer_hint: Azure OpenAI GPT-4o (or similar OpenAI-hosted model)
+    required_source: arxiv.pdf
+    tags: [infrastructure, arxiv]
+
+  # --- Negative / out-of-domain — the agent should say "I don't know" ---
+  # Flagged skip_in_ragas because RAGAS penalizes refusal answers on the
+  # answer_relevancy metric. Asserted separately via refusal-phrase check.
+  - id: negative-quantum-computing
+    question: What does the paper say about quantum computing?
+    expected_context_substrings: []  # nothing should be relevant
+    expected_answer_hint: not discussed; the agent should decline or say no info found
+    required_source: arxiv.pdf
+    tags: [negative, out-of-domain]
+    skip_in_ragas: true
+
+  - id: negative-weather
+    question: What was the weather during the experiments?
+    expected_context_substrings: []
+    expected_answer_hint: not discussed — simulated robots, no real weather data
+    required_source: arxiv.pdf
+    tags: [negative, out-of-domain]
+    skip_in_ragas: true

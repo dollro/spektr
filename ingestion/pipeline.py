@@ -20,6 +20,7 @@ from qdrant_client import QdrantClient, models
 from config.constants import DENSE_COLLECTION, MULTIVEC_COLLECTION
 from config.logging import get_logger
 from config.settings import settings
+from ingestion._failure_tracker import get_tracker
 from ingestion._utils import run_async
 from ingestion.embedder import Embedder, create_embedder
 from ingestion.file_processor import (
@@ -233,6 +234,8 @@ async def _process_text_page(
             "chunk_index": chunk.chunk_index,
             "char_count": len(chunk.text),
             "text_content": chunk.text,
+            "embedder_model": embedder.model_name,
+            "embedder_dim": embedder.dim,
             "metadata": {
                 "mime_type": mime,
                 "ingested_at": now,
@@ -290,6 +293,8 @@ async def _process_visual_page(
                         "page_number": page_number,
                         "chunk_index": 0,
                         "text_content": "",
+                        "embedder_model": embedder.model_name,
+                        "embedder_dim": embedder.dim,
                         "metadata": {
                             "mime_type": mime,
                             "ingested_at": now,
@@ -324,6 +329,8 @@ async def _process_visual_page(
                             "page_number": page_number,
                             "image_width": img_width,
                             "image_height": img_height,
+                            "embedder_model": embedder.model_name,
+                            "embedder_dim": embedder.dim,
                             "metadata": {
                                 "mime_type": mime,
                                 "ingested_at": now,
@@ -623,19 +630,39 @@ def ingest_file(content: bytes, filename: str) -> str:
             _process_all_pages(),
             timeout=settings.pipeline_timeout,
         )
-    except TimeoutError:
-        logger.error(
-            "File processing timed out after %ds: %s",
-            settings.pipeline_timeout,
+    except (TimeoutError, Exception) as exc:
+        tracker = get_tracker()
+        count = tracker.record_failure(filename, error=repr(exc))
+        if isinstance(exc, TimeoutError):
+            logger.error(
+                "File processing timed out after %ds: %s (attempt %d/%d)",
+                settings.pipeline_timeout,
+                filename,
+                count,
+                settings.pipeline_max_retries,
+                extra={"file_name": filename, "fail_count": count},
+            )
+        else:
+            logger.exception(
+                "Pipeline failed for file: %s (attempt %d/%d)",
+                filename,
+                count,
+                settings.pipeline_max_retries,
+                extra={"file_name": filename, "fail_count": count},
+            )
+        if count < settings.pipeline_max_retries:
+            raise
+        logger.critical(
+            "POISON PILL: %s failed %d times, giving up. "
+            "CocoIndex will mark processed; clear state/ingestion_failures.db "
+            "and delete the tracking row to retry. Last error: %r",
             filename,
-            extra={"file_name": filename},
+            count,
+            exc,
+            extra={"file_name": filename, "fail_count": count, "poisoned": True},
         )
-    except Exception:
-        logger.exception(
-            "Pipeline failed for file: %s",
-            filename,
-            extra={"file_name": filename},
-        )
+    else:
+        get_tracker().reset(filename)
 
     duration_ms = round((time.monotonic() - t0) * 1000)
     logger.info(
@@ -710,6 +737,9 @@ def rag_ingestion_flow(
 
 def run_pipeline() -> None:
     """Initialize and run the ingestion pipeline."""
+    from config.observability import setup_observability
+
+    setup_observability()
     t0 = time.monotonic()
     logger.info("Pipeline starting")
     os.environ.setdefault("COCOINDEX_DATABASE_URL", settings.database_url)

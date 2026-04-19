@@ -71,6 +71,8 @@ class TestProtocolCompliance:
         mock.close = AsyncMock()
         mock.tokens_used = 0.0
         mock.reset_token_counter = MagicMock()
+        mock.model_name = "mock-model"
+        mock.dim = 512
         assert isinstance(mock, Embedder)
 
 
