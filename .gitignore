@@ -11,3 +11,4 @@ site/
 .worktrees/
 state/
 eval-reports/
+backups/

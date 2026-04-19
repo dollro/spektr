@@ -61,6 +61,7 @@ nav:
     - Response Models: api/models.md
   - Operations:
     - Observability: operations/observability.md
+    - Backup & Restore: operations/backup-restore.md
   - Evaluation:
     - Golden Set: eval/golden-set.md
   - Resources:
