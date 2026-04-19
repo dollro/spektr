@@ -59,6 +59,8 @@ nav:
     - Local Development: deployment/local-development.md
   - API Reference:
     - Response Models: api/models.md
+  - Evaluation:
+    - Golden Set: eval/golden-set.md
   - Resources:
     - Architecture Blueprint: resources/rag-mcp-architecture-blueprint.md
     - Learning Material (Deep Dive): resources/spektr-learning-material.md
