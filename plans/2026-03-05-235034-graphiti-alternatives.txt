@@ -1,0 +1,625 @@
+
+ ▐▛███▜▌   Claude Code v2.1.69
+▝▜█████▛▘  Opus 4.6 · Claude Max
+  ▘▘ ▝▝    ~/Coding/spektr
+
+❯ /agent-team plans/2026-03-05-graphiti-chunk-grouping.md 
+
+● Let me start by reading the plan file and project context.
+
+● Recalled 1 memory, read 1 file (ctrl+o to expand)
+
+● Assessment: Solo, Not Team
+
+  This plan has 5 sequential tasks that all depend on previous ones, touching
+  only 4-5 files in the same module. Per the agent-team skill:
+
+  Use a single agent (or subagents) if work is linear or touches few files. 
+  Teams burn ~3-5x tokens.
+
+  Recommendation: Execute this plan directly using the executing-plans skill
+  instead. The tasks are linear (Task 2 needs Task 1's setting, Task 3 wires
+  Task 2's function, etc.) with no parallel boundaries.
+
+  Want me to proceed with direct execution using the executing-plans workflow?
+
+❯ yes - with subagents 
+
+● Skill(subagent-driven-development)
+  ⎿  Successfully loaded skill
+
+● Let me read the key files to build context for the subagents, then set up the
+  task list.
+
+● Now let me read the key source files to provide full context to subagents.
+
+● Read 5 files (ctrl+o to expand)
+
+● Good, I have all the context. Let me set up the task list and read the
+  subagent prompt templates.
+
+● Now let me read the implementer prompt template.
+
+● Read 1 file (ctrl+o to expand)
+
+● Now dispatching Task 1 — this is simple and quick.
+
+● Agent(Implement Task 1: config setting)
+  ⎿  Done (8 tool uses · 19.4k tokens · 6m 40s)
+  (ctrl+o to expand)
+
+● Task 1 done — setting added, 145 tests pass, committed as bad62f3.
+
+● Now dispatching Task 2 — the core grouping function + 6 tests.
+
+● Agent(Implement Task 2: grouping function)
+  ⎿  Done (11 tool uses · 19.3k tokens · 1m 9s)
+  (ctrl+o to expand)
+
+● Task 2 done — function + 6 tests, all passing, committed as c0056ff.
+
+  Now let me run a quick spec review before moving on, then dispatch Task 3.
+
+● Read 1 file (ctrl+o to expand)
+
+● Implementation matches spec exactly. Dispatching Task 3 — wiring grouping into
+   ingest_bulk().
+
+● Agent(Implement Task 3: wire grouping)
+  ⎿  Done (15 tool uses · 34.1k tokens · 7m 21s)
+  (ctrl+o to expand)
+
+● Task 3 done — grouping wired into ingest_bulk(), all 152 tests pass, committed
+   as 0e07803.
+
+● Dispatching Tasks 4 and 5 — logging + lint/verify. Task 4 is tiny (one log
+  line), and Task 5 is just lint/format. I'll dispatch Task 4 now.
+
+● Agent(Implement Task 4: add logging)
+  ⎿  Done (5 tool uses · 17.2k tokens · 2m 17s)
+  (ctrl+o to expand)
+
+● Agent(Task 5: lint and verify)
+  ⎿  Done (7 tool uses · 17.6k tokens · 2m 9s)
+  (ctrl+o to expand)
+
+● All 5 tasks complete. Let me do a final verification and review.
+
+● Bash(git log --oneline -8)
+  ⎿  97480a2 chore: lint and format after chunk grouping changes
+     9bb52be feat: log chunk grouping stats before Graphiti ingestion
+     0e07803 feat: wire chunk grouping into ingest_bulk for fewer LLM calls
+     … +5 lines (ctrl+o to expand)
+
+● All 5 tasks complete. Here's the summary:
+
+  Implementation Complete
+
+  5 commits on develop implementing Graphiti chunk grouping:
+
+  ┌─────────┬─────────────────────────────────────────────────────────┐
+  │ Commit  │                       Description                       │
+  ├─────────┼─────────────────────────────────────────────────────────┤
+  │ bad62f3 │ Add GRAPH_EPISODE_TARGET_SIZE setting (default 1500)    │
+  ├─────────┼─────────────────────────────────────────────────────────┤
+  │ c0056ff │ Add group_chunks_for_graph() function + 6 unit tests    │
+  ├─────────┼─────────────────────────────────────────────────────────┤
+  │ 0e07803 │ Wire grouping into ingest_bulk(), update existing tests │
+  ├─────────┼─────────────────────────────────────────────────────────┤
+  │ 9bb52be │ Add info logging for grouping stats                     │
+  ├─────────┼─────────────────────────────────────────────────────────┤
+  │ 97480a2 │ Lint/format cleanup                                     │
+  └─────────┴─────────────────────────────────────────────────────────┘
+
+  Files changed: config/settings.py, .env.example, ingestion/graph_writer.py,
+  tests/test_graph_writer_grouping.py, tests/test_graph_writer_bulk.py
+
+  All 152 non-integration tests pass. Expected performance: ~74 episodes → ~15
+  for a 25-page PDF, cutting ~296 LLM calls to ~60.
+
+  Want me to run the finishing-a-development-branch skill to prepare for merge?
+
+✻ Sautéed for 8m 25s
+
+❯ lets live test first..how ? 
+
+● Based on the plan's manual verification section:
+
+  # 1. Clear previous graph data (Neo4j browser at http://localhost:7474)
+  MATCH (n) DETACH DELETE n
+
+  # 2. Clear CocoIndex state
+  docker compose exec postgres psql -U cocoindex -d cocoindex -c "DROP SCHEMA IF
+   EXISTS cocoindex CASCADE;"
+
+  # 3. Run with grouping
+  GRAPH_ENABLED=true GRAPH_SEMAPHORE_LIMIT=10 LOG_FORMAT=text LOG_LEVEL=INFO uv
+  run python -m ingestion.pipeline
+
+  Watch for the log line: Grouped X chunks into Y episodes for <file> (target: 
+  1500 chars)
+
+  Do you have Docker services running (docker compose up -d)? And do you have a
+  test PDF in your documents/ folder? Let me check what's there.
+
+● Bash(docker compose ps --format "table {{.Name}}\t{{.Status}}" 2>/dev/null &&
+      echo "---" && ls -la documents/ 2>/dev/null || echo "No documents/ dir")
+  ⎿  NAME                STATUS
+     spektr-neo4j-1      Up 2 hours
+     spektr-postgres-1   Up 2 hours
+     … +6 lines (ctrl+o to expand)
+
+● Everything's ready — Docker services up, test.pdf in documents/.
+
+  Want me to run the pipeline now? Steps would be:
+
+  1. Clear Neo4j graph data
+  2. Clear CocoIndex state
+  3. Run the pipeline
+
+  Shall I proceed?
+
+❯ yes 
+
+● Bash(docker compose exec neo4j cypher-shell -u neo4j -p "$(grep NEO4J_PASSWORD
+       .env | cut -d= -f2)" "MATCH (n) DETACH DELETE n" 2>&1)
+  ⎿  Error: Exit code 1
+     The client is unauthorized due to authentication failure.
+
+     The client is unauthorized due to authentication failure.
+
+● Bash(docker compose exec postgres psql -U cocoindex -d cocoindex -c "DROP
+      SCHEMA IF EXISTS cocoindex CASCADE;" 2>&1)
+  ⎿  Cancelled: parallel tool call Bash(docker compose exec neo4j cypher-shell 
+     -…) errored
+
+● Searched for 2 patterns (ctrl+o to expand)
+
+● Bash(docker compose exec neo4j cypher-shell -u neo4j -p "neo4j-password"
+      "MATCH (n) DETACH DELETE n" 2>&1)
+  ⎿  (No output)
+
+● Bash(docker compose exec postgres psql -U cocoindex -d cocoindex -c "DROP
+      SCHEMA IF EXISTS cocoindex CASCADE;" 2>&1)
+  ⎿  NOTICE:  schema "cocoindex" does not exist, skipping
+     DROP SCHEMA
+
+● Both cleared. Running the pipeline now.
+
+● Bash(GRAPH_ENABLED=true GRAPH_SEMAPHORE_LIMIT=10 LOG_FORMAT=text
+      LOG_LEVEL=INFO uv run python -m ingestion.pipeline 2>&1)
+  ⎿  Running in the background (↓ to manage)
+  ⎿  (timeout 10m)
+
+● Pipeline is running in the background. This may take several minutes (the plan
+   estimates ~5-6 min with grouping vs ~28 min before). I'll be notified when it
+   completes.
+
+● Read 1 file (ctrl+o to expand)
+
+● Pipeline still running — embedding and LLM calls in progress (~10 min so far).
+   Let me check for the grouping log line specifically.
+
+● Searched for 1 pattern (ctrl+o to expand)
+
+● Those are just Neo4j schema notifications. The grouping log would come later
+  when _ingest_to_graphiti is called. The pipeline is still processing
+  (embeddings + LLM calls). I'll wait for completion notification.
+
+● Searched for 1 pattern (ctrl+o to expand)
+
+● There's our log line: Grouped 74 chunks into 25 episodes for test.pdf (target:
+   1500 chars)
+
+  That's a 3x reduction (74→25). The plan estimated ~15 episodes — we got 25,
+  which means the chunks are slightly larger on average than assumed, but still
+  a significant reduction (~3x fewer LLM calls).
+
+  The pipeline is still running the Graphiti bulk ingestion with these 25
+  episodes. Let me wait for it to finish.
+
+● Read 1 file (ctrl+o to expand)
+
+● Still running — Graphiti is making LLM calls for entity extraction on the 25
+  episodes. This is the slow part. I'll check back shortly.
+
+● Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+● 59 LLM calls so far out of an estimated ~100 for 25 episodes (~4 calls per
+  episode). Still going — I'll wait for the completion notification.
+
+● Read 2 files (ctrl+o to expand)
+
+● Seems to have stalled at ~630s. Let me check if there's an error or if it's
+  just a slow LLM call.
+
+● Searched for 1 pattern (ctrl+o to expand)
+
+● No real errors — just an ONNX warning. The pipeline is likely doing Graphiti
+  bulk ingestion which involves many sequential LLM calls. Let me check if it's
+  still alive.
+
+● Read 1 file (ctrl+o to expand)
+
+● Still ticking (640s elapsed). The bulk ingestion can be slow with Graphiti's
+  internal LLM pipeline — each episode triggers entity extraction,
+  deduplication, etc. It's processing but waiting on LLM responses. Let me check
+   again in a bit.
+
+● Read 1 file (ctrl+o to expand)
+
+● Still active — LLM and embedding calls flowing. Let me wait for the background
+   task notification rather than polling.
+
+● Read 1 file (ctrl+o to expand)
+
+● Pipeline at ~11 minutes. Let me check the LLM call count to estimate progress.
+
+● Searched for 1 pattern (ctrl+o to expand)
+
+● 60 LLM calls over ~11 min. It's progressing slowly through Graphiti's bulk
+  pipeline. This is normal — Graphiti does heavy processing per episode (entity
+  extraction, dedup, graph resolution). The key metric is we're at ~60 calls
+  instead of the ~296 we'd have with 74 ungrouped episodes. I'll let the
+  background task notify us when done.
+
+● Read 2 files (ctrl+o to expand)
+
+● Still going strong. I'll wait for the background task completion notification
+  instead of continuing to poll.
+
+● Read 1 file (ctrl+o to expand)
+
+● Pipeline still running at ~11min. The good news is we already confirmed the
+  grouping works — the log line showed 74 chunks → 25 episodes. The rest is
+  Graphiti doing its LLM-heavy entity extraction.
+
+  Do you want to keep waiting for it to finish, or is seeing the grouping log
+  line sufficient to confirm the feature works?
+
+✻ Sautéed for 11m 38s
+
+❯ now? 
+
+● Read 1 file (ctrl+o to expand)
+
+● Still running at ~24 min. Let me check how many LLM calls and if there's a
+  bulk ingestion result yet.
+
+● Searched for 1 pattern (ctrl+o to expand)
+
+● 127 LLM calls so far, still no "Bulk ingested" or "fallback" log — Graphiti's
+  add_episode_bulk is still processing the 25 episodes. It's doing deep entity
+  extraction/resolution internally. Slower than the plan estimated, but that's
+  the Graphiti LLM pipeline, not our grouping code.
+
+  The grouping itself worked perfectly. This is just Graphiti being LLM-heavy.
+
+❯ how speed those up ? is grpahiti really usefule for production? 
+
+● Good questions. Let me investigate what's actually bottlenecking Graphiti and
+  how the knowledge graph is used in the query path.
+
+● 2 Explore agents finished (ctrl+o to expand)
+   ├─ Explore Graphiti usage and perf · 25 tool uses · 77.0k tokens
+   │  ⎿  Done
+   └─ Explore Graphiti LLM call patterns · 21 tool uses · 74.3k tokens
+      ⎿  Done
+
+● Here's what I found:
+
+  Why it's slow
+
+  The pipeline is using claude-haiku-4.5 (already the fastest model), but
+  Graphiti makes ~3-5 LLM calls per episode internally (entity extraction,
+  relationship extraction, dedup/resolution, embeddings). With 25 episodes × ~4
+  calls × semaphore limit of 10, that's ~100 LLM calls bottlenecked by API
+  latency.
+
+  Quick speedups (no code changes)
+
+  ┌───────────────────────────┬─────────┬───────────┬────────────────────────┐
+  │           Lever           │ Current │    Try    │         Impact         │
+  ├───────────────────────────┼─────────┼───────────┼────────────────────────┤
+  │ GRAPH_SEMAPHORE_LIMIT     │ 10      │ 25-50     │ More parallel LLM      │
+  │                           │         │           │ calls                  │
+  ├───────────────────────────┼─────────┼───────────┼────────────────────────┤
+  │ GRAPH_EPISODE_TARGET_SIZE │ 1500    │ 3000-5000 │ Fewer episodes         │
+  │                           │         │           │ (~12→~8)               │
+  ├───────────────────────────┼─────────┼───────────┼────────────────────────┤
+  │ GRAPH_ENABLED             │ true    │ false     │ Skip graph entirely    │
+  └───────────────────────────┴─────────┴───────────┴────────────────────────┘
+
+  Is Graphiti useful for production?
+
+  Honest assessment:
+
+  - What it adds: Entity relationships, temporal facts, deduplication — things
+  vector search can't do
+  - What it costs: ~100 LLM calls per document, 20-30 min per PDF, known parsing
+   bugs (#879/#882)
+  - The catch: Hybrid search actively deduplicates graph results that overlap
+  with vector results — meaning much of what graph finds, vector already found
+
+  My take: For most RAG use cases, vector search alone (Qdrant) gives 90% of the
+   value at 1% of the cost. Graphiti is worth it only for:
+  - Documents where relationships between entities matter (contracts,
+  regulations, org charts)
+  - Use cases needing temporal queries ("what changed since X?")
+  - When you can afford the ingestion time and LLM cost
+
+  Want me to plan anything specific — like making the graph path faster, or
+  evaluating whether to keep it?
+
+✻ Brewed for 1m 15s
+
+❯ any state of the art alternative to graphoto in productive usage ? 
+
+● Web Search("knowledge graph RAG production alternative to Graphiti 2025 2026")
+  ⎿  Did 1 search in 7s
+
+● Web Search("Microsoft GraphRAG vs LightRAG vs nano-graphrag production
+            knowledge graph 2026")
+  ⎿  Did 1 search in 12s
+
+● Web Search("fast knowledge graph construction RAG without LLM calls entity
+            extraction 2026")
+  ⎿  Did 1 search in 8s
+
+● Here's the landscape:
+
+  Production Alternatives to Graphiti
+
+  ┌───────────────┬──────────────┬─────────┬───────────┬──────────────────┐
+  │     Tool      │   Approach   │  LLM    │   Speed   │     Best For     │
+  │               │              │  Calls  │           │                  │
+  ├───────────────┼──────────────┼─────────┼───────────┼──────────────────┤
+  │               │ KG + vector  │ Yes,    │ ~30%      │ Cost-sensitive   │
+  │ LightRAG      │ hybrid,      │ but     │ faster    │ production,      │
+  │               │ incremental  │ lighter │ than      │ incremental docs │
+  │               │ updates      │         │ GraphRAG  │                  │
+  ├───────────────┼──────────────┼─────────┼───────────┼──────────────────┤
+  │               │ Community    │         │ Slow      │ Enterprise,      │
+  │ Microsoft     │ hierarchy +  │ Heavy   │ (similar  │ Azure ecosystem, │
+  │ GraphRAG      │ map-reduce   │         │ to        │  global queries  │
+  │               │              │         │ Graphiti) │                  │
+  ├───────────────┼──────────────┼─────────┼───────────┼──────────────────┤
+  │               │ Adaptive     │         │           │                  │
+  │ Fast GraphRAG │ graph, no    │ Yes,    │ Fast      │ Simpler use      │
+  │               │ community    │ fewer   │           │ cases            │
+  │               │ overhead     │         │           │                  │
+  ├───────────────┼──────────────┼─────────┼───────────┼──────────────────┤
+  │               │ Production   │         │           │                  │
+  │ FalkorDB      │ graph DB,    │ Yes at  │ Very fast │ High-throughput  │
+  │ GraphRAG      │ sub-50ms     │ ingest  │  queries  │ production       │
+  │               │ queries      │         │           │                  │
+  ├───────────────┼──────────────┼─────────┼───────────┼──────────────────┤
+  │               │ No LLM —     │         │ Orders of │                  │
+  │ SpaCy/Relik   │ NLP-based    │ Zero    │           │ Cost-zero, 94%   │
+  │ NER           │ extraction   │         │ magnitude │ of LLM quality   │
+  │               │              │         │  faster   │                  │
+  ├───────────────┼──────────────┼─────────┼───────────┼──────────────────┤
+  │ Elasticsearch │ Dynamic      │         │ <2s on    │ Already using    │
+  │  graph        │ graph at     │ Zero    │ 100k+     │ Elastic          │
+  │               │ query time   │         │ docs      │                  │
+  └───────────────┴──────────────┴─────────┴───────────┴──────────────────┘
+
+  The real question: Do you need a KG at all?
+
+  Most production RAG systems ship with vector search only. A KG adds value
+  specifically when:
+  - You need multi-hop reasoning ("Who reports to the CEO of company X?")
+  - You need temporal tracking ("What changed since last quarter?")
+  - Your docs have dense entity relationships (contracts, regulations, org
+  structures)
+
+  My recommendation for Spektr
+
+  Option A — Drop Graphiti, keep it simple: Your vector search already works.
+  Make GRAPH_ENABLED=false the default. Most users won't need it.
+
+  Option B — Replace with LightRAG: Similar quality, faster, incremental
+  updates, lower LLM cost. Better maintained community.
+
+  Option C — LLM-free extraction: Use SpaCy NER + rule-based relationship
+  extraction. Zero LLM cost, 94% quality, processes in seconds not minutes. Add
+  results to Neo4j yourself.
+
+  What direction interests you? I can plan any of these.
+
+  Sources:
+  - https://medium.com/@tongbing00/graphrag-in-2026-a-practical-buyers-guide-to-
+  knowledge-graph-augmented-rag-43e5e72d522d
+  - https://www.maargasystems.com/2025/05/12/understanding-graphrag-vs-lightrag-
+  a-comparative-analysis-for-enhanced-knowledge-retrieval/
+  - https://www.aihello.com/resources/blog/creating-a-knowledge-graph-without-ll
+  ms/
+  - https://arxiv.org/html/2507.03226v2
+  - https://sider.ai/blog/ai-tools/best-graphrag-alternatives-to-try-in-2025
+  - https://github.com/DEEP-PolyU/Awesome-GraphRAG
+
+✻ Baked for 42s
+
+● Background command "Run ingestion pipeline with chunk grouping" completed
+(exit code 0)
+
+● The pipeline finished. Let me check the final result.
+
+● Searched for 1 pattern (ctrl+o to expand)
+
+● Pipeline completed successfully:
+
+  ┌─────────────────────────┬──────────────────────────────────┐
+  │         Metric          │              Value               │
+  ├─────────────────────────┼──────────────────────────────────┤
+  │ Chunks → Episodes       │ 74 → 25 (3x reduction)           │
+  ├─────────────────────────┼──────────────────────────────────┤
+  │ Graphiti bulk ingestion │ 1708s (~28.5 min)                │
+  ├─────────────────────────┼──────────────────────────────────┤
+  │ Total pipeline          │ 1781s (~29.7 min)                │
+  ├─────────────────────────┼──────────────────────────────────┤
+  │ LLM calls               │ ~160 (was ~296 without grouping) │
+  └─────────────────────────┴──────────────────────────────────┘
+
+  So the grouping worked — 74 chunks became 25 episodes and it completed without
+   errors. But the total time (~29 min) is still painful. The bottleneck is
+  squarely in Graphiti's internal LLM pipeline, not our code.
+
+  This reinforces the earlier point — even with grouping, Graphiti is expensive.
+   Did any of the alternatives I listed interest you, or would you like to go a
+  different direction?
+
+❯ SpaCy/Relik NER vs ELastic ? 
+
+● Web Search("SpaCy Relik NER knowledge graph construction production RAG 2025
+            2026 benchmark")
+  ⎿  Did 1 search in 8s
+
+● Web Search("Elasticsearch dynamic knowledge graph RAG query-time graph
+            construction production 2025 2026")
+  ⎿  Did 1 search in 8s
+
+● Web Search("Relik entity extraction speed benchmark vs LLM extraction seconds
+            per document")
+  ⎿  Did 1 search in 6s
+
+● SpaCy/Relik NER vs Elasticsearch Graph — Head to Head
+
+  ┌───────────────┬──────────────────────────────┬─────────────────────────┐
+  │               │       SpaCy/Relik NER        │   Elasticsearch Graph   │
+  ├───────────────┼──────────────────────────────┼─────────────────────────┤
+  │ When          │ Ingest-time (build graph     │ Query-time (build graph │
+  │               │ upfront)                     │  on the fly)            │
+  ├───────────────┼──────────────────────────────┼─────────────────────────┤
+  │ LLM calls     │ Zero                         │ Zero                    │
+  ├───────────────┼──────────────────────────────┼─────────────────────────┤
+  │               │ ~10s for full test set       │ <2s per query on 100k+  │
+  │ Speed         │ (GPU), 40x faster than LLM   │ docs                    │
+  │               │ extraction                   │                         │
+  ├───────────────┼──────────────────────────────┼─────────────────────────┤
+  │               │ Entities + relationships     │ Dynamic entity          │
+  │ What you get  │ stored in Neo4j              │ connections from text   │
+  │               │                              │ at query time           │
+  ├───────────────┼──────────────────────────────┼─────────────────────────┤
+  │ Infra needed  │ GPU (or CPU slower), Neo4j   │ Elasticsearch (replaces │
+  │               │                              │  Qdrant)                │
+  ├───────────────┼──────────────────────────────┼─────────────────────────┤
+  │               │ ~94% of LLM quality; Relik   │ Depends on text         │
+  │ Quality       │ is SOTA for NER+RE on        │ quality; no true entity │
+  │               │ academic benchmarks          │  resolution             │
+  ├───────────────┼──────────────────────────────┼─────────────────────────┤
+  │ Multi-hop     │ Yes (pre-built graph, Cypher │ Limited (graph built    │
+  │               │  queries)                    │ per-query, shallow)     │
+  ├───────────────┼──────────────────────────────┼─────────────────────────┤
+  │ Incremental   │ Re-extract changed docs,     │ Automatic (just index   │
+  │ updates       │ upsert to Neo4j              │ the doc)                │
+  ├───────────────┼──────────────────────────────┼─────────────────────────┤
+  │ Maintenance   │ Models to manage (Relik      │ Just Elasticsearch      │
+  │               │ ~1GB), Neo4j                 │                         │
+  └───────────────┴──────────────────────────────┴─────────────────────────┘
+
+  For Spektr specifically
+
+  SpaCy/Relik is the better fit because:
+  - You already have Neo4j running — just replace Graphiti's LLM extraction with
+   Relik
+  - Your graph search tool (graph_search.py) queries Neo4j — it keeps working
+  - Ingestion drops from 29 min → seconds per document
+  - Relik does both entity linking AND relationship extraction in a single
+  forward pass
+  - Works offline, no API costs
+
+  Elasticsearch would mean:
+  - Replacing both Qdrant AND Neo4j with Elasticsearch
+  - Major architectural rewrite (vector search + graph search + ingestion)
+  - No persistent graph — rebuilt per query (weaker for multi-hop)
+
+  Recommendation
+
+  Replace Graphiti with Relik — keep Neo4j, keep your existing search tools,
+  just swap the extraction engine. The integration point is clean: replace
+  GraphitiWriter.ingest_bulk() internals with Relik NER+RE → direct Neo4j
+  writes.
+
+  Want me to plan that replacement?
+
+  Sources:
+  - https://arxiv.org/abs/2408.00103
+  - https://neo4j.com/blog/developer/entity-linking-relationship-extraction-reli
+  k-llamaindex/
+  - https://www.elastic.co/search-labs/blog/rag-graph-traversal
+  - https://medium.com/graph-praxis/graph-rag-in-2026-a-practitioners-guide-to-w
+  hat-actually-works-dca4962e7517
+
+✻ Cooked for 44s
+
+❯ i dont habe a gpu 24/7, or need to use modal... ? 
+
+● Good point — Relik's speed advantage is GPU-dependent. Let me check CPU
+  performance and alternatives.
+
+● Web Search("Relik NER CPU performance speed without GPU inference 2025")
+  ⎿  Did 1 search in 6s
+
+● Web Search("SpaCy NER entity extraction CPU speed knowledge graph construction
+             no GPU")
+  ⎿  Did 1 search in 7s
+
+● Web Search("GLiNER NER CPU fast entity extraction knowledge graph 2025 2026")
+  ⎿  Did 1 search in 7s
+
+● Great constraint to raise. Here's the updated picture:
+
+  CPU-friendly options (no GPU needed)
+
+  Tool: SpaCy (en_core_web_lg)
+  Size: ~740MB
+  CPU Speed: Very fast, milliseconds
+  Capabilities: NER only (people, orgs, places). No relation extraction
+  Maturity: Battle-tested, 10+ years
+  ────────────────────────────────────────
+  Tool: GLiNER2
+  Size: 205MB
+  CPU Speed: Fast on CPU
+  Capabilities: NER + relation extraction + structured output, zero-shot (any
+    entity type)
+  Maturity: NAACL 2024, active community
+  ────────────────────────────────────────
+  Tool: Relik
+  Size: ~1GB
+  CPU Speed: Slow on CPU (~10-50x slower than GPU)
+  Capabilities: NER + relation extraction, SOTA quality
+  Maturity: Academic, GPU-oriented
+
+  Verdict for your setup (no dedicated GPU)
+
+  GLiNER2 is the sweet spot. It's:
+  - 205MB — tiny, runs fine on CPU
+  - Does both NER and relationship extraction in one model
+  - Zero-shot — you define entity types at query time (no retraining needed)
+  - Schema-driven output → easy to write directly to Neo4j
+  - Active community, pip-installable
+
+  SpaCy is faster but only does NER (no relationships). You'd need to pair it
+  with co-occurrence heuristics or dependency parsing for relationships — more
+  code, weaker results.
+
+  Relik is the best quality but really wants a GPU. Without one, it's slow
+  enough that you might as well use LLM calls.
+
+  What this would look like in Spektr
+
+  Current:  chunks → Graphiti (LLM calls) → Neo4j     [29 min]
+  Proposed: chunks → GLiNER2 (CPU, local) → Neo4j      [seconds]
+
+  - Replace GraphitiWriter with a GLiNERGraphWriter
+  - GLiNER2 extracts entities + relations from each chunk
+  - Write directly to Neo4j with Cypher (you already have _LegacyGraphWriter
+  doing this)
+  - No API calls, no cost, runs anywhere
+
+  The tradeoff: GLiNER2 quality is good but not as rich as Graphiti's LLM
+  extraction (no temporal reasoning, no entity deduplication across documents).
+  But for 99% faster at zero cost, that's usually worth it.
+
+● User declined to answer questions

@@ -1,0 +1,288 @@
+ Plan: Smart Image Embedding — Docling-Gated, Resized, Store-for-Retrieval                                                                                          │
+     │                                                                                                                                                                    │
+     │ Context                                                                                                                                                            │
+     │                                                                                                                                                                    │
+     │ Ingesting a 25-page OCR PDF takes 10+ minutes because every PDF page is embedded as an image regardless of content. Jina v4 uses a 3.8B-param Qwen2.5-VL backbone  │
+     │ — each image is split into 28x28 tiles at 10 tokens/tile, so a single 600px page costs ~4,840 tokens running through the full decoder. At 100K TPM this throttles  │
+     │ hard.                                                                                                                                                              │
+     │                                                                                                                                                                    │
+     │ Goal: Three changes to cut ingestion time from 10+ minutes to under 1 minute:                                                                                      │
+     │ 1. Content-gate image embedding via Docling layout analysis — only embed visual pages                                                                              │
+     │ 2. Resize images to 400px max before embedding — reduce token cost per image by ~75%                                                                               │
+     │ 3. Store thumbnails for text-only pages — available at retrieval time, zero embedding cost                                                                         │
+     │                                                                                                                                                                    │
+     │ No backward compatibility needed — agile development, clean sweep.                                                                                                 │
+     │                                                                                                                                                                    │
+     │ Why Docling Over PyMuPDF Heuristics                                                                                                                                │
+     │                                                                                                                                                                    │
+     │ Docling (already installed at v2.76.0) uses RT-DETR trained on DocLayNet (17 element types, mAP 0.77). PyMuPDF heuristics miss embedded figures, borderless        │
+     │ tables, and formulas entirely. Current code already runs Docling per-page for OCR — the new approach runs it once on the whole PDF for both OCR and layout         │
+     │ classification.                                                                                                                                                    │
+     │                                                                                                                                                                    │
+     │ Files to Modify                                                                                                                                                    │
+     │                                                                                                                                                                    │
+     │ ┌──────────────────────────────┬────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── │
+     │ ───┐                                                                                                                                                               │
+     │ │             File             │                                                               Change                                                              │
+     │    │                                                                                                                                                               │
+     │ ├──────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── │
+     │ ───┤                                                                                                                                                               │
+     │ │ ingestion/file_processor.py  │ Run Docling on whole PDF, add has_visual_content to Page, add resize_image_for_embedding(), remove per-page                       │
+     │ _extract_text_docling() │                                                                                                                                          │
+     │ ├──────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── │
+     │ ───┤                                                                                                                                                               │
+     │ │ ingestion/pipeline.py        │ Gate image embedding on has_visual_content, add _store_page_thumbnail(), resize before embed                                      │
+     │    │                                                                                                                                                               │
+     │ ├──────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── │
+     │ ───┤                                                                                                                                                               │
+     │ │ config/settings.py           │ Add image_embed_max_px, image_embed_strategy; change jina_dense_dimensions default to 512                                         │
+     │    │                                                                                                                                                               │
+     │ ├──────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── │
+     │ ───┤                                                                                                                                                               │
+     │ │ config/constants.py          │ Change DENSE_DIM from 2048 to 512                                                                                                 │
+     │    │                                                                                                                                                               │
+     │ ├──────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── │
+     │ ───┤                                                                                                                                                               │
+     │ │ ingestion/graphiti_client.py │ Update EMBEDDING_DIM setdefault to 512                                                                                            │
+     │    │                                                                                                                                                               │
+     │ ├──────────────────────────────┼────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── │
+     │ ───┤                                                                                                                                                               │
+     │ │ Tests                        │ Update all 2048 → DENSE_DIM references (already use constant in most places)                                                      │
+     │    │                                                                                                                                                               │
+     │ └──────────────────────────────┴────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── │
+     │ ───┘                                                                                                                                                               │
+     │                                                                                                                                                                    │
+     │ Step 1: file_processor.py — Docling-Based Classification                                                                                                           │
+     │                                                                                                                                                                    │
+     │ 1a. Add has_visual_content to Page (line 17-22)                                                                                                                    │
+     │                                                                                                                                                                    │
+     │ @dataclass                                                                                                                                                         │
+     │ class Page:                                                                                                                                                        │
+     │     image_bytes: bytes                                                                                                                                             │
+     │     text: str                                                                                                                                                      │
+     │     page_number: int                                                                                                                                               │
+     │     content_type: str                                                                                                                                              │
+     │     has_visual_content: bool = False                                                                                                                               │
+     │                                                                                                                                                                    │
+     │ 1b. Add _classify_pdf_pages_docling() — single whole-PDF pass                                                                                                      │
+     │                                                                                                                                                                    │
+     │ _VISUAL_TYPES = {"TableItem", "PictureItem", "FormulaItem"}                                                                                                        │
+     │                                                                                                                                                                    │
+     │ def _classify_pdf_pages_docling(                                                                                                                                   │
+     │     content: bytes,                                                                                                                                                │
+     │ ) -> tuple[dict[int, bool], dict[int, str]]:                                                                                                                       │
+     │     """Run Docling on entire PDF once. Return per-page visual flags + text.                                                                                        │
+     │                                                                                                                                                                    │
+     │     Returns (visual_map, text_map):                                                                                                                                │
+     │         visual_map: {page_num: True} for pages with figures/tables/formulas                                                                                        │
+     │         text_map: {page_num: markdown_text} for scanned pages needing OCR                                                                                          │
+     │     """                                                                                                                                                            │
+     │     converter = _get_docling_converter()                                                                                                                           │
+     │     if converter is None:                                                                                                                                          │
+     │         return {}, {}                                                                                                                                              │
+     │                                                                                                                                                                    │
+     │     tmp_path = None                                                                                                                                                │
+     │     try:                                                                                                                                                           │
+     │         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:                                                                                        │
+     │             f.write(content)                                                                                                                                       │
+     │             tmp_path = f.name                                                                                                                                      │
+     │                                                                                                                                                                    │
+     │         result = converter.convert(tmp_path)                                                                                                                       │
+     │         doc = result.document                                                                                                                                      │
+     │         visual_map: dict[int, bool] = {}                                                                                                                           │
+     │         text_map: dict[int, str] = {}                                                                                                                              │
+     │                                                                                                                                                                    │
+     │         for item, _level in doc.iterate_items():                                                                                                                   │
+     │             page_no = _get_item_page(item)                                                                                                                         │
+     │             if page_no is None:                                                                                                                                    │
+     │                 continue                                                                                                                                           │
+     │             if type(item).__name__ in _VISUAL_TYPES:                                                                                                               │
+     │                 visual_map[page_no] = True                                                                                                                         │
+     │             if hasattr(item, "text") and item.text:                                                                                                                │
+     │                 text_map.setdefault(page_no, "")                                                                                                                   │
+     │                 text_map[page_no] += item.text + "\n\n"                                                                                                            │
+     │                                                                                                                                                                    │
+     │         return visual_map, text_map                                                                                                                                │
+     │     except Exception:                                                                                                                                              │
+     │         logger.exception("Docling PDF classification failed")                                                                                                      │
+     │         return {}, {}                                                                                                                                              │
+     │     finally:                                                                                                                                                       │
+     │         if tmp_path is not None:                                                                                                                                   │
+     │             os.unlink(tmp_path)                                                                                                                                    │
+     │                                                                                                                                                                    │
+     │ def _get_item_page(item) -> int | None:                                                                                                                            │
+     │     """Extract 1-based page number from Docling item provenance."""                                                                                                │
+     │     if hasattr(item, "prov") and item.prov:                                                                                                                        │
+     │         return item.prov[0].page_no                                                                                                                                │
+     │     return None                                                                                                                                                    │
+     │                                                                                                                                                                    │
+     │ 1c. Refactor _pdf_to_pages() — single Docling pass replaces per-page OCR                                                                                           │
+     │                                                                                                                                                                    │
+     │ def _pdf_to_pages(content: bytes) -> list[Page]:                                                                                                                   │
+     │     visual_map, docling_text_map = _classify_pdf_pages_docling(content)                                                                                            │
+     │                                                                                                                                                                    │
+     │     doc = pymupdf.open(stream=content, filetype="pdf")                                                                                                             │
+     │     pages: list[Page] = []                                                                                                                                         │
+     │                                                                                                                                                                    │
+     │     for i, fitz_page in enumerate(doc):                                                                                                                            │
+     │         page_no = i + 1                                                                                                                                            │
+     │         text = fitz_page.get_text("text").strip()                                                                                                                  │
+     │         mat = pymupdf.Matrix(150 / 72, 150 / 72)                                                                                                                   │
+     │         pix = fitz_page.get_pixmap(matrix=mat)                                                                                                                     │
+     │         image_bytes = pix.tobytes("png")                                                                                                                           │
+     │                                                                                                                                                                    │
+     │         # Docling text for scanned pages (replaces per-page _extract_text_docling)                                                                                 │
+     │         if not text and page_no in docling_text_map:                                                                                                               │
+     │             text = docling_text_map[page_no].strip()                                                                                                               │
+     │                                                                                                                                                                    │
+     │         # Docling layout classification (fallback: PyMuPDF heuristics)                                                                                             │
+     │         if visual_map:                                                                                                                                             │
+     │             has_visual = visual_map.get(page_no, False)                                                                                                            │
+     │         else:                                                                                                                                                      │
+     │             has_visual = _page_has_visual_content_pymupdf(fitz_page)                                                                                               │
+     │                                                                                                                                                                    │
+     │         logger.debug("Page %d: has_visual=%s, text_len=%d", page_no, has_visual, len(text))                                                                        │
+     │         pages.append(Page(                                                                                                                                         │
+     │             image_bytes=image_bytes, text=text, page_number=page_no,                                                                                               │
+     │             content_type="pdf", has_visual_content=has_visual,                                                                                                     │
+     │         ))                                                                                                                                                         │
+     │                                                                                                                                                                    │
+     │     doc.close()                                                                                                                                                    │
+     │     return pages                                                                                                                                                   │
+     │                                                                                                                                                                    │
+     │ 1d. Add _page_has_visual_content_pymupdf() — fallback when Docling unavailable                                                                                     │
+     │                                                                                                                                                                    │
+     │ def _page_has_visual_content_pymupdf(fitz_page) -> bool:                                                                                                           │
+     │     """Fallback: detect visual content via PyMuPDF heuristics."""                                                                                                  │
+     │     text = fitz_page.get_text().strip()                                                                                                                            │
+     │     if len(text) < 50:                                                                                                                                             │
+     │         return True                                                                                                                                                │
+     │     page_w, page_h = fitz_page.rect.width, fitz_page.rect.height                                                                                                   │
+     │     min_dim = 0.05                                                                                                                                                 │
+     │     for img in fitz_page.get_images(full=True):                                                                                                                    │
+     │         try:                                                                                                                                                       │
+     │             base = fitz_page.parent.extract_image(img[0])                                                                                                          │
+     │             if base["width"] >= page_w * min_dim and base["height"] >= page_h * min_dim:                                                                           │
+     │                 return True                                                                                                                                        │
+     │         except Exception:                                                                                                                                          │
+     │             return True                                                                                                                                            │
+     │     significant = [d for d in fitz_page.get_drawings() if d["rect"].get_area() > 500]                                                                              │
+     │     if len(significant) > 10:                                                                                                                                      │
+     │         return True                                                                                                                                                │
+     │     try:                                                                                                                                                           │
+     │         if fitz_page.find_tables().tables:                                                                                                                         │
+     │             return True                                                                                                                                            │
+     │     except Exception:                                                                                                                                              │
+     │         pass                                                                                                                                                       │
+     │     return False                                                                                                                                                   │
+     │                                                                                                                                                                    │
+     │ 1e. Remove _extract_text_docling() (lines 114-131)                                                                                                                 │
+     │                                                                                                                                                                    │
+     │ Replaced by _classify_pdf_pages_docling() which does OCR + layout in one pass.                                                                                     │
+     │                                                                                                                                                                    │
+     │ 1f. Add resize_image_for_embedding()                                                                                                                               │
+     │                                                                                                                                                                    │
+     │ def resize_image_for_embedding(image_bytes: bytes, max_px: int) -> bytes:                                                                                          │
+     │     from PIL import Image                                                                                                                                          │
+     │     import io                                                                                                                                                      │
+     │     img = Image.open(io.BytesIO(image_bytes))                                                                                                                      │
+     │     if max(img.size) <= max_px:                                                                                                                                    │
+     │         return image_bytes                                                                                                                                         │
+     │     img.thumbnail((max_px, max_px), Image.LANCZOS)                                                                                                                 │
+     │     buf = io.BytesIO()                                                                                                                                             │
+     │     img.save(buf, format="PNG")                                                                                                                                    │
+     │     return buf.getvalue()                                                                                                                                          │
+     │                                                                                                                                                                    │
+     │ Step 2: Dimension + Settings Changes                                                                                                                               │
+     │                                                                                                                                                                    │
+     │ 2a. config/settings.py — new settings + 512d default                                                                                                               │
+     │                                                                                                                                                                    │
+     │ jina_dense_dimensions: int = 512  # was 2048, Matryoshka truncation (~1-2% quality loss)                                                                           │
+     │                                                                                                                                                                    │
+     │ # Image embedding                                                                                                                                                  │
+     │ image_embed_max_px: int = 400        # max px on longest side before embedding                                                                                     │
+     │ image_embed_strategy: str = "smart"  # "smart" | "all" | "none"                                                                                                    │
+     │                                                                                                                                                                    │
+     │ 2b. config/constants.py — update DENSE_DIM                                                                                                                         │
+     │                                                                                                                                                                    │
+     │ DENSE_DIM = 512  # was 2048                                                                                                                                        │
+     │                                                                                                                                                                    │
+     │ 2c. ingestion/graphiti_client.py — update EMBEDDING_DIM                                                                                                            │
+     │                                                                                                                                                                    │
+     │ os.environ.setdefault("EMBEDDING_DIM", str(512))                                                                                                                   │
+     │                                                                                                                                                                    │
+     │ 2d. Tests — update hardcoded 2048 references                                                                                                                       │
+     │                                                                                                                                                                    │
+     │ Files with hardcoded 2048 that need updating to DENSE_DIM:                                                                                                         │
+     │ - tests/test_jina_cocoindex_ops.py (lines 27-28, 42, 64)                                                                                                           │
+     │ - tests/test_embedder.py (lines 75, 88, 92, 95, 109, 120, 127, 140, 143, 246, 273, 314, 339-352)                                                                   │
+     │                                                                                                                                                                    │
+     │ Step 3: Pipeline Routing in pipeline.py                                                                                                                            │
+     │                                                                                                                                                                    │
+     │ 3a. Modify _build_page_tasks() (line 117-141)                                                                                                                      │
+     │                                                                                                                                                                    │
+     │ elif page.content_type == "pdf":                                                                                                                                   │
+     │     if page.text.strip():                                                                                                                                          │
+     │         tasks.text.append(_process_text_page(...))                                                                                                                 │
+     │                                                                                                                                                                    │
+     │     should_embed_image = (                                                                                                                                         │
+     │         settings.image_embed_strategy == "all"                                                                                                                     │
+     │         or (settings.image_embed_strategy == "smart" and page.has_visual_content)                                                                                  │
+     │     )                                                                                                                                                              │
+     │                                                                                                                                                                    │
+     │     if should_embed_image:                                                                                                                                         │
+     │         tasks.image.append(_process_visual_page(...))                                                                                                              │
+     │     elif page.image_bytes:                                                                                                                                         │
+     │         tasks.text.append(_store_page_thumbnail(...))                                                                                                              │
+     │                                                                                                                                                                    │
+     │ 3b. Add _store_page_thumbnail()                                                                                                                                    │
+     │                                                                                                                                                                    │
+     │ async def _store_page_thumbnail(                                                                                                                                   │
+     │     source_file: str, image_bytes: bytes, page_number: int, qdrant: QdrantClient,                                                                                  │
+     │ ) -> None:                                                                                                                                                         │
+     │     thumbnail = resize_image_for_embedding(image_bytes, max_px=200)                                                                                                │
+     │     b64_thumb = base64.b64encode(thumbnail).decode()                                                                                                               │
+     │     page_key = f"{source_file}::p{page_number}"                                                                                                                    │
+     │     qdrant.set_payload(                                                                                                                                            │
+     │         collection_name=DENSE_COLLECTION,                                                                                                                          │
+     │         payload={"page_thumbnail_b64": b64_thumb},                                                                                                                 │
+     │         points=[_make_point_id(page_key)],                                                                                                                         │
+     │     )                                                                                                                                                              │
+     │                                                                                                                                                                    │
+     │ 3c. Resize before embedding in _process_visual_page()                                                                                                              │
+     │                                                                                                                                                                    │
+     │ At top of function, before embedder.embed_image():                                                                                                                 │
+     │ image_bytes = resize_image_for_embedding(image_bytes, settings.image_embed_max_px)                                                                                 │
+     │                                                                                                                                                                    │
+     │ Step 4: Verify Docling API During Implementation                                                                                                                   │
+     │                                                                                                                                                                    │
+     │ Verify item.prov[0].page_no works in Docling v2.76. Quick check:                                                                                                   │
+     │ uv run python -c "from docling_core.types.doc import DocItem; print(DocItem.__annotations__)"                                                                      │
+     │                                                                                                                                                                    │
+     │ Expected Impact                                                                                                                                                    │
+     │                                                                                                                                                                    │
+     │ ┌─────────────────────────────────────┬─────────────────────┬─────────────────────────────────┐                                                                    │
+     │ │               Metric                │       Before        │              After              │                                                                    │
+     │ ├─────────────────────────────────────┼─────────────────────┼─────────────────────────────────┤                                                                    │
+     │ │ Image embeddings (25-page text PDF) │ 25 pages × full res │ ~3 visual pages × 400px         │                                                                    │
+     │ ├─────────────────────────────────────┼─────────────────────┼─────────────────────────────────┤                                                                    │
+     │ │ Jina tokens                         │ ~312K-625K          │ ~3,500 (images) + ~5,000 (text) │                                                                    │
+     │ ├─────────────────────────────────────┼─────────────────────┼─────────────────────────────────┤                                                                    │
+     │ │ Docling calls                       │ N per scanned page  │ 1 per PDF                       │                                                                    │
+     │ ├─────────────────────────────────────┼─────────────────────┼─────────────────────────────────┤                                                                    │
+     │ │ Vector storage                      │ 2048d per point     │ 512d per point (75% less)       │                                                                    │
+     │ ├─────────────────────────────────────┼─────────────────────┼─────────────────────────────────┤                                                                    │
+     │ │ Time                                │ 10+ minutes         │ ~30s-1min                       │                                                                    │
+     │ └─────────────────────────────────────┴─────────────────────┴─────────────────────────────────┘                                                                    │
+     │                                                                                                                                                                    │
+     │ Verification                                                                                                                                                       │
+     │                                                                                                                                                                    │
+     │ 1. uv run pytest — no regressions (update test dim assertions first)                                                                                               │
+     │ 2. Recreate Qdrant collections (dimension changed): docker compose down -v && docker compose up -d                                                                 │
+     │ 3. Ingest test.pdf with image_embed_strategy=smart:                                                                                                                │
+     │   - Logs show per-page has_visual from Docling                                                                                                                     │
+     │   - Most pages text-only, visual pages correctly identified                                                                                                        │
+     │   - Completes in < 2 minutes                                                                                                                                       │
+     │   - Only visual pages have image embedding points                                                                                                                  │
+     │   - Text-only pages have page_thumbnail_b64 in payload                                                                                                             │
+     │ 4. Search works for both text and visual queries       

@@ -1,0 +1,72 @@
+site_name: Spektr
+site_description: RAG-as-MCP-Server — S3 document sync to Qdrant + Neo4j/Graphiti with MCP search tools
+repo_url: https://github.com/spektr/spektr
+
+theme:
+  name: material
+  palette:
+    scheme: slate
+    primary: indigo
+    accent: cyan
+  features:
+    - navigation.sections
+    - navigation.expand
+    - content.code.copy
+
+plugins:
+  - search
+  - with-pdf:
+      output_path: pdf/spektr.pdf
+      cover_title: Spektr
+      cover_subtitle: RAG-as-MCP-Server Documentation
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  - attr_list
+
+nav:
+  - Home: index.md
+  - Architecture:
+    - Overview: architecture/overview.md
+    - Data Flow: architecture/data-flow.md
+  - Ingestion Pipeline:
+    - Overview: ingestion/overview.md
+    - File Processing: ingestion/file-processing.md
+    - Embeddings (Jina v4): ingestion/embeddings.md
+    - Knowledge Graph: ingestion/knowledge-graph.md
+    - CocoIndex Pipeline: ingestion/cocoindex.md
+    - S3 + SQS Setup: ingestion/s3-sqs-setup.md
+  - MCP Server:
+    - Overview: server/overview.md
+    - Search Tools: server/search-tools.md
+    - Authentication: server/authentication.md
+    - Client Setup: server/client-setup.md
+  - Agent:
+    - Pydantic AI Agent: agent/overview.md
+    - HTTP API: agent/http-api.md
+  - Configuration:
+    - Environment Variables: configuration/environment.md
+    - Infrastructure (Docker): configuration/infrastructure.md
+  - Deployment:
+    - AWS Setup: deployment/aws-setup.md
+    - Local Development: deployment/local-development.md
+  - API Reference:
+    - Response Models: api/models.md
+  - Operations:
+    - Ingestion Failure Semantics: operations/atomicity.md
+    - Observability: operations/observability.md
+    - Backup & Restore: operations/backup-restore.md
+  - Evaluation:
+    - Golden Set: eval/golden-set.md
+  - Resources:
+    - Architecture Blueprint: resources/rag-mcp-architecture-blueprint.md
+    - Learning Material (Deep Dive): resources/spektr-learning-material.md

@@ -1,0 +1,15 @@
+.env
+__pycache__/
+.venv/
+*.pyc
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+data/
+*.egg-info/
+site/
+.worktrees/
+state/
+eval-reports/
+backups/
+.mcp.json

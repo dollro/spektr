@@ -228,7 +228,7 @@ def create_dense_collection(client: QdrantClient):
     "metadata": {
         "mime_type": "application/pdf",
         "ingested_at": "2026-02-18T10:30:00Z",
-        "s3_key": "reports/q3-financials.pdf",
+        "source_key": "reports/q3-financials.pdf",
         "char_count": 512,
     }
 }
@@ -273,7 +273,7 @@ def create_multivec_collection(client: QdrantClient):
     "metadata": {
         "mime_type": "application/pdf",
         "ingested_at": "2026-02-18T10:30:00Z",
-        "s3_key": "scans/invoice-2024-003.pdf",
+        "source_key": "scans/invoice-2024-003.pdf",
         "image_width": 2550,
         "image_height": 3300,
     }
@@ -299,11 +299,11 @@ def create_multivec_collection(client: QdrantClient):
 ```cypher
 // Document node — one per source file
 CREATE CONSTRAINT doc_unique IF NOT EXISTS
-FOR (d:Document) REQUIRE d.s3_key IS UNIQUE;
+FOR (d:Document) REQUIRE d.source_key IS UNIQUE;
 
 // Entity nodes — extracted from content
 CREATE CONSTRAINT entity_unique IF NOT EXISTS
-FOR (e:Entity) REQUIRE (e.name, e.type) IS UNIQUE;
+FOR (e:Entity) REQUIRE (e.name) IS UNIQUE;
 
 // Chunk node — links to its parent document
 CREATE CONSTRAINT chunk_unique IF NOT EXISTS
@@ -315,7 +315,7 @@ FOR (c:Chunk) REQUIRE c.id IS UNIQUE;
 ```cypher
 // :Document
 {
-  s3_key: "reports/q3-financials.pdf",     // unique identifier
+  source_key: "reports/q3-financials.pdf",     // unique identifier
   filename: "q3-financials.pdf",
   mime_type: "application/pdf",
   ingested_at: datetime(),
@@ -326,11 +326,12 @@ FOR (c:Chunk) REQUIRE c.id IS UNIQUE;
 // :Entity
 {
   name: "Acme Corp",                       // canonical name
-  type: "ORGANIZATION",                    // PERSON | ORGANIZATION | PRODUCT |
-                                           // TECHNOLOGY | LOCATION | CONCEPT | EVENT
-  description: "Manufacturing company...", // optional summary
+  types: ["organization"],                 // person | organization | technology |
+                                           // concept | metric | location | event
+  description: "Manufacturing company...", // optional summary (first 500 chars of source)
   first_seen: datetime(),
-  last_seen: datetime()
+  last_seen: datetime(),
+  source: "reports/q3-financials.pdf"
 }
 
 // :Chunk
@@ -352,14 +353,15 @@ FOR (c:Chunk) REQUIRE c.id IS UNIQUE;
 // Chunk mentions Entity
 (:Chunk)-[:MENTIONS {confidence: 0.95, context: "Acme Corp reported..."}]->(:Entity)
 
-// Entity-to-Entity relationships (extracted by LLM)
-(:Entity {type:"ORGANIZATION"})-[:PARTNERS_WITH {since: "2024"}]->(:Entity {type:"ORGANIZATION"})
-(:Entity {type:"PERSON"})-[:WORKS_AT {role: "CEO"}]->(:Entity {type:"ORGANIZATION"})
-(:Entity {type:"ORGANIZATION"})-[:PRODUCES]->(:Entity {type:"PRODUCT"})
-(:Entity {type:"ORGANIZATION"})-[:USES_TECHNOLOGY]->(:Entity {type:"TECHNOLOGY"})
-(:Entity {type:"ORGANIZATION"})-[:LOCATED_IN]->(:Entity {type:"LOCATION"})
-(:Entity {type:"ORGANIZATION"})-[:ACQUIRED]->(:Entity {type:"ORGANIZATION"})
-(:Entity {type:"ORGANIZATION"})-[:COMPETES_WITH]->(:Entity {type:"ORGANIZATION"})
+// Entity-to-Entity relationships (extracted by GLiNER2 or LLM)
+(:Entity)-[:CREATED_BY {source: "doc.pdf", confidence: 1.0}]->(:Entity)
+(:Entity)-[:USES]->(:Entity)
+(:Entity)-[:PART_OF]->(:Entity)
+(:Entity)-[:RELATED_TO]->(:Entity)
+(:Entity)-[:IMPROVES]->(:Entity)
+(:Entity)-[:MEASURED_BY]->(:Entity)
+(:Entity)-[:LOCATED_IN]->(:Entity)
+(:Entity)-[:DESCRIBES]->(:Entity)
 
 // Document-level relationships
 (:Document)-[:REFERENCES]->(:Document)     // cross-references between docs
@@ -375,15 +377,15 @@ RETURN path
 
 // Find documents mentioning entities related to a topic
 MATCH (e:Entity)-[:MENTIONS]-(c:Chunk)-[:HAS_CHUNK]-(d:Document)
-WHERE e.name CONTAINS "AI" OR e.type = "TECHNOLOGY"
+WHERE e.name CONTAINS "AI" OR "technology" IN e.types
 RETURN d.filename, collect(DISTINCT e.name) AS entities
 ORDER BY size(entities) DESC
 LIMIT 10
 
-// Multi-hop: which people work at companies that use a given technology?
-MATCH (p:Entity {type:"PERSON"})-[:WORKS_AT]->(org:Entity)-[:USES_TECHNOLOGY]->(tech:Entity)
-WHERE tech.name = "Kubernetes"
-RETURN p.name, org.name
+// Multi-hop: which people created tools that improve something?
+MATCH (p:Entity)-[:CREATED_BY]->(tool:Entity)-[:IMPROVES]->(target:Entity)
+WHERE "person" IN p.types
+RETURN p.name, tool.name, target.name
 ```
 
 ---
@@ -753,13 +755,13 @@ from pydantic import BaseModel
 
 class Entity(BaseModel):
     name: str
-    type: str           # PERSON, ORGANIZATION, PRODUCT, TECHNOLOGY, LOCATION, CONCEPT
+    type: str           # person, organization, technology, concept, metric, location, event
     description: str = ""
 
 class Relationship(BaseModel):
     source: str         # entity name
     target: str         # entity name
-    relation: str       # WORKS_AT, PARTNERS_WITH, PRODUCES, USES_TECHNOLOGY, etc.
+    relation: str       # created_by, uses, part_of, mentions, improves, etc.
     properties: dict = {}
 
 class ExtractionResult(BaseModel):
@@ -772,10 +774,10 @@ EXTRACTION_PROMPT = """Extract entities and relationships from the following tex
 Return JSON with this exact structure:
 {
   "entities": [
-    {"name": "...", "type": "PERSON|ORGANIZATION|PRODUCT|TECHNOLOGY|LOCATION|CONCEPT|EVENT", "description": "..."}
+    {"name": "...", "type": "person|organization|technology|concept|metric|location|event", "description": "..."}
   ],
   "relationships": [
-    {"source": "entity_name", "target": "entity_name", "relation": "WORKS_AT|PARTNERS_WITH|PRODUCES|USES_TECHNOLOGY|LOCATED_IN|ACQUIRED|COMPETES_WITH", "properties": {}}
+    {"source": "entity_name", "target": "entity_name", "relation": "created_by|uses|part_of|mentions|improves|measured_by|located_in|describes", "properties": {}}
   ]
 }
 
@@ -783,7 +785,7 @@ Rules:
 - Normalize entity names (e.g., "Google LLC" → "Google")
 - Only extract clearly stated relationships, don't infer
 - Keep descriptions brief (1 sentence max)
-- Use CONCEPT type for abstract topics, methodologies, standards
+- Use concept type for abstract topics, methodologies, standards
 
 Text:
 {text}
@@ -821,7 +823,7 @@ class GraphWriter:
         """Create or update a Document node."""
         async with self.driver.session() as session:
             await session.run("""
-                MERGE (d:Document {s3_key: $s3_key})
+                MERGE (d:Document {source_key: $source_key})
                 SET d.filename = $filename,
                     d.mime_type = $mime_type,
                     d.ingested_at = datetime(),
@@ -830,7 +832,7 @@ class GraphWriter:
             """, **doc)
     
     async def upsert_chunk(self, chunk_id: str, text_preview: str,
-                           page_number: int, s3_key: str):
+                           page_number: int, source_key: str):
         """Create Chunk node and link to Document."""
         async with self.driver.session() as session:
             await session.run("""
@@ -838,10 +840,10 @@ class GraphWriter:
                 SET c.text_preview = $text_preview,
                     c.page_number = $page_number
                 WITH c
-                MATCH (d:Document {s3_key: $s3_key})
+                MATCH (d:Document {source_key: $source_key})
                 MERGE (d)-[:HAS_CHUNK {page_number: $page_number}]->(c)
             """, chunk_id=chunk_id, text_preview=text_preview[:200],
-                 page_number=page_number, s3_key=s3_key)
+                 page_number=page_number, source_key=source_key)
     
     async def upsert_entity(self, entity: dict):
         """Create or update an Entity node."""
@@ -1026,7 +1028,7 @@ async def visual_search(
             "source_file": point.payload.get("source_file"),
             "page_number": point.payload.get("page_number"),
             "content_type": point.payload.get("content_type"),
-            "s3_key": point.payload.get("metadata", {}).get("s3_key"),
+            "source_key": point.payload.get("metadata", {}).get("source_key"),
             "metadata": point.payload.get("metadata", {}),
         }
         for point in results.points
@@ -1078,11 +1080,11 @@ async def graph_search(
                 OPTIONAL MATCH (d:Document)-[:HAS_CHUNK]->(c)
                 
                 RETURN e.name AS entity,
-                       e.type AS type,
+                       e.types AS types,
                        e.description AS description,
                        collect(DISTINCT {
                            name: connected.name,
-                           type: connected.type,
+                           types: connected.types,
                            relation: type(r)
                        }) AS connections,
                        collect(DISTINCT d.filename) AS source_documents

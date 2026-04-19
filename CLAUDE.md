@@ -1,150 +1,183 @@
 # CLAUDE.md — Spektr
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+## ⚠️ Mandatory: Read Docs Before Code
+
+Before modifying or exploring ANY module, you MUST first read the corresponding page(s) in `docs/`. Do NOT start by browsing source files or running `find`/`grep` across the codebase.
+
+**Workflow for every task:**
+
+1. Identify which area of the project the task touches
+2. Read the matching `docs/` page(s) below — they contain the "why" and architectural decisions not visible in code
+3. Only then explore the relevant source files for the "how"
+4. Never skip steps 1–2
+
+**Doc → Code mapping:**
+
+| Area | Read first | Then explore |
+|---|---|---|
+| Ingestion (bulk, Path A) | `docs/ingestion/` | `ingestion/pipeline.py`, `file_processor.py`, `embedder.py`, `graph_engine.py` |
+| Ingestion (live, Path B) | `docs/ingestion/` | `ingestion/live_ingest.py`, `graphiti_client.py` |
+| MCP server & tools | `docs/mcp-server/` | `server/mcp_server.py`, `server/tools/` |
+| Vector store (Qdrant) | `docs/infrastructure/` | `ingestion/qdrant_setup.py`, `ingestion/embedders/` |
+| Knowledge graph (Neo4j) | `docs/infrastructure/` | `ingestion/neo4j_setup.py`, `ingestion/graph_writer.py` |
+| Entity extraction & schema | `docs/ingestion/` | `ingestion/entity_extractor.py`, `schema_inducer.py` |
+| Agent | `docs/agent/` | `agent/` |
+| Configuration | `docs/configuration/` | `config/settings.py`, `config/constants.py` |
+
+> Adjust paths above if your `docs/` structure differs — the principle stands: always docs first.
+
+**`plans/` is disposable brainstorming, NOT authoritative documentation. Do not treat plan files as source of truth. Do not update them when changing code or docs.**
+
+---
 
 ## Project Overview
 
-**Spektr** — a RAG-as-MCP-Server that automatically syncs documents from AWS S3 into a dual knowledge store (Qdrant vector DB + Neo4j temporal knowledge graph via Graphiti) and exposes search tools to LLM agents via the MCP protocol.
-
-Primary consumers are LLM agents (Pydantic AI, Claude Code, custom frameworks). No human-facing UI.
+**Spektr** — a RAG-as-MCP-Server pipeline. Dual-path ingestion: batch documents (PDF, images) from local filesystem or S3, and real-time streaming text via HTTP. Builds vector embeddings (Qdrant) and a knowledge graph (Neo4j), then exposes session-aware search tools via an MCP server for AI agents.
 
 ## Architecture
 
-- **Pipeline:** CocoIndex (S3/SQS source → classify → chunk → embed → store)
-- **Embeddings:** Jina v4 API (dense 2048d single-vector + ColBERT 128d multi-vector)
-- **Vector Store:** Qdrant (two collections: `documents_dense`, `documents_multivec`)
-- **Knowledge Graph:** Neo4j 5 + Graphiti (temporal entity/relationship tracking)
-- **State Tracking:** PostgreSQL 17 (CocoIndex pipeline state)
-- **MCP Server:** FastMCP (SSE + stdio transport)
-- **Agent:** Pydantic AI with MCP tool bindings
-- **Cloud:** AWS S3 + SQS (document source + event notifications)
+- **Ingestion (Path A — Bulk):** CocoIndex pipeline + Docling/PyMuPDF for file processing, Jina/Voyage for embeddings, GLiNER2 for entity extraction with dynamic schema induction
+- **Ingestion (Path B — Live):** FastAPI HTTP endpoint for streaming text, Jina for embeddings, Graphiti for temporal episodic memory
+- **Vector Store:** Qdrant (dense + optional ColBERT multi-vector). Both paths write to `documents_dense`; live data tagged with `session_id` and `is_live`
+- **Knowledge Graph:** Neo4j with dual engines — GLiNER2 (Path A, schema-driven CPU extraction) and Graphiti (Path B, LLM-based temporal episodes). Coexist in same instance
+- **MCP Server:** FastMCP (SSE or stdio transport) exposing session-aware search tools
+- **Agent:** Pydantic AI agent with MCP tool access
+- **LLM:** Anthropic or OpenAI-compatible (configurable via `LLM_API_TYPE`)
+- **Config:** Pydantic Settings from `.env`
 
 ## Project Layout
 
 ```
-├── ingestion/                   # Document processing pipeline
-│   ├── embedder.py              # Jina v4 API wrapper (JinaV4Embedder)
-│   ├── file_processor.py        # MIME classify, PDF-to-images, chunking
-│   ├── entity_extractor.py      # LLM-based entity + relationship extraction
-│   ├── graph_writer.py          # Neo4j upserts (GraphWriter)
-│   ├── jina_cocoindex_ops.py    # Custom CocoIndex ops wrapping Jina v4
-│   ├── pipeline.py              # CocoIndex pipeline definition
-│   ├── qdrant_setup.py          # Qdrant collection provisioning
-│   └── neo4j_setup.py           # Neo4j schema provisioning
-├── server/                      # MCP server
-│   ├── mcp_server.py            # FastMCP server setup + tool registration
-│   ├── models.py                # Pydantic response models
-│   ├── providers.py             # LLM provider abstraction
-│   └── tools/                   # MCP tool implementations
-│       ├── vector_search.py     # Dense vector search (Qdrant)
-│       ├── visual_search.py     # ColBERT multi-vector search (Qdrant)
-│       ├── graph_search.py      # Knowledge graph search (Neo4j)
-│       └── hybrid_search.py     # Parallel vector + graph fusion
-├── agent/                       # Pydantic AI agent
-│   ├── agent.py                 # Agent with MCP tool bindings
-│   └── api.py                   # Optional FastAPI HTTP endpoint
-├── config/                      # Configuration
-│   ├── settings.py              # Pydantic Settings (.env loading)
-│   └── constants.py             # Collection names, dimensions, entity types
-├── tests/                       # Test suite
-│   ├── conftest.py              # Shared fixtures
-│   ├── fixtures/                # Sample files (PDF, PNG, TXT)
-│   └── test_*.py                # Unit + integration tests
-├── scripts/                     # Helper scripts
-│   └── wait-for-services.sh     # Health check polling for Docker services
-├── docs/                        # Documentation (MkDocs)
-├── docker-compose.yml           # Neo4j, Qdrant, PostgreSQL
-├── pyproject.toml               # Python deps + tool config (single source of truth)
-├── .env.example                 # All required environment variables
-└── .gitignore
+├── agent/                  # Pydantic AI agent
+│   ├── agent.py            # Agent definition
+│   └── api.py              # Agent API endpoints
+├── config/                 # Configuration
+│   ├── settings.py         # Pydantic Settings (single source of truth)
+│   ├── constants.py        # Shared constants (collections, dimensions, 14 entity types, 12 relationship types)
+│   └── logging.py          # Logging configuration
+├── ingestion/              # Document ingestion pipeline
+│   ├── pipeline.py         # Main ingestion orchestrator
+│   ├── file_processor.py   # PDF/image processing (Docling + PyMuPDF fallback)
+│   ├── embedder.py         # Embedding dispatcher
+│   ├── embedders/          # Provider implementations (jina.py, voyage.py)
+│   ├── graph_engine.py     # GraphEngine protocol + factory (Graphiti/GLiNER2)
+│   ├── entity_extractor.py # LLM-based entity extraction
+│   ├── graph_writer.py     # Graphiti-based graph writer
+│   ├── graphiti_client.py  # Graphiti client singleton
+│   ├── schema_inducer.py   # LLM-based per-document schema induction
+│   ├── live_ingest.py      # Live streaming ingestion (FastAPI, Path B)
+│   ├── cocoindex_ops.py    # CocoIndex operations
+│   ├── qdrant_setup.py     # Qdrant collection setup
+│   └── neo4j_setup.py      # Neo4j schema setup
+├── server/                 # MCP server
+│   ├── mcp_server.py       # FastMCP server entry point
+│   ├── models.py           # Shared Pydantic models
+│   ├── providers.py        # Service provider initialization
+│   └── tools/              # MCP tool implementations
+│       ├── vector_search.py
+│       ├── graph_search.py
+│       ├── hybrid_search.py
+│       ├── visual_search.py
+│       ├── reranker.py
+│       └── vlm_generator.py
+├── tests/                  # Test suite
+├── docs/                   # MkDocs documentation — READ FIRST (see top of file)
+├── plans/                  # Disposable brainstorming — NOT source of truth
+├── scripts/                # Utility scripts
+├── docker-compose.yml      # Qdrant + Neo4j + PostgreSQL
+├── pyproject.toml          # Python config (single source of truth)
+├── Makefile                # docs-serve, docs-build
+└── mkdocs.yml              # Documentation site config
 ```
 
 ## Quick Start
 
-### Infrastructure
+Use [go-task](https://taskfile.dev) as the task runner. `task --list` shows all tasks.
 
 ```bash
-docker compose up -d                    # Start Neo4j, Qdrant, PostgreSQL
-./scripts/wait-for-services.sh          # Wait for all services to be healthy
+cp .env.example .env     # Configure environment (gitignored)
+task setup               # Install uv and project dependencies
+task up                  # Start Qdrant, Neo4j, PostgreSQL
+task ingest              # Run bulk ingestion pipeline
+task serve               # Start MCP server
 ```
-
-### Running
 
 ```bash
-uv run python -m ingestion.pipeline     # Run ingestion pipeline
-uv run python -m server.mcp_server      # Start MCP server
-uv run python -m agent.api              # Start agent HTTP endpoint (optional)
+task test                # Unit tests (excludes integration)
+task test-integration    # Integration tests (needs Docker services)
+task eval                # RAGAS retrieval-quality eval (needs `uv sync --extra eval`)
+task lint                # Ruff lint
+task format              # Ruff format
+task typecheck           # mypy
+task check               # lint + typecheck + test
+task docs-serve          # Serve MkDocs locally
+task docs-build          # Build docs
 ```
 
-### Testing
+**Daily drivers:**
 
 ```bash
-uv run pytest                           # All tests
-uv run pytest -m "not integration"      # Unit tests only
-uv run pytest -m integration            # Integration tests (requires Docker services)
+task smoke               # Direct vector_search smoke test (no MCP/LLM)
+task smoke-graph         # Direct graph_search smoke test
+task ask -- "question"   # End-to-end through agent + MCP + LLM (needs `task serve`)
+task doctor              # Diff CocoIndex tracking vs Qdrant; flags drift
+task doctor-fix          # Repair drift (deletes orphan tracking rows)
+task backup              # Snapshot Qdrant + Neo4j + Postgres to ./backups/<ts>/
+task restore -- --from backups/<ts> --target all --yes-i-know-this-wipes-things
 ```
 
-### Documentation
+**Access Points:** Qdrant http://localhost:6333 | Neo4j http://localhost:7474 | MCP http://localhost:8080
 
-```bash
-make docs-serve                         # Serve MkDocs locally
-```
+## Code Standards
 
-## Stack
+**Style & tooling:**
+- Python 3.13, Ruff (95 chars), mypy strict — configured in `pyproject.toml`
+- Package manager: uv (always use `uv`, never pip directly)
+- Dependencies: `pyproject.toml` with `[dependency-groups]` dev
 
-| Component | Technology |
-|-|-|
-| Language | Python 3.13 |
-| Package Manager | uv (via pyproject.toml) |
-| Pipeline | CocoIndex |
-| Embeddings | Jina v4 API |
-| Vector Store | Qdrant |
-| Knowledge Graph | Neo4j 5 + Graphiti |
-| State DB | PostgreSQL 17 |
-| MCP Server | FastMCP |
-| Agent | Pydantic AI |
-| Cloud | AWS S3 + SQS |
-| Testing | pytest + pytest-asyncio |
-| Linting | Ruff + mypy |
-| Infrastructure | Docker Compose |
+**Organization:**
+- Max file size: 600 lines. Max function: 60 lines. Max class: 100 lines.
+- Single responsibility: each module/file does ONE thing well
+- Prefer composition: break complex logic into small, composable functions
 
-## Dependencies
+**Principles:** KISS, YAGNI, fail fast. Each function/class has one clear purpose.
 
-- Python dependencies managed via `pyproject.toml` (single source of truth)
-- Always use `uv` for package management, never pip directly
-- Add new deps to the appropriate group: `dependencies` (base), `dev`, `test`
-- Infrastructure containers pinned: `qdrant/qdrant:v1.13.2`, `neo4j:5.26-community`, `postgres:17.2`
+**Security:** Never commit secrets (use env vars). Validate all user input. Use parameterized queries.
 
-## Code Organization Rules
+## Production contracts
 
-- **Max file size**: 600 lines. Refactor into modules if exceeded.
-- **Max function length**: 60 lines. Extract helpers.
-- **Max class length**: 100 lines. Single concept per class.
-- **Single responsibility**: Each module/file does ONE thing.
-- **Prefer composition**: Break complex logic into small, composable functions.
+These are load-bearing invariants introduced by the `feat/prod-hardening` work. Don't break them silently.
 
-## Code Style
+**Ingestion failure semantics** (`ingestion/pipeline.py` + `ingestion/_failure_tracker.py`):
+- A failing `ingest_file` re-raises so CocoIndex leaves the tracking row out and retries next run.
+- After `PIPELINE_MAX_RETRIES` (default 3) failures for the same file, the poison-pill kicks in: log CRITICAL, swallow, let CocoIndex mark it processed so the rest of the batch proceeds.
+- Failure counts live in `state/ingestion_failures.db` (sqlite, gitignored). Successful ingest resets the count.
 
-- **Python:** Ruff formatting + linting, mypy — configured in `pyproject.toml`
-- **Line length:** 95 characters
+**Qdrant payload schema:**
+- Every dense point carries `embedder_model` (str) and `embedder_dim` (int). Never write points without them — `scripts/doctor.py` flags mixed values.
+- `source_file` is the logical key; `metadata.source_key` duplicates it for compatibility.
 
-## Core Principles
+**Eval gate** (`tests/eval/`, `task eval`):
+- PRs that touch `ingestion/`, `server/tools/`, `config/`, or the agent must not drop any metric below `tests/eval/thresholds.yaml`.
+- Thresholds are raised over time, never silently lowered. A drop needs a reason in the commit message.
 
-- **KISS**: Straightforward solutions over complex ones
-- **YAGNI**: Implement only what's needed
-- **Single Responsibility**: One clear purpose per function/class
-- **Fail Fast**: Raise exceptions immediately on errors
+**Observability** (`config/observability.py`):
+- Every process entrypoint calls `setup_observability()` (idempotent). FastAPI apps additionally call `instrument_fastapi(app)`.
+- Local-only by default. Set `LOGFIRE_TOKEN` + `OBSERVABILITY_LOCAL_ONLY=false` to ship to Logfire Cloud.
+- JSON log records carry `trace_id`/`span_id` when emitted inside an active span.
 
-## Environment
+**Backup cadence** (`scripts/backup.py`):
+- `task backup` captures Qdrant + Neo4j + Postgres + a `manifest.json`. Recommended nightly via cron.
+- Neo4j dump requires ~10-30s downtime (Community Edition has no online backup).
+- `task restore` refuses without `--yes-i-know-this-wipes-things`.
 
-- **Env file:** `.env` (gitignored), documented in `.env.example`
-- **Key variables:** Jina API key, Neo4j credentials, Qdrant URL, PostgreSQL URL, AWS credentials, LLM provider config, MCP transport/port
+See `docs/operations/` for runbooks, `docs/eval/golden-set.md` for eval details.
 
 ## Git Workflow
 
 Branches: `main` (production), `develop` (ongoing development), `feat/*`, `fix/*`, `chore/*`
 
-Merge flow: `feat/xyz` → `develop` → `main`
+Merge flow: `feature-branch` → `develop` → `main`
 
 ```
 <type>(<scope>): <subject>
@@ -156,38 +189,9 @@ Types: feat, fix, docs, style, refactor, test, chore
 
 ## Planning
 
-All plan files go into `.claude/plans/` in branch-specific subdirectories. The subdirectory name is the branch name with `/` replaced by `-`.
+All plan files go into `./plans/` in branch-specific subdirectories. The subdirectory name is the branch name with `/` replaced by `-`.
 
-Example: on branch `feat/ingestion` → plans go in `.claude/plans/feat-ingestion/`
+Example: on branch `chore/pydantic` → plans go in `./plans/chore-pydantic/`
 
 Use the `/branch` skill to create a new branch — it automatically creates the corresponding plan directory.
 
-## Security
-
-- Never commit secrets → use environment variables
-- MCP server requires Bearer token authentication
-- All credentials in `.env`, never hardcoded
-
-## Key Files
-
-| File | Purpose |
-|-|-|
-| `pyproject.toml` | Python deps + tool config (single source of truth) |
-| `docker-compose.yml` | Infrastructure services (Neo4j, Qdrant, PostgreSQL) |
-| `.env.example` | All required environment variables |
-| `spec.md` | Technical specification |
-| `PLAN.md` | Implementation plan with task registry |
-| `rag-mcp-architecture-blueprint.md` | Architecture blueprint |
-| `docs/` | Technical documentation (MkDocs) |
-
-## Documentation
-
-Architecture docs live in `docs/`. Key topics:
-
-- Architecture overview and data flow
-- Ingestion pipeline (CocoIndex, Jina v4, Graphiti)
-- MCP server and search tools
-- Knowledge graph schema and temporal awareness
-- Deployment and infrastructure
-- Configuration reference
-- AWS setup (S3 event notifications, SQS, IAM)
