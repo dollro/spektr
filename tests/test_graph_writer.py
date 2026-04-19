@@ -89,14 +89,14 @@ async def test_upsert_entity(writer: GraphWriter) -> None:
     """Upsert entity creates node with timestamps."""
     entity = Entity(
         name="Google",
-        type="ORGANIZATION",
+        type="organization",
         description="Tech company.",
     )
     await writer.upsert_entity(entity)
 
     async with writer.driver.session() as session:
         result = await session.run(
-            "MATCH (e:Entity {name: 'Google', type: 'ORGANIZATION'}) RETURN e"
+            "MATCH (e:Entity {name: 'Google', type: 'organization'}) RETURN e"
         )
         record = await result.single()
     assert record is not None
@@ -109,16 +109,16 @@ async def test_upsert_entity(writer: GraphWriter) -> None:
 @pytest.mark.integration
 async def test_upsert_relationship(writer: GraphWriter) -> None:
     """APOC merge creates dynamic relationship type."""
-    e1 = Entity(name="Google", type="ORGANIZATION", description="Tech co.")
-    e2 = Entity(name="Python", type="TECHNOLOGY", description="Language.")
+    e1 = Entity(name="Google", type="organization", description="Tech co.")
+    e2 = Entity(name="Python", type="technology", description="Language.")
     await writer.upsert_entity(e1)
     await writer.upsert_entity(e2)
-    await writer.upsert_relationship("Google", "Python", "USES_TECHNOLOGY", {})
+    await writer.upsert_relationship("Google", "Python", "uses", {})
 
     async with writer.driver.session() as session:
         result = await session.run(
             "MATCH (s:Entity {name: 'Google'})"
-            "-[r:USES_TECHNOLOGY]->"
+            "-[r:uses]->"
             "(t:Entity {name: 'Python'}) "
             "RETURN r"
         )
@@ -131,7 +131,7 @@ async def test_link_chunk_to_entity(writer: GraphWriter) -> None:
     """MENTIONS relationship links chunk to entity."""
     await writer.upsert_document("test/m.pdf", filename="m.pdf")
     await writer.upsert_chunk("m-001", "preview", 1, source_key="test/m.pdf")
-    entity = Entity(name="Google", type="ORGANIZATION", description="Co.")
+    entity = Entity(name="Google", type="organization", description="Co.")
     await writer.upsert_entity(entity)
     await writer.link_chunk_to_entity("m-001", "Google", 0.95)
 
@@ -159,12 +159,12 @@ async def test_write_extraction_result(
         entities=[
             Entity(
                 name="Apple",
-                type="ORGANIZATION",
+                type="organization",
                 description="Tech company.",
             ),
             Entity(
                 name="Swift",
-                type="TECHNOLOGY",
+                type="technology",
                 description="Programming language.",
             ),
         ],
@@ -172,7 +172,7 @@ async def test_write_extraction_result(
             Relationship(
                 source="Apple",
                 target="Swift",
-                relation="PRODUCES",
+                relation="created_by",
                 properties={},
             ),
         ],
@@ -188,10 +188,10 @@ async def test_write_extraction_result(
         assert record is not None
         assert record["cnt"] == 2
 
-        # Check PRODUCES relationship
+        # Check created_by relationship
         result = await session.run(
             "MATCH (:Entity {name: 'Apple'})"
-            "-[:PRODUCES]->(:Entity {name: 'Swift'}) "
+            "-[:created_by]->(:Entity {name: 'Swift'}) "
             "RETURN count(*) AS cnt"
         )
         record = await result.single()

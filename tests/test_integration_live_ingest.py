@@ -45,8 +45,15 @@ def _reset_live_ingest_state():
 
 @pytest.fixture
 def patched_app(qdrant_client, mock_embedder, mock_graphiti):
-    """Live ingest app wired to real Qdrant, mock embedder + Graphiti."""
+    """Live ingest app wired to real Qdrant, mock embedder + Graphiti.
+
+    Disables INGEST_API_KEY auth for the test — auth is covered
+    separately in unit tests for the ingest module.
+    """
+    from config.settings import settings
+
     with (
+        patch.object(settings, "ingest_api_key", ""),
         patch(
             "ingestion.live_ingest._get_qdrant_client",
             return_value=qdrant_client,

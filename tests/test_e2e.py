@@ -139,29 +139,42 @@ class TestAgentWithSeededData:
         mock_graphiti = AsyncMock()
         mock_graphiti.search = AsyncMock(return_value=[mock_edge])
 
-        with patch(
-            "server.tools.graph_search.get_graphiti",
-            return_value=mock_graphiti,
+        mock_engine = AsyncMock()
+        mock_engine.search = AsyncMock(return_value=[])
+
+        with (
+            patch(
+                "ingestion.graphiti_client.get_graphiti",
+                return_value=mock_graphiti,
+            ),
+            patch(
+                "server.tools.graph_search.get_graph_engine",
+                return_value=mock_engine,
+            ),
         ):
             from server.tools.graph_search import graph_search
 
-            results = await graph_search("Python")
+            results = await graph_search("Python", session_id="test-session")
 
         assert len(results) >= 1
         assert "Python" in results[0]["fact"]
 
     async def test_hybrid_search_query(self, qdrant_client, mock_embedder):
         """Hybrid search returns both vector and graph results."""
+        from server.models import GraphFact
+
         _seed_qdrant(qdrant_client)
 
-        mock_edge = MagicMock()
-        mock_edge.fact = "Python is a language"
-        mock_edge.configure_mock(name="unique_graph_source.pdf")
-        mock_edge.created_at = "2025-01-01"
-        mock_edge.expired_at = None
-
-        mock_graphiti = AsyncMock()
-        mock_graphiti.search = AsyncMock(return_value=[mock_edge])
+        mock_engine = AsyncMock()
+        mock_engine.search = AsyncMock(
+            return_value=[
+                GraphFact(
+                    fact="Python is a language",
+                    source="unique_graph_source.pdf",
+                    created_at="2025-01-01",
+                ),
+            ],
+        )
 
         with (
             patch(
@@ -173,8 +186,8 @@ class TestAgentWithSeededData:
                 mock_embedder,
             ),
             patch(
-                "server.tools.graph_search.get_graphiti",
-                return_value=mock_graphiti,
+                "server.tools.graph_search.get_graph_engine",
+                return_value=mock_engine,
             ),
         ):
             from server.tools.hybrid_search import hybrid_search

@@ -6,7 +6,7 @@ using real Qdrant and Neo4j services (Docker).
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -18,6 +18,17 @@ from ingestion.pipeline import (
     _process_visual_page,
     ingest_file,
 )
+
+
+def _configure_mock_pipeline_settings(mock_settings) -> None:  # type: ignore[no-untyped-def]
+    """Set the settings attrs ingest_file touches. graph_enabled=False skips Neo4j."""
+    mock_settings.qdrant_url = "http://localhost:6333"
+    mock_settings.document_source = "local"
+    mock_settings.multivec_enabled = False
+    mock_settings.image_embed_strategy = "smart"
+    mock_settings.vlm_generation_enabled = False
+    mock_settings.graph_enabled = False
+    mock_settings.pipeline_timeout = 3600
 
 
 @pytest.mark.integration
@@ -44,7 +55,7 @@ class TestTextPageIngestion:
             now="2025-01-01T00:00:00",
             qdrant=qdrant_client,
             embedder=mock_embedder,
-            graphiti_writer=None,
+            graph_engine=None,
         )
 
         # Verify points in dense collection
@@ -85,32 +96,28 @@ class TestTextPageIngestion:
         )
 
         with patch(
-            "ingestion.pipeline.GraphitiWriter",
+            "ingestion.entity_extractor.get_llm_client",
+            return_value=mock_llm_client,
         ):
-            with patch(
-                "ingestion.entity_extractor.get_llm_client",
-                return_value=mock_llm_client,
-            ):
-                llm_client = mock_llm_client
-                from ingestion.entity_extractor import extract_entities
+            from ingestion.entity_extractor import extract_entities
 
-                for chunk in chunks:
-                    chunk_id = f"{sample_txt_name}::p{chunk.page_number}::c{chunk.chunk_index}"
-                    await graph_writer.upsert_chunk(
-                        chunk_id=chunk_id,
-                        text_preview=chunk.text[:200],
-                        page_number=chunk.page_number,
-                        source_key=sample_txt_name,
-                    )
-                    result = await extract_entities(
-                        chunk.text,
-                        llm_client,
-                    )
-                    await graph_writer.write_extraction_result(
-                        source_key=sample_txt_name,
-                        chunk_id=chunk_id,
-                        extraction_result=result,
-                    )
+            for chunk in chunks:
+                chunk_id = f"{sample_txt_name}::p{chunk.page_number}::c{chunk.chunk_index}"
+                await graph_writer.upsert_chunk(
+                    chunk_id=chunk_id,
+                    text_preview=chunk.text[:200],
+                    page_number=chunk.page_number,
+                    source_key=sample_txt_name,
+                )
+                result = await extract_entities(
+                    chunk.text,
+                    mock_llm_client,
+                )
+                await graph_writer.write_extraction_result(
+                    source_key=sample_txt_name,
+                    chunk_id=chunk_id,
+                    extraction_result=result,
+                )
 
         await graph_writer.close()
 
@@ -263,7 +270,7 @@ class TestIdempotency:
                 now="2025-01-01T00:00:00",
                 qdrant=qdrant_client,
                 embedder=mock_embedder,
-                graphiti_writer=None,
+                graph_engine=None,
             )
 
         # Deterministic IDs mean upsert overwrites, no duplicates
@@ -324,7 +331,7 @@ class TestCorruptFiles:
             now="2025-01-01T00:00:00",
             qdrant=qdrant_client,
             embedder=mock_embedder,
-            graphiti_writer=None,
+            graph_engine=None,
         )
 
         result = qdrant_client.scroll(
@@ -352,11 +359,7 @@ class TestCorruptFiles:
             ),
             patch("ingestion.pipeline.settings") as mock_settings,
         ):
-            mock_settings.qdrant_url = "http://localhost:6333"
-            mock_settings.document_source = "local"
-            mock_settings.multivec_enabled = False
-            mock_settings.image_embed_strategy = "smart"
-            mock_settings.vlm_generation_enabled = False
+            _configure_mock_pipeline_settings(mock_settings)
             # ingest_file should not crash
             result = ingest_file(corrupt_pdf, "corrupt.pdf")
             assert result == "corrupt.pdf"
@@ -373,26 +376,14 @@ class TestIngestFileEndToEnd:
         sample_txt_bytes: bytes,
         sample_txt_name: str,
     ) -> None:
-        mock_graphiti = MagicMock()
-        mock_graphiti.ingest_chunk = AsyncMock()
-        mock_graphiti.close = AsyncMock()
-
         with (
             patch(
                 "ingestion.pipeline.create_embedder",
                 return_value=mock_embedder,
             ),
-            patch(
-                "ingestion.pipeline.GraphitiWriter",
-                return_value=mock_graphiti,
-            ),
             patch("ingestion.pipeline.settings") as mock_settings,
         ):
-            mock_settings.qdrant_url = "http://localhost:6333"
-            mock_settings.document_source = "local"
-            mock_settings.multivec_enabled = False
-            mock_settings.image_embed_strategy = "smart"
-            mock_settings.vlm_generation_enabled = False
+            _configure_mock_pipeline_settings(mock_settings)
 
             result = ingest_file(sample_txt_bytes, sample_txt_name)
 
@@ -419,11 +410,7 @@ class TestIngestFileEndToEnd:
             ),
             patch("ingestion.pipeline.settings") as mock_settings,
         ):
-            mock_settings.qdrant_url = "http://localhost:6333"
-            mock_settings.document_source = "local"
-            mock_settings.multivec_enabled = False
-            mock_settings.image_embed_strategy = "smart"
-            mock_settings.vlm_generation_enabled = False
+            _configure_mock_pipeline_settings(mock_settings)
 
             result = ingest_file(sample_png_bytes, sample_png_name)
 

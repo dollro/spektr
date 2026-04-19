@@ -50,13 +50,17 @@ CHUNKS = [
 
 @pytest.fixture(autouse=True)
 def _reset_singletons():
-    """Reset module-level singletons so each test gets fresh state."""
+    """Reset module-level singletons and disable ingest auth for tests."""
     import ingestion.live_ingest as mod
+    from config.settings import settings
 
     mod._active_session = None
     mod._qdrant_client = None
     mod._embedder = None
+    original_key = settings.ingest_api_key
+    settings.ingest_api_key = ""
     yield
+    settings.ingest_api_key = original_key
     mod._active_session = None
     mod._qdrant_client = None
     mod._embedder = None

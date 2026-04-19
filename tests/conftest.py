@@ -95,7 +95,7 @@ def _make_mock_extraction() -> ExtractionResult:
         entities=[
             {
                 "name": "Test Entity",
-                "type": "CONCEPT",
+                "type": "concept",
                 "description": "A test entity",
             },
         ],
