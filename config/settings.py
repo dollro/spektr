@@ -72,12 +72,13 @@ class Settings(BaseSettings):
 
     # Resilience
     pipeline_timeout: int = 3600  # per-file timeout in seconds (default 1h)
+    pipeline_max_retries: int = 3  # failures per file before poison-pill swallow
     graphiti_concurrency: int = 3  # max concurrent Graphiti episode ingestions
     jina_max_concurrent: int = 5
     extraction_timeout: int = 30
     tool_timeout: int = 30
     max_retries: int = 3
-    rerank_enabled: bool = False
+    rerank_enabled: bool = True
     vlm_generation_enabled: bool = False
     multivec_enabled: bool = False
     graph_enabled: bool = True

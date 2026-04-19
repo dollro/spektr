@@ -9,3 +9,4 @@ data/
 *.egg-info/
 site/
 .worktrees/
+state/

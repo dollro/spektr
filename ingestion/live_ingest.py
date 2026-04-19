@@ -143,6 +143,8 @@ async def ingest_transcript(chunk: TranscriptChunk) -> IngestResponse:
                     "timestamp": chunk.timestamp.isoformat(),
                     "text_content": chunk.text,
                     "page_number": 0,
+                    "embedder_model": embedder.model_name,
+                    "embedder_dim": embedder.dim,
                     "metadata": {},
                 },
             ),

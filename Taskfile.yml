@@ -51,6 +51,11 @@ tasks:
     cmds:
       - uv run python -m scripts.doctor
 
+  doctor-fix:
+    desc: "Repair drift: delete orphan CocoIndex tracking rows so next ingest retries"
+    cmds:
+      - uv run python -m scripts.doctor --fix --yes
+
   test:
     desc: Run unit tests (excludes integration)
     cmds:
