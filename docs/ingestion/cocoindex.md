@@ -13,12 +13,14 @@ def rag_ingestion_flow(flow_builder, data_scope) -> None
 
 ### Source Selection
 
-The pipeline auto-switches between S3 and local filesystem based on configuration:
+The pipeline reads `DOCUMENT_SOURCE` (`local` or `s3`) to pick a source:
 
-| Condition | Source | Filename Field |
+| `DOCUMENT_SOURCE` | Source | Filename field |
 |-|-|-|
-| `s3_bucket_name` AND `s3_sqs_queue_url` set | `AmazonS3` (with SQS notifications) | `key` |
-| Otherwise | `LocalFile` (reads from `documents/` dir) | `filename` |
+| `local` | `LocalFile` reading `LOCAL_DOCUMENTS_PATH` (default `documents/`) | `filename` |
+| `s3` | `AmazonS3` + SQS change stream (`S3_SQS_QUEUE_URL`) | `filename` |
+
+Both sources expose the row key as `filename` — the S3 source does **not** use `key`. See [S3 + SQS setup](s3-sqs-setup.md) for the AWS wiring and gotchas.
 
 Both sources use `binary=True` and filter to supported file patterns:
 
@@ -141,8 +143,15 @@ Entry point that orchestrates the full pipeline lifecycle:
 6. Log total duration
 
 ```bash
-uv run python -m ingestion.pipeline
+task ingest          # one-shot batch: process everything, exit
+task ingest-live     # watch SQS / filesystem continuously
 ```
+
+Live mode (`--live`) passes `live_mode=True` to `cocoindex.update_all_flows_async`, which blocks on SQS (for S3) or inotify (for local). Use Ctrl-C to stop.
+
+### AWS credentials plumbing
+
+When `DOCUMENT_SOURCE=s3`, `run_pipeline` exports `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`, `AWS_DEFAULT_REGION`, and `AWS_ENDPOINT_URL` from Settings into `os.environ` before `cocoindex.init()`. This is because pydantic-settings reads `.env` into the `Settings` object but does **not** populate process env; CocoIndex's Rust-based S3 SDK reads `os.environ` directly. Without this export the pipeline fails with `A region must be set when sending requests to S3.`
 
 ## CocoIndex Ops
 

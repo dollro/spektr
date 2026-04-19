@@ -44,10 +44,12 @@ nav:
     - Embeddings (Jina v4): ingestion/embeddings.md
     - Knowledge Graph: ingestion/knowledge-graph.md
     - CocoIndex Pipeline: ingestion/cocoindex.md
+    - S3 + SQS Setup: ingestion/s3-sqs-setup.md
   - MCP Server:
     - Overview: server/overview.md
     - Search Tools: server/search-tools.md
     - Authentication: server/authentication.md
+    - Client Setup: server/client-setup.md
   - Agent:
     - Pydantic AI Agent: agent/overview.md
     - HTTP API: agent/http-api.md
