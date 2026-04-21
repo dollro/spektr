@@ -82,5 +82,5 @@ The live ingest API (`ingestion/live_ingest.py`) uses a two-layer auth scheme: a
 ## Security Notes
 
 - Store `MCP_API_KEY` and `INGEST_API_KEY` in your `.env` file. Never commit them to version control.
-- When running in `stdio` transport mode, the MCP middleware still activates but the request context may not carry HTTP headers. Bearer auth is primarily effective with the `sse` transport.
+- When running in `stdio` transport mode, the MCP middleware still activates but the request context may not carry HTTP headers. Bearer auth is primarily effective with the `http` (streamable-http) or `sse` transports.
 - For production deployments, consider placing both servers behind a reverse proxy with TLS termination.

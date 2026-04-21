@@ -80,8 +80,10 @@ When `LLM_BASE_URL` is set, the **agent** uses an OpenAI-compatible client regar
 
 | Variable | Default | Required | Description |
 |-|-|-|-|
-| `MCP_TRANSPORT` | `sse` | No | MCP transport protocol (`sse` or `stdio`) |
-| `MCP_PORT` | `8000` | No | Port for the MCP SSE server |
+| `MCP_TRANSPORT` | `http` | No | Transport: `http` (streamable-http, recommended), `sse` (legacy), or `stdio` |
+| `MCP_HOST` | `0.0.0.0` | No | Bind address for `http`/`sse`. Use `127.0.0.1` for local-only; keep `0.0.0.0` for Docker / LAN / remote clients |
+| `MCP_PORT` | `8080` | No | Port for `http`/`sse` transports |
+| `MCP_PATH` | `/mcp` | No | URL path for `http`/`sse`. Full endpoint is `{scheme}://{MCP_HOST}:{MCP_PORT}{MCP_PATH}` |
 
 ## Auth
 
