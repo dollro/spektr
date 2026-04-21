@@ -117,3 +117,43 @@ tasks:
     desc: Build static docs site
     cmds:
       - uv run mkdocs build
+
+  prod:build:
+    desc: "Build the Spektr production image"
+    cmds:
+      - docker compose -f docker-compose.prod.yml build
+
+  prod:up:
+    desc: "Start the full production stack (data + app + Caddy)"
+    cmds:
+      - docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
+
+  prod:down:
+    desc: "Stop the production stack"
+    cmds:
+      - docker compose -f docker-compose.prod.yml down
+
+  prod:logs:
+    desc: "Tail logs from the production stack. Pass service: task prod:logs -- mcp"
+    cmds:
+      - docker compose -f docker-compose.prod.yml logs -f {{.CLI_ARGS}}
+
+  prod:ingest:
+    desc: "Run one-shot bulk ingestion in the prod stack (profile: oneshot)"
+    cmds:
+      - docker compose -f docker-compose.prod.yml --env-file .env.prod --profile oneshot run --rm ingest
+
+  prod:ps:
+    desc: "Show running prod services"
+    cmds:
+      - docker compose -f docker-compose.prod.yml ps
+
+  prod:backup:
+    desc: "Snapshot the production stack (Qdrant+Neo4j+Postgres) to ./backups/<ts>/"
+    cmds:
+      - QDRANT_URL=http://127.0.0.1:6333 uv run python -m scripts.backup --compose-file docker-compose.prod.yml {{.CLI_ARGS}}
+
+  prod:restore:
+    desc: "Restore into the prod stack. Pass --from backups/<ts> --target all --yes-i-know-this-wipes-things"
+    cmds:
+      - QDRANT_URL=http://127.0.0.1:6333 uv run python -m scripts.restore --compose-file docker-compose.prod.yml {{.CLI_ARGS}}

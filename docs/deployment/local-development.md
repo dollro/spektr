@@ -72,7 +72,7 @@ This processes documents from S3, generates embeddings, stores vectors in Qdrant
 uv run python -m server.mcp_server
 ```
 
-The server starts on `http://localhost:8000` (configurable via `MCP_PORT`).
+The server starts on `http://localhost:8080` (configurable via `MCP_PORT`). By default it binds to `0.0.0.0` so containers and other hosts can reach it; set `MCP_HOST=127.0.0.1` to keep it local-only.
 
 ### 7. Start the agent API (optional)
 
