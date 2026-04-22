@@ -2,6 +2,9 @@
 
 Spektr uses three infrastructure services managed via Docker Compose. All service images are pinned to specific versions for reproducibility.
 
+!!! note "Two compose files"
+    `docker-compose.yml` is the **development** stack — it runs only Qdrant, Neo4j, and PostgreSQL with host ports published, so the app processes (`task serve`, `task ingest-live`) run natively on the host and connect to `localhost`. For the production stack (app + data + reverse proxy, all containerized), see [Production Deployment](../deployment/production.md) and `docker-compose.prod.yml`.
+
 ## Docker Compose Overview
 
 Start all services:

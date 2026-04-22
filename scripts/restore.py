@@ -29,6 +29,15 @@ def _read_manifest(src: Path) -> dict:  # type: ignore[type-arg]
     return json.loads(m.read_text())
 
 
+def _compose_cmd(compose_file: str | None, *args: str) -> list[str]:
+    """Build a `docker compose [-f FILE] ...` command vector."""
+    cmd = ["docker", "compose"]
+    if compose_file:
+        cmd += ["-f", compose_file]
+    cmd.extend(args)
+    return cmd
+
+
 # ---------------------------------------------------------------------------
 # Qdrant
 # ---------------------------------------------------------------------------
@@ -75,7 +84,11 @@ def restore_qdrant(src: Path, manifest: dict) -> None:  # type: ignore[type-arg]
 # ---------------------------------------------------------------------------
 
 
-def restore_neo4j(src: Path, manifest: dict) -> None:  # type: ignore[type-arg]
+def restore_neo4j(
+    src: Path,
+    manifest: dict,  # type: ignore[type-arg]
+    compose_file: str | None = None,
+) -> None:
     """Load the dump (or backup dir) back into the container."""
     neo4j_dir = src / "neo4j"
     if not neo4j_dir.exists():
@@ -84,44 +97,54 @@ def restore_neo4j(src: Path, manifest: dict) -> None:  # type: ignore[type-arg]
 
     container_path = "/tmp/spektr-restore"
     subprocess.run(
-        ["docker", "compose", "exec", "-T", "neo4j",
-         "rm", "-rf", container_path],
+        _compose_cmd(
+            compose_file, "exec", "-T", "neo4j",
+            "rm", "-rf", container_path,
+        ),
         check=False,
     )
     subprocess.run(
-        ["docker", "compose", "exec", "-T", "neo4j",
-         "mkdir", "-p", container_path],
+        _compose_cmd(
+            compose_file, "exec", "-T", "neo4j",
+            "mkdir", "-p", container_path,
+        ),
         check=True,
     )
 
     # Copy dump/backup artefacts INTO the container
     subprocess.run(
-        ["docker", "compose", "cp",
-         str(neo4j_dir) + "/.", f"neo4j:{container_path}"],
+        _compose_cmd(
+            compose_file, "cp",
+            str(neo4j_dir) + "/.", f"neo4j:{container_path}",
+        ),
         check=True,
     )
 
     print("  stopping neo4j service (Community load requires DB offline) …")
     subprocess.run(
-        ["docker", "compose", "stop", "neo4j"], check=True,
+        _compose_cmd(compose_file, "stop", "neo4j"), check=True,
     )
     try:
         # Prefer `database load` (from dump); fall back to `database restore`
         # (from backup dir structure) if load fails.
         print("  loading dump …")
         r = subprocess.run(
-            ["docker", "compose", "run", "--rm", "-T", "--no-deps", "neo4j",
-             "neo4j-admin", "database", "load", "neo4j",
-             f"--from-path={container_path}", "--overwrite-destination=true"],
+            _compose_cmd(
+                compose_file, "run", "--rm", "-T", "--no-deps", "neo4j",
+                "neo4j-admin", "database", "load", "neo4j",
+                f"--from-path={container_path}", "--overwrite-destination=true",
+            ),
             capture_output=True, text=True, check=False,
         )
         if r.returncode != 0:
             print("    load failed, trying restore …")
             r = subprocess.run(
-                ["docker", "compose", "run", "--rm", "-T", "--no-deps", "neo4j",
-                 "neo4j-admin", "database", "restore",
-                 f"--from-path={container_path}", "neo4j",
-                 "--overwrite-destination=true"],
+                _compose_cmd(
+                    compose_file, "run", "--rm", "-T", "--no-deps", "neo4j",
+                    "neo4j-admin", "database", "restore",
+                    f"--from-path={container_path}", "neo4j",
+                    "--overwrite-destination=true",
+                ),
                 capture_output=True, text=True, check=False,
             )
             if r.returncode != 0:
@@ -133,7 +156,7 @@ def restore_neo4j(src: Path, manifest: dict) -> None:  # type: ignore[type-arg]
         print("    → neo4j restored")
     finally:
         subprocess.run(
-            ["docker", "compose", "start", "neo4j"], check=True,
+            _compose_cmd(compose_file, "start", "neo4j"), check=True,
         )
 
 
@@ -142,7 +165,11 @@ def restore_neo4j(src: Path, manifest: dict) -> None:  # type: ignore[type-arg]
 # ---------------------------------------------------------------------------
 
 
-def restore_postgres(src: Path, manifest: dict) -> None:  # type: ignore[type-arg]
+def restore_postgres(
+    src: Path,
+    manifest: dict,  # type: ignore[type-arg]
+    compose_file: str | None = None,
+) -> None:
     """pg_restore --clean to drop + recreate objects before loading data."""
     pg_entry = manifest.get("entries", {}).get("postgres", {})
     file_name = pg_entry.get("file", "cocoindex.dump")
@@ -154,9 +181,11 @@ def restore_postgres(src: Path, manifest: dict) -> None:  # type: ignore[type-ar
     print(f"  pg_restore {dump.name} …")
     with dump.open("rb") as fh:
         r = subprocess.run(
-            ["docker", "compose", "exec", "-T", "postgres",
-             "pg_restore", "-U", "cocoindex", "-d", "cocoindex",
-             "--clean", "--if-exists"],
+            _compose_cmd(
+                compose_file, "exec", "-T", "postgres",
+                "pg_restore", "-U", "cocoindex", "-d", "cocoindex",
+                "--clean", "--if-exists",
+            ),
             stdin=fh, capture_output=True, check=False,
         )
     if r.returncode != 0:
@@ -180,6 +209,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--yes-i-know-this-wipes-things",
                         action="store_true",
                         help="Required to actually run. Restore is destructive.")
+    parser.add_argument(
+        "--compose-file",
+        metavar="FILE",
+        default=None,
+        help=(
+            "Path to a docker-compose file (passed as `-f FILE` to every "
+            "`docker compose` call). Defaults to compose's own discovery."
+        ),
+    )
     args = parser.parse_args(argv)
 
     src = Path(args.src)
@@ -203,9 +241,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.target in ("qdrant", "all"):
             restore_qdrant(src, manifest)
         if args.target in ("postgres", "all"):
-            restore_postgres(src, manifest)
+            restore_postgres(src, manifest, args.compose_file)
         if args.target in ("neo4j", "all"):
-            restore_neo4j(src, manifest)
+            restore_neo4j(src, manifest, args.compose_file)
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2

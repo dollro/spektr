@@ -1,8 +1,11 @@
 # Connecting MCP Clients
 
-Any MCP-aware coding agent can use Spektr's search tools as first-class functions. This page covers the two transport styles and the caveats each brings.
+Any MCP-aware coding agent can use Spektr's search tools as first-class functions. This page covers the transport styles and the caveats each brings.
 
-Tested clients: **Claude Code**, **Cursor**, **any Pydantic AI script**. The same `.mcp.json` format works for Claude Code and Cursor; Pydantic AI uses `MCPServerSSE` in code (see `agent/agent.py`).
+Tested clients: **Claude Code**, **Cursor**, **any Pydantic AI script**. The same `.mcp.json` format works for Claude Code and Cursor; Pydantic AI uses `MCPServerStreamableHTTP` (or `MCPServerSSE` for legacy) in code (see `agent/agent.py`).
+
+!!! tip "Which transport?"
+    Prefer **`http`** (streamable-http) — it's the modern MCP default, handles disconnects cleanly, and is what all current clients speak. Use `stdio` for local dev when you want the client to own the server lifecycle. Only use `sse` if a client explicitly requires it.
 
 ## Option A: stdio — client spawns the server
 
@@ -38,13 +41,13 @@ Notes:
 - Docker services (`task up`) still need to be running — the MCP server connects to Qdrant / Neo4j over localhost.
 - `MCP_API_KEY=""` disables auth (safe for stdio; the client is local).
 
-## Option B: SSE — client connects to a running server
+## Option B: HTTP (streamable-http) — client connects to a running server
 
-**Best for shared or remote setups.** Start the server once (`task serve`), multiple agents can connect in parallel.
+**Best for shared or remote setups and the production Docker stack.** Start the server once (`task serve` in dev, or `task prod:up` in production), and any number of agents can connect in parallel.
 
 ```bash
 task serve
-# serves on http://localhost:8000/sse
+# serves on http://localhost:8080/mcp  (MCP_TRANSPORT=http, MCP_PORT=8080, MCP_PATH=/mcp)
 ```
 
 `.mcp.json`:
@@ -53,8 +56,8 @@ task serve
 {
   "mcpServers": {
     "spektr": {
-      "type": "sse",
-      "url": "http://localhost:8000/sse",
+      "type": "http",
+      "url": "http://localhost:8080/mcp",
       "headers": {
         "Authorization": "Bearer YOUR_MCP_API_KEY"
       }
@@ -63,8 +66,24 @@ task serve
 }
 ```
 
-!!! warning "Port is 8000, not whatever `MCP_PORT` says"
-    FastMCP 3.0.x ignores the `port` kwarg on `mcp.run(transport="sse", ...)` and always binds 8000. Until the upstream fix lands, put **8000** in the `.mcp.json` URL — even if `.env` says `MCP_PORT=8080`.
+In production behind the Caddy reverse proxy:
+
+```json
+{
+  "mcpServers": {
+    "spektr": {
+      "type": "http",
+      "url": "https://mcp.yourdomain.tld/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_MCP_API_KEY"
+      }
+    }
+  }
+}
+```
+
+!!! note "Legacy SSE"
+    If a client only speaks SSE, set `MCP_TRANSPORT=sse` in `.env` and change `"type": "http"` → `"type": "sse"` in `.mcp.json`. The URL stays `{scheme}://{host}:{port}{MCP_PATH}`. SSE works but you will see benign `ClosedResourceError` tracebacks in server logs whenever a client disconnects mid-response.
 
 !!! danger "Don't commit the Bearer token"
     The token is your `MCP_API_KEY` from `.env`. `.mcp.json` is gitignored in Spektr precisely because a per-machine token lives inside it. If you want a committable config, either leave auth disabled locally (`MCP_API_KEY=""`) or use env-var expansion if your client supports it.
@@ -83,10 +102,10 @@ Cursor uses the same `.mcp.json` schema. Paste it under **Settings → MCP → A
 
 ```python
 from pydantic_ai import Agent
-from pydantic_ai.mcp import MCPServerSSE
+from pydantic_ai.mcp import MCPServerStreamableHTTP
 
-server = MCPServerSSE(
-    "http://localhost:8000/sse",
+server = MCPServerStreamableHTTP(
+    "http://localhost:8080/mcp",
     headers={"Authorization": f"Bearer {settings.mcp_api_key}"} if settings.mcp_api_key else None,
 )
 agent = Agent(model="...", toolsets=[server])
@@ -94,6 +113,8 @@ agent = Agent(model="...", toolsets=[server])
 async with server:
     result = await agent.run("What's in the knowledge base?")
 ```
+
+For a legacy SSE server, import `MCPServerSSE` instead and point the URL at `http://HOST:PORT{MCP_PATH}` with `MCP_TRANSPORT=sse`.
 
 See `agent/agent.py::create_rag_agent` and `scripts/ask.py` for the complete pattern used by `task ask`.
 

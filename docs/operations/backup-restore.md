@@ -2,13 +2,17 @@
 
 Spektr's state lives in three Docker volumes: Qdrant (vectors), Neo4j (knowledge graph), Postgres (CocoIndex pipeline state). All three are captured by `task backup`; `task restore` reverses the process.
 
+!!! note "Dev vs prod"
+    `task backup` / `task restore` operate on the **dev** compose stack (`docker-compose.yml`). For the production stack (`docker-compose.prod.yml`) use `task prod:backup` / `task prod:restore` instead — same output format, just with `--compose-file docker-compose.prod.yml` threaded through and `QDRANT_URL` pointed at the host-local Qdrant publish. See [Production Deployment](../deployment/production.md#backups) for details.
+
 ## Backup
 
 ```bash
-task backup                         # everything
+task backup                         # everything (dev stack)
 task backup -- qdrant               # just Qdrant
 task backup -- postgres             # just Postgres
 task backup -- all --prune-older-than 30
+task prod:backup                    # same, against docker-compose.prod.yml
 ```
 
 Artefacts land in `./backups/<YYYYMMDD-HHMMSS>/`:

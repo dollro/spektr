@@ -1,0 +1,38 @@
+.git
+.gitignore
+.venv
+venv
+__pycache__
+**/__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# User data / local state
+documents/
+backups/
+eval-reports/
+state/
+plans/
+site/
+exp.txt
+
+# Editor / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Env
+.env
+.env.*
+!.env.example
+!.env.prod.example
+
+# Docs build artefacts
+site/
+
+# Node / misc
+node_modules/

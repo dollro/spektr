@@ -62,6 +62,7 @@ See [Local Development](deployment/local-development.md) for the full setup guid
 | [Search Tools](server/search-tools.md) | Per-tool reference with session-aware search |
 | [Agent](agent/overview.md) | Pydantic AI agent and HTTP API |
 | [Configuration](configuration/environment.md) | Environment variables and infrastructure setup |
+| [Production Deployment](deployment/production.md) | Fully containerized deploy on a single VM (Docker Compose + Caddy) |
 | [AWS Setup](deployment/aws-setup.md) | S3 event notifications, SQS, IAM |
 
 ## Stack

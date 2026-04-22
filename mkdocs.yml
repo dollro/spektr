@@ -57,8 +57,9 @@ nav:
     - Environment Variables: configuration/environment.md
     - Infrastructure (Docker): configuration/infrastructure.md
   - Deployment:
-    - AWS Setup: deployment/aws-setup.md
     - Local Development: deployment/local-development.md
+    - Production (Docker): deployment/production.md
+    - AWS Setup: deployment/aws-setup.md
   - API Reference:
     - Response Models: api/models.md
   - Operations:
