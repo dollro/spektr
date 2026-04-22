@@ -82,8 +82,8 @@ class TestCreateRagAgent:
             agent, _ = await create_rag_agent()
         assert agent.model is not None
 
-    async def test_server_port_from_settings(self):
-        """MCP server URL uses the configured port."""
+    async def test_server_url_composed_from_port_and_path(self):
+        """MCP server URL is http://localhost:{MCP_PORT}{MCP_PATH}."""
         with (
             patch.dict(os.environ, _DUMMY_ENV),
             patch("agent.agent.settings") as mock_settings,
@@ -93,10 +93,42 @@ class TestCreateRagAgent:
             mock_settings.llm_base_url = ""
             mock_settings.mcp_transport = "http"
             mock_settings.mcp_port = 9999
+            mock_settings.mcp_path = "/custom-path"
+            mock_settings.mcp_api_key = ""
+            _, server = await create_rag_agent()
+        assert server.url == "http://localhost:9999/custom-path"
+
+    async def test_bearer_header_set_when_api_key_configured(self):
+        """Authorization header is injected when MCP_API_KEY is non-empty."""
+        with (
+            patch.dict(os.environ, _DUMMY_ENV),
+            patch("agent.agent.settings") as mock_settings,
+        ):
+            mock_settings.llm_api_type = "anthropic"
+            mock_settings.llm_model = "claude-sonnet-4-20250514"
+            mock_settings.llm_base_url = ""
+            mock_settings.mcp_transport = "http"
+            mock_settings.mcp_port = 8080
+            mock_settings.mcp_path = "/mcp"
+            mock_settings.mcp_api_key = "secret-token"
+            _, server = await create_rag_agent()
+        assert server.headers == {"Authorization": "Bearer secret-token"}
+
+    async def test_no_headers_when_api_key_empty(self):
+        """No Authorization header when MCP_API_KEY is empty (disabled auth)."""
+        with (
+            patch.dict(os.environ, _DUMMY_ENV),
+            patch("agent.agent.settings") as mock_settings,
+        ):
+            mock_settings.llm_api_type = "anthropic"
+            mock_settings.llm_model = "claude-sonnet-4-20250514"
+            mock_settings.llm_base_url = ""
+            mock_settings.mcp_transport = "http"
+            mock_settings.mcp_port = 8080
             mock_settings.mcp_path = "/mcp"
             mock_settings.mcp_api_key = ""
             _, server = await create_rag_agent()
-        assert "9999" in str(vars(server))
+        assert server.headers is None
 
 
 # ---------------------------------------------------------------------------
