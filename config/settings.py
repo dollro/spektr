@@ -67,6 +67,7 @@ class Settings(BaseSettings):
 
     # MCP
     mcp_transport: str = "sse"
+    mcp_host: str = "0.0.0.0"
     mcp_port: int = 8080
     mcp_api_key: str = ""
 

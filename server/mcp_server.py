@@ -62,8 +62,9 @@ if settings.multivec_enabled:
 
 if __name__ == "__main__":
     logger.info(
-        "MCP server starting on %s:%d with tools: %s",
+        "MCP server starting on %s %s:%d with tools: %s",
         settings.mcp_transport,
+        settings.mcp_host,
         settings.mcp_port,
         ", ".join(_REGISTERED_TOOLS),
     )
@@ -73,5 +74,6 @@ if __name__ == "__main__":
     )
     mcp.run(
         transport=settings.mcp_transport,
+        host=settings.mcp_host,
         port=settings.mcp_port,
     )

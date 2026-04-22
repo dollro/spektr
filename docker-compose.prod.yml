@@ -1,0 +1,130 @@
+# Production stack: data services + Spektr app + Caddy reverse proxy.
+# All services live on spektr-net; only Caddy publishes ports to the host.
+#
+# Usage:
+#   cp .env.prod.example .env.prod  && edit
+#   task prod:build && task prod:up
+#
+# Backups: scripts/backup.py shells out to `docker compose exec postgres`
+# and `docker compose run neo4j`; service names below match.
+
+name: spektr
+
+networks:
+  spektr-net:
+    driver: bridge
+
+volumes:
+  qdrant_data:
+  neo4j_data:
+  postgres_data:
+  ingest_state:
+  caddy_data:
+  caddy_config:
+
+x-app-image: &app-image
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: spektr:latest
+  env_file:
+    - .env.prod
+  networks:
+    - spektr-net
+  restart: unless-stopped
+
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.17.0
+    networks:
+      - spektr-net
+    # Host-local publish (not on the public interface). Lets scripts/backup.py,
+    # scripts/restore.py, and scripts/doctor.py reach the Qdrant HTTP API from
+    # the host without opening it to the outside world.
+    ports:
+      - "127.0.0.1:6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+
+  neo4j:
+    image: neo4j:5.26-community
+    networks:
+      - spektr-net
+    environment:
+      NEO4J_AUTH: neo4j/${NEO4J_PASSWORD:?NEO4J_PASSWORD must be set}
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_dbms_security_procedures_unrestricted: apoc.*
+    volumes:
+      - neo4j_data:/data
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:17.2
+    networks:
+      - spektr-net
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-cocoindex}
+      POSTGRES_USER: ${POSTGRES_USER:-cocoindex}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  mcp:
+    <<: *app-image
+    command: ["python", "-m", "server.mcp_server"]
+    depends_on:
+      - qdrant
+      - neo4j
+      - postgres
+    expose:
+      - "8080"
+
+  agent-api:
+    <<: *app-image
+    command: ["python", "-m", "agent.api"]
+    depends_on:
+      - mcp
+    expose:
+      - "8001"
+
+  ingest-live:
+    <<: *app-image
+    command: ["python", "-m", "ingestion.pipeline", "--live"]
+    depends_on:
+      - qdrant
+      - neo4j
+      - postgres
+    volumes:
+      - ingest_state:/app/state
+
+  # One-shot batch ingest. Run via:
+  #   docker compose -f docker-compose.prod.yml run --rm ingest
+  ingest:
+    <<: *app-image
+    command: ["python", "-m", "ingestion.pipeline"]
+    profiles: ["oneshot"]
+    depends_on:
+      - qdrant
+      - neo4j
+      - postgres
+    volumes:
+      - ingest_state:/app/state
+      - ./documents:/app/documents:ro
+
+  caddy:
+    image: caddy:2-alpine
+    networks:
+      - spektr-net
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - mcp
+      - agent-api
+    restart: unless-stopped

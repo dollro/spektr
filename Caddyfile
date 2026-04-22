@@ -1,0 +1,26 @@
+# Replace the two domains + email before deploying.
+# Requires:
+#   - A record(s) pointing to this VM for both subdomains
+#   - Ports 80/443 reachable from the internet (for ACME HTTP-01)
+
+{
+	email you@example.com
+}
+
+mcp.example.com {
+	reverse_proxy mcp:8080
+	encode zstd gzip
+	log {
+		output stdout
+		format console
+	}
+}
+
+agent.example.com {
+	reverse_proxy agent-api:8001
+	encode zstd gzip
+	log {
+		output stdout
+		format console
+	}
+}

@@ -1,4 +1,5 @@
 .env
+.env.prod
 __pycache__/
 .venv/
 *.pyc

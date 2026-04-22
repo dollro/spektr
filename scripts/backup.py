@@ -40,6 +40,15 @@ def _make_dest(dest_root: Path | None = None, timestamp: str | None = None) -> P
     return dest
 
 
+def _compose_cmd(compose_file: str | None, *args: str) -> list[str]:
+    """Build a `docker compose [-f FILE] ...` command vector."""
+    cmd = ["docker", "compose"]
+    if compose_file:
+        cmd += ["-f", compose_file]
+    cmd.extend(args)
+    return cmd
+
+
 # ---------------------------------------------------------------------------
 # Qdrant
 # ---------------------------------------------------------------------------
@@ -107,7 +116,7 @@ def backup_qdrant(dest: Path) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def backup_neo4j(dest: Path) -> dict[str, Any]:
+def backup_neo4j(dest: Path, compose_file: str | None = None) -> dict[str, Any]:
     """Stop → dump via ephemeral neo4j container mounted onto the host → start.
 
     Neo4j Community 5 has no online `database backup`; `database dump` needs
@@ -121,19 +130,20 @@ def backup_neo4j(dest: Path) -> dict[str, Any]:
     out_abs = out.resolve()
 
     print("  stopping neo4j (required for offline dump) …")
-    subprocess.run(["docker", "compose", "stop", "neo4j"], check=True)
+    subprocess.run(_compose_cmd(compose_file, "stop", "neo4j"), check=True)
     try:
         print("  running neo4j-admin database dump …")
         r = subprocess.run(
-            [
-                "docker", "compose", "run", "--rm", "-T", "--no-deps",
+            _compose_cmd(
+                compose_file,
+                "run", "--rm", "-T", "--no-deps",
                 "-v", f"{out_abs}:/export",
                 "--entrypoint", "neo4j-admin",
                 "neo4j",
                 "database", "dump", "neo4j",
                 "--to-path=/export",
                 "--overwrite-destination=true",
-            ],
+            ),
             capture_output=True, text=True, check=False,
         )
         if r.returncode != 0:
@@ -144,7 +154,7 @@ def backup_neo4j(dest: Path) -> dict[str, Any]:
             raise RuntimeError(msg)
     finally:
         print("  starting neo4j …")
-        subprocess.run(["docker", "compose", "start", "neo4j"], check=True)
+        subprocess.run(_compose_cmd(compose_file, "start", "neo4j"), check=True)
 
     files = [f for f in out.rglob("*") if f.is_file()]
     total = sum(f.stat().st_size for f in files)
@@ -160,17 +170,18 @@ def backup_neo4j(dest: Path) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def backup_postgres(dest: Path) -> dict[str, Any]:
+def backup_postgres(dest: Path, compose_file: str | None = None) -> dict[str, Any]:
     """pg_dump the CocoIndex DB in custom (-Fc) format."""
     out = dest / "postgres"
     out.mkdir(exist_ok=True)
     target = out / "cocoindex.dump"
 
     print("  running pg_dump …")
-    cmd = [
-        "docker", "compose", "exec", "-T", "postgres",
+    cmd = _compose_cmd(
+        compose_file,
+        "exec", "-T", "postgres",
         "pg_dump", "-U", "cocoindex", "-Fc", "cocoindex",
-    ]
+    )
     with target.open("wb") as fh:
         r = subprocess.run(cmd, stdout=fh, stderr=subprocess.PIPE, check=False)
     if r.returncode != 0:
@@ -238,6 +249,16 @@ def main(argv: list[str] | None = None) -> int:
         metavar="DAYS",
         help="Before running, remove dated backups older than DAYS days.",
     )
+    parser.add_argument(
+        "--compose-file",
+        metavar="FILE",
+        default=None,
+        help=(
+            "Path to a docker-compose file (passed as `-f FILE` to every "
+            "`docker compose` call). Defaults to compose's own discovery "
+            "(docker-compose.yml in cwd)."
+        ),
+    )
     args = parser.parse_args(argv)
 
     root = Path("backups")
@@ -253,9 +274,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.target in ("qdrant", "all"):
             entries["qdrant"] = backup_qdrant(dest)
         if args.target in ("neo4j", "all"):
-            entries["neo4j"] = backup_neo4j(dest)
+            entries["neo4j"] = backup_neo4j(dest, args.compose_file)
         if args.target in ("postgres", "all"):
-            entries["postgres"] = backup_postgres(dest)
+            entries["postgres"] = backup_postgres(dest, args.compose_file)
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
