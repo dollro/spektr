@@ -66,9 +66,13 @@ class Settings(BaseSettings):
     llm_base_url: str = ""
 
     # MCP
-    mcp_transport: str = "sse"
+    # "http" is streamable-http (modern default, recommended). "sse" is the
+    # legacy long-lived-stream transport — keep for old clients. "stdio" is
+    # for subprocess MCP clients.
+    mcp_transport: Literal["http", "sse", "streamable-http", "stdio"] = "http"
     mcp_host: str = "0.0.0.0"
     mcp_port: int = 8080
+    mcp_path: str = "/mcp"  # URL path for http/sse transports
     mcp_api_key: str = ""
 
     # Resilience

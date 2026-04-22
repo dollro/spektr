@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastmcp import FastMCP
 from fastmcp.server.middleware import Middleware, MiddlewareContext
 
@@ -61,19 +63,28 @@ if settings.multivec_enabled:
     _REGISTERED_TOOLS.append("visual_search")
 
 if __name__ == "__main__":
-    logger.info(
-        "MCP server starting on %s %s:%d with tools: %s",
-        settings.mcp_transport,
-        settings.mcp_host,
-        settings.mcp_port,
-        ", ".join(_REGISTERED_TOOLS),
-    )
+    transport_kwargs: dict[str, Any] = {}
+    if settings.mcp_transport != "stdio":
+        transport_kwargs = {
+            "host": settings.mcp_host,
+            "port": settings.mcp_port,
+            "path": settings.mcp_path,
+        }
+        logger.info(
+            "MCP server starting on %s http://%s:%d%s with tools: %s",
+            settings.mcp_transport,
+            settings.mcp_host,
+            settings.mcp_port,
+            settings.mcp_path,
+            ", ".join(_REGISTERED_TOOLS),
+        )
+    else:
+        logger.info(
+            "MCP server starting on stdio with tools: %s",
+            ", ".join(_REGISTERED_TOOLS),
+        )
     logger.info(
         "Live ingest available on port %d (run separately)",
         settings.live_ingest_port,
     )
-    mcp.run(
-        transport=settings.mcp_transport,
-        host=settings.mcp_host,
-        port=settings.mcp_port,
-    )
+    mcp.run(transport=settings.mcp_transport, **transport_kwargs)

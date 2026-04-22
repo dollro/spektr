@@ -36,15 +36,15 @@ See [Search Tools](search-tools.md) for full parameter and return schema documen
 
 ## Transport Options
 
-The server supports two transports, controlled by the `MCP_TRANSPORT` environment variable:
+The server supports three transports, controlled by the `MCP_TRANSPORT` environment variable:
 
 | Transport | Default | Use Case |
 |-|-|-|
-| `sse` | Yes | Network clients (agents, HTTP) over Server-Sent Events |
-| `stdio` | No | Subprocess communication (Claude Code, local toolchains) |
+| `http` | **Yes** | Streamable-HTTP — modern MCP default. Request/response per tool call, clean disconnects. Supported by Claude Code, Claude Desktop, Cursor, and `pydantic_ai.mcp.MCPServerStreamableHTTP`. |
+| `sse` | No | Legacy Server-Sent-Events transport. Only use if a client is SSE-only. Emits noisy (but harmless) `ClosedResourceError` tracebacks on client disconnect — an upstream FastMCP/MCP-SDK quirk. |
+| `stdio` | No | Subprocess transport. Host/port/path are ignored. Good for toolchains that spawn the server. |
 
-!!! warning "FastMCP 3.x port quirk"
-    FastMCP 3.0.x ignores the `port` kwarg passed to `mcp.run(transport="sse", ...)` and always binds to **8000**. Until the upstream fix lands, point MCP clients at port 8000 in SSE mode regardless of `MCP_PORT`. stdio transport is unaffected.
+The bind address (`MCP_HOST`, default `0.0.0.0`), port (`MCP_PORT`, default `8080`), and URL path (`MCP_PATH`, default `/mcp`) apply to `http` and `sse` transports only.
 
 ## Starting the Server
 
@@ -54,11 +54,11 @@ task serve
 uv run python -m server.mcp_server
 ```
 
-On startup the server logs the transport, port, and list of registered tools:
+On startup the server logs the transport, endpoint URL, and list of registered tools:
 
 ```
-MCP server starting on sse:8000 with tools: vector_search, graph_search,
-hybrid_search, list_documents
+MCP server starting on http http://0.0.0.0:8080/mcp with tools: vector_search,
+graph_search, hybrid_search, list_documents
 ```
 
 ## Middleware Stack
@@ -73,5 +73,5 @@ Additional middleware can be appended to the `middleware` list in the `FastMCP` 
 
 LLM agents connect to the server as an MCP tool provider. Two well-worn paths:
 
-- **Pydantic AI** — the built-in `agent/agent.py` and `scripts/ask.py` use `MCPServerSSE` to talk to Spektr over HTTP/SSE. See [Agent Overview](../agent/overview.md).
-- **Claude Code / Cursor / other MCP-aware IDEs** — drop a `.mcp.json` into the project root; Claude Code spawns or connects to the Spektr server and exposes its tools as `mcp__spektr__*`. See [Client Setup](client-setup.md) for both stdio and SSE recipes.
+- **Pydantic AI** — `agent/agent.py` and `scripts/ask.py` talk to Spektr over streamable-http (`MCPServerStreamableHTTP`). For legacy SSE deployments, `MCPServerSSE` is a drop-in alternative. See [Agent Overview](../agent/overview.md).
+- **Claude Code / Cursor / other MCP-aware IDEs** — drop a `.mcp.json` into the project root; Claude Code spawns or connects to the Spektr server and exposes its tools as `mcp__spektr__*`. See [Client Setup](client-setup.md) for stdio and http recipes.

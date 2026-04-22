@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from pydantic_ai import Agent
-from pydantic_ai.mcp import MCPServerSSE
+from pydantic_ai.mcp import MCPServerSSE, MCPServerStreamableHTTP
 from pydantic_ai.models.openai import OpenAIModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from config.settings import settings
+
+MCPServer = MCPServerStreamableHTTP | MCPServerSSE
 
 SYSTEM_PROMPT = """\
 You are a RAG assistant backed by a dual knowledge store \
@@ -27,16 +29,23 @@ Always cite source documents in your answers. If no relevant \
 results are found, say so rather than guessing."""
 
 
-async def create_rag_agent() -> tuple[Agent, MCPServerSSE]:
+async def create_rag_agent() -> tuple[Agent, MCPServer]:
     """Create a RAG agent connected to the MCP search server.
 
-    Returns a tuple of (agent, mcp_server). The caller must manage
-    the server lifecycle via ``async with server:``.
+    Picks the transport based on ``MCP_TRANSPORT`` — ``MCPServerStreamableHTTP``
+    for ``http`` / ``streamable-http`` (the default), ``MCPServerSSE`` for
+    legacy SSE deployments. Returns a tuple of (agent, mcp_server); the caller
+    must manage the server lifecycle via ``async with server:``.
     """
     headers = (
         {"Authorization": f"Bearer {settings.mcp_api_key}"} if settings.mcp_api_key else None
     )
-    server = MCPServerSSE(f"http://localhost:{settings.mcp_port}/sse", headers=headers)
+    url = f"http://localhost:{settings.mcp_port}{settings.mcp_path}"
+    server: MCPServer
+    if settings.mcp_transport == "sse":
+        server = MCPServerSSE(url, headers=headers)
+    else:
+        server = MCPServerStreamableHTTP(url, headers=headers)
 
     if settings.llm_base_url:
         model = OpenAIModel(
