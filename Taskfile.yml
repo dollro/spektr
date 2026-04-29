@@ -156,7 +156,12 @@ tasks:
   prod:kb:list:
     desc: "List documents in the prod knowledge base. Pass: task prod:kb:list -- --limit 500 [--json]"
     cmds:
-      - QDRANT_URL=http://127.0.0.1:6333 uv run python -m scripts.list_kb {{.CLI_ARGS}}
+      - docker compose -f docker-compose.prod.yml --env-file .env.prod exec -T mcp python -m scripts.list_kb {{.CLI_ARGS}}
+
+  prod:ask:
+    desc: "Ask the prod RAG agent a question (runs inside the mcp container). Usage: task prod:ask -- 'your question'"
+    cmds:
+      - docker compose -f docker-compose.prod.yml --env-file .env.prod exec -T mcp python -m scripts.ask {{.CLI_ARGS}}
 
   prod:backup:
     desc: "Snapshot the production stack (Qdrant+Neo4j+Postgres) to ./backups/<ts>/"
