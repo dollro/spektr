@@ -36,11 +36,11 @@ Before modifying or exploring ANY module, you MUST first read the corresponding 
 
 ## Architecture
 
-- **Ingestion (Path A — Bulk):** CocoIndex pipeline + Docling/PyMuPDF for file processing, Jina/Voyage for embeddings, GLiNER2 for entity extraction with dynamic schema induction
-- **Ingestion (Path B — Live):** FastAPI HTTP endpoint for streaming text, Jina for embeddings, Graphiti for temporal episodic memory
+- **Ingestion (Path A — Bulk):** CocoIndex pipeline + Docling/PyMuPDF for file processing, Jina/Voyage for embeddings, GLiNER2 for entity extraction with dynamic schema induction. Triggered by S3→SQS events (long-running `--live` daemon polls SQS) or local filesystem watch. Without `--live`, runs as one-shot batch. The `ingest-live` prod service is this SQS daemon — not an HTTP endpoint.
+- **Ingestion (Path B — Live):** FastAPI HTTP endpoint (`live_ingest.py`, port 8001) for streaming text, Jina for embeddings, Graphiti for temporal episodic memory
 - **Vector Store:** Qdrant (dense + optional ColBERT multi-vector). Both paths write to `documents_dense`; live data tagged with `session_id` and `is_live`
 - **Knowledge Graph:** Neo4j with dual engines — GLiNER2 (Path A, schema-driven CPU extraction) and Graphiti (Path B, LLM-based temporal episodes). Coexist in same instance
-- **MCP Server:** FastMCP (SSE or stdio transport) exposing session-aware search tools
+- **MCP Server:** FastMCP (streamable-http default, SSE legacy, stdio) exposing session-aware search tools. Bearer auth via `MCP_API_KEY`.
 - **Agent:** Pydantic AI agent with MCP tool access
 - **LLM:** Anthropic or OpenAI-compatible (configurable via `LLM_API_TYPE`)
 - **Config:** Pydantic Settings from `.env`
@@ -84,7 +84,8 @@ Before modifying or exploring ANY module, you MUST first read the corresponding 
 ├── docs/                   # MkDocs documentation — READ FIRST (see top of file)
 ├── plans/                  # Disposable brainstorming — NOT source of truth
 ├── scripts/                # Utility scripts
-├── docker-compose.yml      # Qdrant + Neo4j + PostgreSQL
+├── docker-compose.yml      # Qdrant + Neo4j + PostgreSQL (local dev)
+├── docker-compose.prod.yml # Full production stack (app + data services + reverse proxy)
 ├── pyproject.toml          # Python config (single source of truth)
 ├── Makefile                # docs-serve, docs-build
 └── mkdocs.yml              # Documentation site config
