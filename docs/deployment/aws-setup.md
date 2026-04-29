@@ -1,6 +1,6 @@
 # AWS Setup
 
-This guide covers configuring AWS S3 + SQS for the Spektr ingestion pipeline.
+This guide is a flat **reference** for AWS S3 + SQS configuration. If you want a step-by-step tutorial with copy-paste blocks for both AWS CLI and the console, plus naming conventions and a DLQ, see [S3 + SQS Setup — Step-by-Step Manual](../ingestion/s3-sqs-setup.md).
 
 ## Architecture
 
