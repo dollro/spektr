@@ -86,6 +86,10 @@ class Settings(BaseSettings):
     mcp_port: int = 8080
     mcp_path: str = "/mcp"  # URL path for http/sse transports
     mcp_api_key: str = ""
+    # Connect URL the agent uses to reach the MCP server. Defaults to localhost
+    # (built from mcp_port + mcp_path); set to the service hostname in
+    # containerized deploys (e.g. http://mcp:8080/mcp under docker-compose).
+    mcp_server_url: str = ""
 
     # Resilience
     pipeline_timeout: int = 3600  # per-file timeout in seconds (default 1h)

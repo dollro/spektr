@@ -40,7 +40,7 @@ async def create_rag_agent() -> tuple[Agent, MCPServer]:
     headers = (
         {"Authorization": f"Bearer {settings.mcp_api_key}"} if settings.mcp_api_key else None
     )
-    url = f"http://localhost:{settings.mcp_port}{settings.mcp_path}"
+    url = settings.mcp_server_url or f"http://localhost:{settings.mcp_port}{settings.mcp_path}"
     server: MCPServer
     if settings.mcp_transport == "sse":
         server = MCPServerSSE(url, headers=headers)
