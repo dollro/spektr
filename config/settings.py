@@ -13,8 +13,8 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # Jina v4
-    jina_api_key: str
+    # Jina v4 (only needed when embedding_provider = "jina")
+    jina_api_key: str = ""
     jina_api_url: str = "https://api.jina.ai"
     jina_model: str = "jina-embeddings-v4"
     jina_dense_dimensions: int = 2048
