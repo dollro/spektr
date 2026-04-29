@@ -126,7 +126,7 @@ tasks:
   prod:build:
     desc: "Build the Spektr production image"
     cmds:
-      - docker compose -f docker-compose.prod.yml build
+      - docker compose -f docker-compose.prod.yml --env-file .env.prod build
 
   prod:up:
     desc: "Start the full production stack (data + app + Caddy)"
@@ -136,12 +136,12 @@ tasks:
   prod:down:
     desc: "Stop the production stack"
     cmds:
-      - docker compose -f docker-compose.prod.yml down
+      - docker compose -f docker-compose.prod.yml --env-file .env.prod down
 
   prod:logs:
     desc: "Tail logs from the production stack. Pass service: task prod:logs -- mcp"
     cmds:
-      - docker compose -f docker-compose.prod.yml logs -f {{.CLI_ARGS}}
+      - docker compose -f docker-compose.prod.yml --env-file .env.prod logs -f {{.CLI_ARGS}}
 
   prod:ingest:
     desc: "Run one-shot bulk ingestion in the prod stack (profile: oneshot)"
@@ -151,7 +151,7 @@ tasks:
   prod:ps:
     desc: "Show running prod services"
     cmds:
-      - docker compose -f docker-compose.prod.yml ps
+      - docker compose -f docker-compose.prod.yml --env-file .env.prod ps
 
   prod:kb:list:
     desc: "List documents in the prod knowledge base. Pass: task prod:kb:list -- --limit 500 [--json]"
