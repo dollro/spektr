@@ -51,6 +51,11 @@ tasks:
     cmds:
       - uv run python -m scripts.ask {{.CLI_ARGS}}
 
+  kb:list:
+    desc: "List documents in the knowledge base. Pass: task kb:list -- --limit 500 [--json]"
+    cmds:
+      - uv run python -m scripts.list_kb {{.CLI_ARGS}}
+
   doctor:
     desc: "Diff CocoIndex tracking against Qdrant contents; flag ingestion drift"
     cmds:
@@ -147,6 +152,11 @@ tasks:
     desc: "Show running prod services"
     cmds:
       - docker compose -f docker-compose.prod.yml ps
+
+  prod:kb:list:
+    desc: "List documents in the prod knowledge base. Pass: task prod:kb:list -- --limit 500 [--json]"
+    cmds:
+      - QDRANT_URL=http://127.0.0.1:6333 uv run python -m scripts.list_kb {{.CLI_ARGS}}
 
   prod:backup:
     desc: "Snapshot the production stack (Qdrant+Neo4j+Postgres) to ./backups/<ts>/"
