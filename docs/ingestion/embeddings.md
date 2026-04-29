@@ -1,12 +1,12 @@
 # Embeddings
 
-Spektr uses a provider-agnostic embedding abstraction. The active provider is selected via `EMBEDDING_PROVIDER` in `.env`. Currently supported: **Jina v4** and **Voyage AI**.
+Spektr uses a provider-agnostic embedding abstraction. The active provider is selected via `EMBEDDING_PROVIDER` in `.env`. Currently supported: **Jina v4**, **Voyage AI**, and **OpenRouter** (any OpenAI-compatible embedding model — defaults to Google Gemini Embedding 2).
 
 **Source:** `ingestion/embedder.py` (protocol + factory), `ingestion/embedders/` (provider implementations)
 
 ## Switching Providers
 
-1. Set `EMBEDDING_PROVIDER` to `"jina"` or `"voyage"` in `.env`
+1. Set `EMBEDDING_PROVIDER` to `"jina"`, `"voyage"`, or `"openrouter"` in `.env`
 2. Fill in the API key for the chosen provider
 3. Restart the ingestion pipeline and MCP server
 
@@ -14,15 +14,15 @@ Spektr uses a provider-agnostic embedding abstraction. The active provider is se
 
 ## Provider Comparison
 
-| Feature | Jina v4 | Voyage AI |
-|-|-|-|
-| Text embeddings | Yes | Yes |
-| Image embeddings | Yes | Yes |
-| ColBERT multi-vector | Yes | No |
-| Models | Single model for all | Separate text + multimodal models |
-| Default dimensions | 512 (Matryoshka, from 2048) | 1024 |
-| Text endpoint | `/v1/embeddings` | `/v1/embeddings` |
-| Image endpoint | Same | `/v1/multimodalembeddings` |
+|Feature|Jina v4|Voyage AI|OpenRouter (Gemini Embedding 2)|
+|-|-|-|-|
+|Text embeddings|Yes|Yes|Yes|
+|Image embeddings|Yes|Yes|No (text-only)|
+|ColBERT multi-vector|Yes|No|No|
+|Models|Single for all|Separate text + multimodal|Any OpenRouter embedding model|
+|Default dimensions|512 (Matryoshka, from 2048)|1024|3072 (MRL: 768/1536/3072)|
+|Text endpoint|`/v1/embeddings`|`/v1/embeddings`|`/v1/embeddings`|
+|Image endpoint|Same|`/v1/multimodalembeddings`|Not supported|
 
 ## Embedder Protocol
 
@@ -75,6 +75,16 @@ Uses two separate endpoints:
 - Images: `https://api.voyageai.com/v1/multimodalembeddings` with `voyage-multimodal-3.5`
 
 ColBERT multi-vector methods raise `NotImplementedError`. If `MULTIVEC_ENABLED=true`, use Jina instead.
+
+## OpenRouter
+
+**Config:** `OPENROUTER_API_KEY`, `OPENROUTER_API_URL`, `OPENROUTER_MODEL`, `OPENROUTER_DENSE_DIMENSIONS`, `OPENROUTER_RPM`, `OPENROUTER_MAX_CONCURRENT`, `OPENROUTER_HTTP_REFERER` (optional), `OPENROUTER_X_TITLE` (optional)
+
+OpenAI-compatible `/v1/embeddings` gateway. Default model is `google/gemini-embedding-2-preview` (3072d, MRL truncation, top of MTEB v2 at 68.32). Any OpenRouter-served embedding model can be selected via `OPENROUTER_MODEL`.
+
+**Text-only** — `embed_image`, `embed_multi_vector`, and `embed_query_multi_vector` raise `NotImplementedError`. Set `IMAGE_EMBED_STRATEGY=none` for text-only corpora, or use `jina`/`voyage` if PDF page / image embedding is needed. The model validator rejects `MULTIVEC_ENABLED=true` with `embedding_provider=openrouter`.
+
+The optional `HTTP-Referer` / `X-Title` headers are forwarded for OpenRouter ranking attribution and can be left empty.
 
 ## Retry Logic
 

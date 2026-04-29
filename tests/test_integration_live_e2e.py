@@ -31,17 +31,26 @@ SESSION_ID = "e2e-live-real"
 
 CHUNKS = [
     {
-        "text": "Alice proposed migrating the user database from SQLite to PostgreSQL for better concurrency.",
+        "text": (
+            "Alice proposed migrating the user database from SQLite to PostgreSQL "
+            "for better concurrency."
+        ),
         "timestamp": "2026-03-07T10:00:00Z",
         "speaker": "Alice",
     },
     {
-        "text": "Bob agreed and suggested using Alembic for schema migrations and adding connection pooling.",
+        "text": (
+            "Bob agreed and suggested using Alembic for schema migrations "
+            "and adding connection pooling."
+        ),
         "timestamp": "2026-03-07T10:01:00Z",
         "speaker": "Bob",
     },
     {
-        "text": "Carol raised concerns about downtime during the migration and proposed a blue-green deployment strategy.",
+        "text": (
+            "Carol raised concerns about downtime during the migration "
+            "and proposed a blue-green deployment strategy."
+        ),
         "timestamp": "2026-03-07T10:02:00Z",
         "speaker": "Carol",
     },
@@ -101,7 +110,7 @@ async def _cleanup_session(qdrant_client):
     try:
         from ingestion.graphiti_client import get_graphiti
 
-        client = await get_graphiti()
+        await get_graphiti()  # ensure singleton is initialised before driver use
         # Delete episodes for this group
         from neo4j import AsyncGraphDatabase
 

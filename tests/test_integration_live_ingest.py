@@ -140,7 +140,9 @@ class TestLiveIngestE2E:
             r for r in results if r.get("metadata", {}).get("source_type") == "transcript"
         ]
         assert len(transcript_results) >= 1
-        assert any("Alice" in str(r["metadata"].get("speaker", "")) for r in transcript_results)
+        assert any(
+            "Alice" in str(r["metadata"].get("speaker", "")) for r in transcript_results
+        )
 
         # Graphiti was called for both chunks
         assert mock_graphiti.add_episode.call_count == 2

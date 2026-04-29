@@ -45,7 +45,9 @@ def _print_table(docs: list[dict]) -> None:  # type: ignore[type-arg]
 
 async def _main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--limit", type=int, default=100, help="Max documents to list (1–1000)")
+    parser.add_argument(
+        "--limit", type=int, default=100, help="Max documents to list (1–1000)"
+    )
     parser.add_argument("--json", action="store_true", help="Output JSON instead of a table")
     args = parser.parse_args()
 

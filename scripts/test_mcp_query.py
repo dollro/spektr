@@ -53,7 +53,7 @@ async def main(query: str) -> None:
     hybrid_graph = len(hybrid_results.get("graph_results", []))
 
     print(f"\n{'=' * 60}")
-    print(f"  Summary")
+    print("  Summary")
     print(f"{'=' * 60}")
     print(f"  vector_search:  {vec_count} results")
     print(f"  graph_search:   {graph_count} results")

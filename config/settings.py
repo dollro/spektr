@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     jina_batch_size: int = 10  # max texts per embed_text API call
 
     # Embedding provider selection
-    embedding_provider: str = "jina"  # "jina" | "voyage"
+    embedding_provider: str = "jina"  # "jina" | "voyage" | "openrouter"
 
     # Voyage (only needed when embedding_provider = "voyage")
     voyage_api_key: str = ""
@@ -33,6 +33,18 @@ class Settings(BaseSettings):
     voyage_dense_dimensions: int = 1024
     voyage_rpm: int = 300
     voyage_max_concurrent: int = 10
+
+    # OpenRouter (only needed when embedding_provider = "openrouter")
+    # Default targets Gemini Embedding 2 (text-only, 3072d, MRL truncation).
+    # Any OpenRouter-served embedding model can be selected here.
+    openrouter_api_key: str = ""
+    openrouter_api_url: str = "https://openrouter.ai/api"
+    openrouter_model: str = "google/gemini-embedding-2-preview"
+    openrouter_dense_dimensions: int = 3072
+    openrouter_rpm: int = 300
+    openrouter_max_concurrent: int = 10
+    openrouter_http_referer: str = ""  # optional, for openrouter.ai rankings
+    openrouter_x_title: str = ""  # optional, for openrouter.ai rankings
 
     # Qdrant
     qdrant_url: str = "http://localhost:6333"
@@ -113,6 +125,8 @@ class Settings(BaseSettings):
         """Return dense vector dimensions for the active embedding provider."""
         if self.embedding_provider == "voyage":
             return self.voyage_dense_dimensions
+        if self.embedding_provider == "openrouter":
+            return self.openrouter_dense_dimensions
         return self.jina_dense_dimensions
 
     @model_validator(mode="after")
@@ -123,7 +137,13 @@ class Settings(BaseSettings):
                 "Set multivec_enabled=False or use embedding_provider=jina."
             )
             raise ValueError(msg)
+        if self.embedding_provider == "openrouter" and self.multivec_enabled:
+            msg = (
+                "OpenRouter does not support ColBERT multi-vector embeddings. "
+                "Set multivec_enabled=False or use embedding_provider=jina."
+            )
+            raise ValueError(msg)
         return self
 
 
-settings = Settings()
+settings = Settings()  # type: ignore[call-arg]  # required fields supplied via .env

@@ -112,19 +112,28 @@ class Embedder(Protocol):
         ...
 
 
-def create_embedder(**kwargs: object) -> Embedder:
+def create_embedder(api_key: str | None = None) -> Embedder:
     """Instantiate the configured embedding provider.
 
     Reads ``settings.embedding_provider`` (default ``"jina"``) and lazily
-    imports the corresponding implementation.
-
-    Extra *kwargs* are forwarded to the provider constructor.
+    imports the corresponding implementation. Provider-specific API keys
+    fall back to settings if *api_key* is not given.
     """
     provider = settings.embedding_provider
     if provider == "jina":
         from ingestion.embedders.jina import JinaV4Embedder
 
-        return JinaV4Embedder(**kwargs)  # type: ignore[return-value]
+        return JinaV4Embedder(api_key=api_key)
+
+    if provider == "voyage":
+        from ingestion.embedders.voyage import VoyageEmbedder
+
+        return VoyageEmbedder(api_key=api_key)
+
+    if provider == "openrouter":
+        from ingestion.embedders.openrouter import OpenRouterEmbedder
+
+        return OpenRouterEmbedder(api_key=api_key)
 
     msg = f"Unknown embedding provider: {provider!r}"
     raise ValueError(msg)

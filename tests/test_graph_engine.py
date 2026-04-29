@@ -521,8 +521,8 @@ class TestGLiNERConstraintValidation:
                 "organization": ["Acme Corp"],
             },
             "relation_extraction": {
-                # valid: organization -[valued_at]-> monetary_value? NO — metric is not monetary_value
-                # invalid: metric -[valued_at]-> date_time
+                # valid: organization -[valued_at]-> monetary_value? NO — metric is not
+                # monetary_value; invalid: metric -[valued_at]-> date_time
                 "valued_at": [("Revenue", "January 15th 2026")],
                 # valid: organization -[scheduled_for]-> date_time? NO — org not in sources
                 "scheduled_for": [("Acme Corp", "January 15th 2026")],

@@ -5,12 +5,12 @@ from __future__ import annotations
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from config.settings import settings
-from fastapi import HTTPException
-
 import pytest
+from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
 from starlette.requests import Request
+
+from config.settings import settings
 
 _TEST_API_KEY = "test-ingest-key-42"
 
@@ -424,7 +424,9 @@ class TestSessionEnd:
 
 class TestSessionAuth:
     @pytest.mark.asyncio
-    async def test_start_session_rejected_without_key(self, mock_qdrant, mock_embedder) -> None:
+    async def test_start_session_rejected_without_key(
+        self, mock_qdrant, mock_embedder
+    ) -> None:
         """POST /session/start without Bearer token returns 401 when auth enabled."""
         with (
             patch("ingestion.live_ingest._get_qdrant_client", return_value=mock_qdrant),

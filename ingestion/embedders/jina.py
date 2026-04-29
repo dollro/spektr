@@ -202,7 +202,8 @@ class JinaV4Embedder:
             "input": [{"image": f"data:{media_type};base64,{b64}"}],
         }
         data = await self._request(payload, timeout=120.0)
-        return data["data"][0]["embedding"]
+        embedding: list[float] = data["data"][0]["embedding"]
+        return embedding
 
     async def embed_multi_vector(
         self, image_bytes: bytes, media_type: str = "image/png"
@@ -219,7 +220,8 @@ class JinaV4Embedder:
             "input": [{"image": f"data:{media_type};base64,{b64}"}],
         }
         data = await self._request(payload, timeout=120.0)
-        return data["data"][0]["embedding"]
+        vectors: list[list[float]] = data["data"][0]["embedding"]
+        return vectors
 
     async def embed_query_multi_vector(self, query: str) -> list[list[float]]:
         """Single query text -> ColBERT token vectors (128d)."""
@@ -233,7 +235,8 @@ class JinaV4Embedder:
             "input": [{"text": query}],
         }
         data = await self._request(payload)
-        return data["data"][0]["embedding"]
+        vectors: list[list[float]] = data["data"][0]["embedding"]
+        return vectors
 
     @staticmethod
     def _estimate_tokens(payload: dict) -> float:  # type: ignore[type-arg]
@@ -271,7 +274,7 @@ class JinaV4Embedder:
         before_sleep=lambda rs: logger.warning(
             "Jina API retry attempt %d after %s",
             rs.attempt_number,
-            rs.outcome.exception(),
+            rs.outcome.exception() if rs.outcome else None,
         ),
     )
     async def _request_with_retry(

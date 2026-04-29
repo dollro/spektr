@@ -53,7 +53,17 @@ RELATION_CONSTRAINTS: dict[str, tuple[frozenset[str], frozenset[str]]] = {
         frozenset({"technology", "product", "concept", "document"}),
     ),
     "part_of": (
-        frozenset({"person", "role", "technology", "product", "location", "requirement", "legal_term"}),
+        frozenset(
+            {
+                "person",
+                "role",
+                "technology",
+                "product",
+                "location",
+                "requirement",
+                "legal_term",
+            }
+        ),
         frozenset({"organization", "product", "technology", "document", "location"}),
     ),
     "measured_by": (
