@@ -30,17 +30,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         tini \
     && rm -rf /var/lib/apt/lists/*
 
+RUN useradd -u 1000 -m spektr
+
 WORKDIR /app
 
-COPY --from=builder /app /app
+COPY --from=builder --chown=spektr:spektr /app /app
 
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
-RUN useradd -r -u 1000 -m spektr \
-    && mkdir -p /app/state /app/documents /app/backups \
-    && chown -R spektr:spektr /app
+RUN mkdir -p /app/state /app/documents /app/backups \
+    && chown spektr:spektr /app/state /app/documents /app/backups
 
 USER spektr
 
