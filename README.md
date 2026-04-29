@@ -2,7 +2,8 @@
 
 RAG-as-MCP-Server with dual-path ingestion. Batch-processes documents from S3 or local filesystem into a dual knowledge store (Qdrant + Neo4j), and accepts streaming text data in real time via HTTP. Exposes session-aware search tools to LLM agents via the MCP protocol.
 
-**Ingestion**
+## Architecture
+
 ```
       Path A: Bulk KB                         Path B: Live
   S3 / Local Directory                       HTTP POST
@@ -16,105 +17,105 @@ RAG-as-MCP-Server with dual-path ingestion. Batch-processes documents from S3 or
     Qdrant       Neo4j                     Qdrant     Neo4j
 
   * GRAPH_ENGINE only controls Path A. Path B always uses Graphiti.
-```
 
-**Search**
-```
                        LLM Agent
                            |
-                   FastMCP (SSE/stdio)
+                   FastMCP (streamable-http)
                            |
         +----------+-------+-------+-----------+
         |          |               |            |
   vector_search  graph_search  hybrid_search  visual_search
    (Qdrant)       (Neo4j)      (both)         (ColBERT)
-        |          |               |            |
-        v          v               v            v
-      Qdrant     Neo4j       Qdrant+Neo4j    Qdrant
-                              (parallel)
-
-  All tools except visual_search support session_id
-  for combining bulk KB with live session data.
 ```
 
-## Quick Start
+## Setup — Local Development
+
+Prerequisites: Python 3.13, [uv](https://docs.astral.sh/uv/), Docker, [go-task](https://taskfile.dev) (optional but recommended).
 
 ```bash
-docker compose up -d              # Qdrant, Neo4j, PostgreSQL
-cp .env.example .env              # Configure (see below)
-uv sync                           # Install dependencies
+# 1. Clone and configure
+git clone <repo-url> && cd spektr
+cp .env.example .env              # fill in API keys (JINA_API_KEY, LLM_API_KEY, NEO4J_PASSWORD)
 
-uv run python -m ingestion.pipeline    # Ingest documents (bulk)
-uv run python -m server.mcp_server     # MCP server (port 8000)
+# 2. Start infrastructure
+task up                            # Qdrant, Neo4j, PostgreSQL via docker compose
+
+# 3. Install dependencies
+task setup                         # installs uv + project deps
+
+# 4. Ingest documents
+task ingest                        # one-shot bulk ingest from documents/ or S3
+
+# 5. Start MCP server
+task serve                         # streamable-http on http://localhost:8080/mcp
 ```
 
-**Optional services:**
+Connect an MCP client (Claude Code, Claude Desktop, etc.):
+
+```json
+{
+  "mcpServers": {
+    "spektr": {
+      "url": "http://localhost:8080/mcp"
+    }
+  }
+}
+```
+
+## Setup — Production (Docker Compose + Traefik)
+
+For a single Linux VM where Traefik already handles TLS and reverse proxying. Everything runs containerized; only the MCP service is exposed via Traefik labels.
+
+Prerequisites: Docker Engine 24+, Docker Compose v2+, an external Traefik instance with a `proxy` network, DNS pointing at the VM.
 
 ```bash
-uv run uvicorn ingestion.live_ingest:app --port 8001   # Live ingestion
-uv run python -m agent.api                              # Agent HTTP API
+# 1. Configure
+cp .env.example .env.prod
+# Edit .env.prod:
+#   - Set container hostnames: QDRANT_URL=http://qdrant:6333, NEO4J_URI=bolt://neo4j:7687, etc.
+#   - Set strong passwords: NEO4J_PASSWORD, POSTGRES_PASSWORD
+#   - Set API keys: JINA_API_KEY, LLM_API_KEY
+#   - Set MCP_API_KEY (generate: python3 -c "import secrets; print(secrets.token_urlsafe(48))")
+#   - Set MCP_PUBLIC_DOMAIN=mcp.example.com
+#   - See "Production Overrides" section at bottom of .env.example
+
+# 2. Build and start
+task prod:build                    # build the app image
+task prod:up                       # start all services
+
+# 3. Ingest (first time or on-demand)
+task prod:ingest                   # one-shot bulk ingest
+
+# 4. Verify
+curl https://mcp.example.com/mcp   # should respond (Traefik routes + auto-TLS)
 ```
 
-## Usage Options
+The `ingest-live` service runs as a long-lived daemon that polls S3 via SQS for new files — no cron needed if using S3 as the document source.
 
-### Ingestion: Two Independent Paths
+Connect an MCP client with bearer auth:
 
-**Path A — Bulk documents** from S3 or local `documents/` directory. CocoIndex manages incremental state. Supports PDF (Docling OCR + layout analysis), images, and text files. Entity extraction via GLiNER2 (local CPU, zero API cost) with optional per-document schema induction.
-
-```bash
-uv run python -m ingestion.pipeline
+```json
+{
+  "mcpServers": {
+    "spektr": {
+      "url": "https://mcp.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer <MCP_API_KEY>"
+      }
+    }
+  }
+}
 ```
 
-**Path B — Streaming text** via HTTP POST. Data is vector-indexed in Qdrant immediately (~200ms) and ingested into Graphiti's temporal knowledge graph as a background task (~2-5s). Session lifecycle: start → ingest chunks → end (archive or discard).
+Without Traefik, see [Production Deployment docs](docs/deployment/production.md#without-traefik).
 
-```bash
-# Start the live ingestion server
-uv run uvicorn ingestion.live_ingest:app --port 8001
+## Ingestion Paths
 
-# Start a session
-curl -X POST http://localhost:8001/session/start \
-  -H "Content-Type: application/json" \
-  -d '{"session_id": "session-001", "metadata": {"title": "Example"}}'
+**Path A — Bulk documents** from S3 or local `documents/` directory. CocoIndex manages incremental state. Supports PDF (Docling OCR + layout analysis), images, and text files. With `--live` flag, runs as a daemon polling S3/SQS for changes; without it, runs one-shot and exits.
 
-# Ingest a text chunk
-curl -X POST http://localhost:8001/ingest/transcript \
-  -H "Content-Type: application/json" \
-  -d '{"session_id": "session-001", "text": "Discussion about Q1 results...", "timestamp": "2026-03-07T10:00:00Z", "speaker": "Alice"}'
+**Path B — Streaming text** via HTTP POST (`live_ingest.py`, port 8001). Data is vector-indexed in Qdrant immediately (~200ms) and ingested into Graphiti's temporal knowledge graph as a background task (~2-5s). Session lifecycle: start → ingest chunks → end (archive or discard).
 
-# End session (archive=true keeps data, false purges it)
-curl -X POST http://localhost:8001/session/end \
-  -H "Content-Type: application/json" \
-  -d '{"session_id": "session-001", "archive": true}'
-```
-
-### Graph Engine: Two Modes
-
-Set `GRAPH_ENGINE` in `.env`:
-
-| Engine | Setting | Use case | Speed | Cost |
-|-|-|-|-|-|
-| GLiNER2 | `gliner` | Bulk documents (Path A) | ~15 sec / doc | $0.00 |
-| Graphiti | `graphiti` | Bulk documents (Path A, default) | ~29 min / doc | ~$0.001 / chunk |
-
-GLiNER2 runs a 205MB local model — no API calls, deterministic. Graphiti uses an LLM for temporal entity extraction with fact evolution tracking (bi-temporal model: `created_at` / `expired_at`).
-
-> **Note:** `GRAPH_ENGINE` only controls the **bulk ingestion** path (Path A). Live streaming (Path B) **always uses Graphiti** regardless of this setting — it requires a working LLM API key and Graphiti service even when `GRAPH_ENGINE=gliner`.
-
-**Dynamic schema induction** (GLiNER2 only): when `SCHEMA_INDUCTION_ENABLED=true`, a cheap LLM call per document proposes domain-specific entity types, improving extraction quality for specialized content (legal, financial, medical, etc.). Results are cached.
-
-### Embedding Provider: Switchable
-
-Set `EMBEDDING_PROVIDER` in `.env`:
-
-| Feature | Jina v4 (`jina`) | Voyage AI (`voyage`) |
-|-|-|-|
-| Text + image embedding | Yes | Yes |
-| ColBERT multi-vector | Yes | No |
-| Default dimensions | 512 (Matryoshka) | 1024 |
-
-Switching providers requires re-ingesting all documents.
-
-### Search Tools: Four + Session Awareness
+## Search Tools
 
 The MCP server exposes four tools. Three support an optional `session_id` for combining live session data with bulk KB results.
 
@@ -125,35 +126,6 @@ The MCP server exposes four tools. Three support an optional `session_id` for co
 | `graph_search` | Neo4j | Yes | Entity and relationship lookup |
 | `hybrid_search` | Both (parallel) | Yes | Combined vector + graph results |
 
-When `session_id` is provided, `hybrid_search` returns three result sets: `vector_results` (bulk KB), `transcript_results` (session data, chronological), and `graph_results` (combined from both engines).
-
-### MCP Transport: SSE or stdio
-
-| Variable | Default | Description |
-|-|-|-|
-| `MCP_TRANSPORT` | `sse` | `sse` for network clients, `stdio` for subprocess (Claude Code) |
-| `MCP_PORT` | `8000` | Port for SSE transport |
-
-### Agent Integration
-
-Connect any MCP-compatible agent:
-
-```python
-from pydantic_ai import Agent
-from pydantic_ai.mcp import MCPServerSSE
-
-agent = Agent(
-    "openai:gpt-4o",
-    mcp_servers=[MCPServerSSE(url="http://localhost:8000/sse")],
-)
-```
-
-Or use the built-in agent HTTP endpoint:
-
-```bash
-uv run python -m agent.api   # POST /query {"query": "..."}
-```
-
 ## Configuration
 
 ### Required
@@ -161,42 +133,50 @@ uv run python -m agent.api   # POST /query {"query": "..."}
 | Variable | Description |
 |-|-|
 | `JINA_API_KEY` or `VOYAGE_API_KEY` | Embedding provider API key |
-| `NEO4J_PASSWORD` | Neo4j password (must match docker-compose.yml) |
+| `NEO4J_PASSWORD` | Neo4j password (must match docker-compose) |
 | `LLM_API_KEY` | LLM provider API key (for Graphiti / schema induction) |
-| `MCP_API_KEY` | Bearer token for MCP server auth (leave empty to disable) |
 
 ### Key Options
 
 | Variable | Default | Description |
 |-|-|-|
 | `EMBEDDING_PROVIDER` | `jina` | `jina` or `voyage` |
-| `GRAPH_ENGINE` | `graphiti` | `graphiti` or `gliner` |
+| `MCP_TRANSPORT` | `http` | `http` (streamable-http), `sse` (legacy), `stdio` |
+| `MCP_API_KEY` | — | Bearer token for MCP auth (empty = no auth) |
+| `MCP_PUBLIC_DOMAIN` | — | Public domain for Traefik routing (prod only) |
+| `GRAPH_ENGINE` | `graphiti` | `graphiti` (LLM) or `gliner` (local CPU) |
 | `GRAPH_ENABLED` | `true` | Disable Neo4j entirely |
-| `SCHEMA_INDUCTION_ENABLED` | `true` | Per-document LLM schema induction (GLiNER2 only) |
-| `SCHEMA_INDUCTION_MODEL` | `claude-haiku-4-5-20251001` | Model for schema proposals |
-| `LIVE_INGEST_PORT` | `8001` | Live ingestion server port |
+| `DOCUMENT_SOURCE` | `local` | `local` or `s3` |
 | `MULTIVEC_ENABLED` | `false` | ColBERT multi-vector embeddings (Jina only) |
-| `RERANK_ENABLED` | `false` | Reranker for search results |
-| `VLM_GENERATION_ENABLED` | `false` | VLM answers for visual search |
-| `IMAGE_EMBED_STRATEGY` | `smart` | `smart` (Docling-gated), `all`, `none` |
-| `LLM_BASE_URL` | — | Custom OpenAI-compatible endpoint (OpenRouter, Ollama, etc.) |
+| `RERANK_ENABLED` | `true` | Cross-encoder reranking |
 
-Full reference: [Environment Variables](docs/configuration/environment.md)
+Full reference: `.env.example` and [docs/configuration/environment.md](docs/configuration/environment.md)
+
+## Daily Drivers
+
+```bash
+task smoke                 # vector_search smoke test (no MCP/LLM needed)
+task smoke-graph           # graph_search smoke test
+task ask -- "question"     # end-to-end: agent + MCP + LLM (needs task serve)
+task doctor                # diff CocoIndex tracking vs Qdrant; flags drift
+task backup                # snapshot Qdrant + Neo4j + Postgres
+```
 
 ## Testing
 
 ```bash
-task test                # Unit tests
-task test-integration    # Integration tests (needs Docker services)
-task lint                # Ruff
-task typecheck           # mypy
-task check               # lint + typecheck + test
+task test                  # unit tests
+task test-integration      # integration tests (needs Docker services)
+task lint                  # Ruff
+task typecheck             # mypy
+task check                 # lint + typecheck + test
+task eval                  # RAGAS retrieval-quality eval
 ```
 
 ## Documentation
 
 ```bash
-task docs-serve          # MkDocs dev server
+task docs-serve            # MkDocs dev server at http://localhost:8000
 ```
 
 ## Stack
@@ -211,7 +191,7 @@ task docs-serve          # MkDocs dev server
 | Vector store | Qdrant |
 | Knowledge graph | Neo4j + Graphiti / GLiNER2 |
 | State DB | PostgreSQL |
-| MCP server | FastMCP (SSE + stdio) |
+| MCP server | FastMCP (streamable-http) |
 | Agent | Pydantic AI |
 | Cloud | AWS S3 + SQS |
 
