@@ -184,9 +184,21 @@ See [Backup & Restore](../operations/backup-restore.md) for the full procedure (
 
 `.env.prod` lives on the VM and is gitignored. Keep it `chmod 600`, owner root (or the user running Docker). For multi-operator setups, graduate to Docker secrets / a vault — not included by default because a single-VM deploy does not need it.
 
-## Without Caddy
+## Traefik Integration (default)
 
-If you already terminate TLS upstream (host nginx, Traefik, cloud LB), remove the `caddy` service and publish the two app services on localhost only:
+The prod compose is designed for an external Traefik instance. The `mcp` service joins Traefik's `proxy` network and declares routing labels. Caddy is not included.
+
+Set `MCP_PUBLIC_DOMAIN` in `.env.prod` to the domain Traefik should route:
+
+```bash
+MCP_PUBLIC_DOMAIN=mcp.example.com
+```
+
+Traefik auto-discovers the container via Docker labels and provisions a Let's Encrypt certificate. The `MCP_API_KEY` bearer token handles application-level auth.
+
+## Without Traefik
+
+If you don't have an external Traefik, publish the app services on localhost and front them with your own reverse proxy (nginx, Caddy, cloud LB):
 
 ```yaml
 mcp:
@@ -198,7 +210,7 @@ agent-api:
     - "127.0.0.1:8001:8001"
 ```
 
-Then reverse-proxy from the host into those ports.
+Remove the `proxy` external network and Traefik labels from the `mcp` service.
 
 ## Sizing
 

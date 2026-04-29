@@ -1,5 +1,5 @@
-# Production stack: data services + Spektr app + Caddy reverse proxy.
-# All services live on spektr-net; only Caddy publishes ports to the host.
+# Production stack: data services + Spektr app, routed via external Traefik.
+# Data services live on spektr-net (internal); MCP joins the Traefik `proxy` network.
 #
 # Usage:
 #   cp .env.prod.example .env.prod  && edit
@@ -13,14 +13,14 @@ name: spektr
 networks:
   spektr-net:
     driver: bridge
+  proxy:
+    external: true
 
 volumes:
   qdrant_data:
   neo4j_data:
   postgres_data:
   ingest_state:
-  caddy_data:
-  caddy_config:
 
 x-app-image: &app-image
   build:
@@ -80,6 +80,28 @@ services:
       - postgres
     expose:
       - "8080"
+    networks:
+      - spektr-net
+      - proxy
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: proxy
+
+      # Streaming: disable gzip buffering for SSE / streamable-http
+      traefik.http.middlewares.spektr-mcp-streaming.headers.customResponseHeaders.X-Accel-Buffering: "no"
+      traefik.http.middlewares.spektr-mcp-streaming.headers.customResponseHeaders.Cache-Control: "no-cache, no-transform"
+
+      # Router
+      traefik.http.routers.spektr-mcp.rule: "Host(`${MCP_PUBLIC_DOMAIN:?MCP_PUBLIC_DOMAIN must be set}`) && PathPrefix(`/mcp`)"
+      traefik.http.routers.spektr-mcp.entrypoints: websecure
+      traefik.http.routers.spektr-mcp.tls: "true"
+      traefik.http.routers.spektr-mcp.tls.certresolver: tls_resolver
+      traefik.http.routers.spektr-mcp.middlewares: "spektr-mcp-streaming@docker"
+      traefik.http.routers.spektr-mcp.service: spektr-mcp
+
+      # Service
+      traefik.http.services.spektr-mcp.loadbalancer.server.port: "8080"
+      traefik.http.services.spektr-mcp.loadbalancer.responseForwarding.flushInterval: "-1s"
 
   agent-api:
     <<: *app-image
@@ -113,18 +135,3 @@ services:
       - ingest_state:/app/state
       - ./documents:/app/documents:ro
 
-  caddy:
-    image: caddy:2-alpine
-    networks:
-      - spektr-net
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    depends_on:
-      - mcp
-      - agent-api
-    restart: unless-stopped
