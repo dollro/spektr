@@ -33,7 +33,7 @@ The three app services (`mcp`, `agent-api`, `ingest-live`) all share a single im
 | `.dockerignore` | Keeps the build context small (excludes `documents/`, `backups/`, `state/`, …) |
 | `docker-compose.prod.yml` | Full production stack |
 | `Caddyfile` | Reverse proxy config with auto-TLS — **edit before deploy** |
-| `.env.prod.example` | Template; copy to `.env.prod` on the VM (gitignored) |
+| `.env.example` | Template; copy to `.env.prod` on the VM and override hostnames + secrets |
 
 ## Prerequisites on the VM
 
@@ -59,7 +59,7 @@ cd /opt/spektr
 ### 2. Configure environment
 
 ```bash
-cp .env.prod.example .env.prod
+cp .env.example .env.prod
 ```
 
 Edit `.env.prod`. Required values in production:

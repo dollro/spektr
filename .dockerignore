@@ -29,7 +29,6 @@ exp.txt
 .env
 .env.*
 !.env.example
-!.env.prod.example
 
 # Docs build artefacts
 site/

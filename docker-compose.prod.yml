@@ -2,7 +2,7 @@
 # Data services live on spektr-net (internal); MCP joins the Traefik `proxy` network.
 #
 # Usage:
-#   cp .env.prod.example .env.prod  && edit
+#   cp .env.example .env.prod  && edit (override hostnames + secrets for prod)
 #   task prod:build && task prod:up
 #
 # Backups: scripts/backup.py shells out to `docker compose exec postgres`
