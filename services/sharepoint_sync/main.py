@@ -59,6 +59,15 @@ def _build_syncer(token_provider: Callable[[], str]) -> Syncer:
 
 
 async def run_loop(*, once: bool = False) -> None:
+    if settings.document_source != "sharepoint":
+        log.error(
+            "Refusing to start: DOCUMENT_SOURCE=%s (need 'sharepoint'). "
+            "The pipeline only consumes SharePoint files when "
+            "DOCUMENT_SOURCE=sharepoint; otherwise the syncer would mirror "
+            "files no one ingests.",
+            settings.document_source,
+        )
+        raise SystemExit(2)
     if not settings.sharepoint_enabled:
         log.error("SharePoint sync requested but settings.sharepoint_enabled is False")
         raise SystemExit(2)

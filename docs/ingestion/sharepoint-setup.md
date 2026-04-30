@@ -2,7 +2,7 @@
 
 A copy-paste walkthrough for wiring an O365 SharePoint document library as Spektr's ingestion source. The syncer mirrors a single in-scope folder to local disk every few minutes; CocoIndex's existing `LocalFile` source picks it up unchanged.
 
-This guide is the SharePoint counterpart to `s3-sqs-setup.md`. The two paths are mutually exclusive in the runtime: if `S3_BUCKET_NAME` and `S3_SQS_QUEUE_URL` are set, CocoIndex uses the AmazonS3 source; otherwise it uses LocalFile, which is where the SharePoint sync deposits its mirror.
+This guide is the SharePoint counterpart to `s3-sqs-setup.md`. The three paths (local / S3 / SharePoint) are selected explicitly by the `DOCUMENT_SOURCE` env var. Settings validation rejects misconfigurations at startup — for example, `DOCUMENT_SOURCE=sharepoint` without all `SHAREPOINT_*` fields populated, or `DOCUMENT_SOURCE=s3` without bucket+queue. The `sharepoint-sync` service additionally refuses to start unless `DOCUMENT_SOURCE=sharepoint`, so it can never silently mirror files that no one ingests.
 
 ---
 
@@ -144,6 +144,7 @@ Add to `.env` (or `.env.prod`):
 
 | Variable | Required | Example | Notes |
 |-|-|-|-|
+| `DOCUMENT_SOURCE` | yes | `sharepoint` | Must be `sharepoint` for the syncer + ingest to use it |
 | `SHAREPOINT_TENANT_ID` | yes | `11111111-2222-3333-4444-555555555555` | Step 1 |
 | `SHAREPOINT_CLIENT_ID` | yes | `aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee` | Step 1 |
 | `SHAREPOINT_CLIENT_SECRET` | yes | `<secret value>` | Step 2 |

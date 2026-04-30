@@ -59,8 +59,8 @@ class Settings(BaseSettings):
     # PostgreSQL
     database_url: str = "postgresql://cocoindex:cocoindex@localhost:5432/cocoindex"
 
-    # Document Source
-    document_source: str = "local"  # "local" or "s3"
+    # Document Source — exactly one of: local, s3, sharepoint
+    document_source: Literal["local", "s3", "sharepoint"] = "local"
     local_documents_path: str = "documents"
 
     # AWS (only used when document_source=s3)
@@ -166,6 +166,21 @@ class Settings(BaseSettings):
             msg = (
                 "OpenRouter does not support ColBERT multi-vector embeddings. "
                 "Set multivec_enabled=False or use embedding_provider=jina."
+            )
+            raise ValueError(msg)
+        if self.document_source == "s3" and not (
+            self.s3_bucket_name and self.s3_sqs_queue_url
+        ):
+            msg = (
+                "DOCUMENT_SOURCE=s3 requires both S3_BUCKET_NAME and "
+                "S3_SQS_QUEUE_URL to be set."
+            )
+            raise ValueError(msg)
+        if self.document_source == "sharepoint" and not self.sharepoint_enabled:
+            msg = (
+                "DOCUMENT_SOURCE=sharepoint requires all SHAREPOINT_* fields to "
+                "be set: TENANT_ID, CLIENT_ID, CLIENT_SECRET, SITE_ID, DRIVE_ID, "
+                "ROOT_FOLDER_PATH."
             )
             raise ValueError(msg)
         return self
