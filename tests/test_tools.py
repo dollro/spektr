@@ -408,7 +408,13 @@ class TestMCPServer:
 
         tools = await mcp.list_tools()
         tool_names = {t.name for t in tools}
-        assert {"vector_search", "graph_search", "hybrid_search"} <= tool_names
+        assert {
+            "vector_search",
+            "graph_search",
+            "hybrid_search",
+            "list_documents",
+            "list_document_chunks",
+        } <= tool_names
         from config.settings import settings
 
         if settings.multivec_enabled:

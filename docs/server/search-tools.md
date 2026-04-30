@@ -1,8 +1,16 @@
 # Search Tools
 
-The MCP server exposes four search tools. Each tool returns structured JSON and handles errors gracefully by returning an error object instead of raising exceptions.
+The MCP server exposes the following tools. Each returns structured JSON and handles errors gracefully by returning an error object instead of raising exceptions.
 
-Three of the four tools (`vector_search`, `graph_search`, `hybrid_search`) support an optional `session_id` parameter for session-aware search. When provided, search results combine data from the active session (live-ingested chunks) with bulk KB results.
+| Tool | Use case |
+|-|-|
+| `vector_search` | Best for **specific** questions answered by a few chunks. Vector similarity ranks and truncates. |
+| `graph_search` | Best for **entity / relationship** queries. |
+| `hybrid_search` | Best general-purpose tool: vector + graph in parallel. |
+| `list_documents` | **Discovery** — what's in the knowledge base. |
+| `list_document_chunks` | **Exhaustive enumeration** of one source document — use when vector top-k truncation hides parts of a long document. |
+
+Three of the search tools (`vector_search`, `graph_search`, `hybrid_search`) support an optional `session_id` parameter for session-aware search. When provided, search results combine data from the active session (live-ingested chunks) with bulk KB results.
 
 ---
 
@@ -174,6 +182,62 @@ Returns `HybridSearchResponse`:
   }
 }
 ```
+
+---
+
+## `list_document_chunks`
+
+Enumerate **all** chunks of a single document in deterministic `(page_number, chunk_index)` order. No similarity ranking, no reranker — just paginated reads.
+
+Use this when an agent self-detects partial coverage on a long document (e.g. a 90-page portfolio matrix), or whenever exhaustive content is required. Vector top-k will always truncate the long tail; this tool does not.
+
+### Parameters
+
+| Name | Type | Default | Description |
+|-|-|-|-|
+| `source_file` | `str` | required | Document key (as returned by `list_documents`). |
+| `page_from` | `int \| None` | `None` | Inclusive lower page bound. |
+| `page_to` | `int \| None` | `None` | Inclusive upper page bound. |
+| `content_type` | `str \| None` | `None` | Optional payload filter (e.g. `text_chunk`). |
+| `limit` | `int` | `200` | Max chunks per response. Hard cap `500`. |
+| `offset` | `int` | `0` | Number of chunks to skip — paginate by adding `limit` between calls. |
+
+### Return Schema
+
+Returns `list[dict]` ordered by `(page_number, chunk_index)`:
+
+| Field | Type | Description |
+|-|-|-|
+| `source_file` | `str` | Same as the `source_file` argument. |
+| `page_number` | `int` | Page within the source. |
+| `chunk_index` | `int` | Chunk position within the page. |
+| `content_type` | `str` | e.g. `text_chunk`. |
+| `text` | `str` | The chunk's textual content. |
+| `metadata` | `dict` | mime_type, ingested_at, source_key. |
+
+### Pagination convention
+
+When `len(result) == limit`, more chunks remain — call again with `offset += limit`. When the response is shorter than `limit` (or empty), the document is fully enumerated.
+
+### Example
+
+```json
+{
+  "name": "list_document_chunks",
+  "arguments": {
+    "source_file": "portfolio_matrix.pdf",
+    "page_from": 30,
+    "page_to": 60,
+    "limit": 200
+  }
+}
+```
+
+### When to choose this over `vector_search`
+
+- Question is "give me **all** X in this document" rather than "find X most relevant to Y".
+- Document is long (40+ pages) and the agent needs comprehensive coverage.
+- Vector search returned hits but the agent suspects coverage is partial.
 
 ---
 
