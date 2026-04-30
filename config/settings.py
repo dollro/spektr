@@ -59,8 +59,8 @@ class Settings(BaseSettings):
     # PostgreSQL
     database_url: str = "postgresql://cocoindex:cocoindex@localhost:5432/cocoindex"
 
-    # Document Source
-    document_source: str = "local"  # "local" or "s3"
+    # Document Source — exactly one of: local, s3, sharepoint
+    document_source: Literal["local", "s3", "sharepoint"] = "local"
     local_documents_path: str = "documents"
 
     # AWS (only used when document_source=s3)
@@ -70,6 +70,17 @@ class Settings(BaseSettings):
     aws_endpoint_url: str = ""
     s3_bucket_name: str = ""
     s3_sqs_queue_url: str = ""
+
+    # SharePoint (only used when all sharepoint_* required fields are set)
+    sharepoint_tenant_id: str = ""
+    sharepoint_client_id: str = ""
+    sharepoint_client_secret: str = ""
+    sharepoint_site_id: str = ""
+    sharepoint_drive_id: str = ""
+    sharepoint_root_folder_path: str = ""  # e.g. "/Engineering/Specs"
+    sharepoint_local_subdir: str = "sharepoint"
+    sharepoint_sync_interval_seconds: int = 180
+    sharepoint_state_dir: str = "state/sharepoint"
 
     # LLM
     llm_api_type: str = "anthropic"
@@ -121,6 +132,20 @@ class Settings(BaseSettings):
     service_name: str = "spektr"
 
     @property
+    def sharepoint_enabled(self) -> bool:
+        """True only when all required SharePoint fields are populated."""
+        return all(
+            (
+                self.sharepoint_tenant_id,
+                self.sharepoint_client_id,
+                self.sharepoint_client_secret,
+                self.sharepoint_site_id,
+                self.sharepoint_drive_id,
+                self.sharepoint_root_folder_path,
+            )
+        )
+
+    @property
     def dense_dimensions(self) -> int:
         """Return dense vector dimensions for the active embedding provider."""
         if self.embedding_provider == "voyage":
@@ -141,6 +166,21 @@ class Settings(BaseSettings):
             msg = (
                 "OpenRouter does not support ColBERT multi-vector embeddings. "
                 "Set multivec_enabled=False or use embedding_provider=jina."
+            )
+            raise ValueError(msg)
+        if self.document_source == "s3" and not (
+            self.s3_bucket_name and self.s3_sqs_queue_url
+        ):
+            msg = (
+                "DOCUMENT_SOURCE=s3 requires both S3_BUCKET_NAME and "
+                "S3_SQS_QUEUE_URL to be set."
+            )
+            raise ValueError(msg)
+        if self.document_source == "sharepoint" and not self.sharepoint_enabled:
+            msg = (
+                "DOCUMENT_SOURCE=sharepoint requires all SHAREPOINT_* fields to "
+                "be set: TENANT_ID, CLIENT_ID, CLIENT_SECRET, SITE_ID, DRIVE_ID, "
+                "ROOT_FOLDER_PATH."
             )
             raise ValueError(msg)
         return self

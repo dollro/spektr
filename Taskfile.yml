@@ -31,6 +31,16 @@ tasks:
     cmds:
       - uv run python -m ingestion.pipeline --live
 
+  sharepoint-sync:
+    desc: "Mirror an O365 SharePoint folder into local_documents_path (long-running)"
+    cmds:
+      - uv run python -m services.sharepoint_sync
+
+  sharepoint-sync-once:
+    desc: "Run one SharePoint sync pass and exit"
+    cmds:
+      - uv run python -m services.sharepoint_sync --once
+
   serve:
     desc: Start the MCP server
     cmds:
