@@ -19,9 +19,7 @@ class FakeGraph:
         self.downloads: list[tuple[str, Path]] = []
         self.last_initial_url: str | None = None
 
-    async def iter_delta(
-        self, initial_url: str | None = None
-    ) -> AsyncIterator[DeltaItem]:
+    async def iter_delta(self, initial_url: str | None = None) -> AsyncIterator[DeltaItem]:
         self.last_initial_url = initial_url
         for item in self._batch:
             yield item
@@ -63,7 +61,7 @@ def _make_item(
 
 
 async def test_new_file_in_scope_is_downloaded(
-    workspace: tuple[Path, DeltaState, LocalIndex]
+    workspace: tuple[Path, DeltaState, LocalIndex],
 ) -> None:
     mirror, state, index = workspace
     fake = FakeGraph([_make_item()], final_token="t1")
@@ -81,7 +79,7 @@ async def test_new_file_in_scope_is_downloaded(
 
 
 async def test_deleted_file_removes_local_copy(
-    workspace: tuple[Path, DeltaState, LocalIndex]
+    workspace: tuple[Path, DeltaState, LocalIndex],
 ) -> None:
     mirror, state, index = workspace
     mirror.mkdir(parents=True)
@@ -103,7 +101,7 @@ async def test_deleted_file_removes_local_copy(
 
 
 async def test_move_out_of_scope_removes_local_copy(
-    workspace: tuple[Path, DeltaState, LocalIndex]
+    workspace: tuple[Path, DeltaState, LocalIndex],
 ) -> None:
     mirror, state, index = workspace
     mirror.mkdir(parents=True)
@@ -127,7 +125,7 @@ async def test_move_out_of_scope_removes_local_copy(
 
 
 async def test_rename_within_scope_moves_file(
-    workspace: tuple[Path, DeltaState, LocalIndex]
+    workspace: tuple[Path, DeltaState, LocalIndex],
 ) -> None:
     mirror, state, index = workspace
     mirror.mkdir(parents=True)
@@ -151,7 +149,7 @@ async def test_rename_within_scope_moves_file(
 
 
 async def test_unchanged_etag_is_skipped(
-    workspace: tuple[Path, DeltaState, LocalIndex]
+    workspace: tuple[Path, DeltaState, LocalIndex],
 ) -> None:
     mirror, state, index = workspace
     mirror.mkdir(parents=True)
@@ -171,7 +169,7 @@ async def test_unchanged_etag_is_skipped(
 
 
 async def test_folder_deletion_removes_descendants(
-    workspace: tuple[Path, DeltaState, LocalIndex]
+    workspace: tuple[Path, DeltaState, LocalIndex],
 ) -> None:
     mirror, state, index = workspace
     mirror.mkdir(parents=True)
@@ -210,7 +208,7 @@ async def test_folder_deletion_removes_descendants(
 
 
 async def test_resume_passes_stored_token_as_initial_url(
-    workspace: tuple[Path, DeltaState, LocalIndex]
+    workspace: tuple[Path, DeltaState, LocalIndex],
 ) -> None:
     mirror, state, index = workspace
     state.save("https://graph.microsoft.com/.../delta?token=resume")
@@ -228,7 +226,7 @@ async def test_resume_passes_stored_token_as_initial_url(
 
 
 async def test_out_of_scope_unindexed_file_is_ignored(
-    workspace: tuple[Path, DeltaState, LocalIndex]
+    workspace: tuple[Path, DeltaState, LocalIndex],
 ) -> None:
     mirror, state, index = workspace
     fake = FakeGraph(

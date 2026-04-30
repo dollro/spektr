@@ -47,12 +47,8 @@ def _build_credential() -> ClientSecretCredential:
 
 def _build_syncer(token_provider: Callable[[], str]) -> Syncer:
     state_dir = Path(settings.sharepoint_state_dir)
-    mirror_root = (
-        Path(settings.local_documents_path) / settings.sharepoint_local_subdir
-    )
-    graph = GraphClient(
-        drive_id=settings.sharepoint_drive_id, token_provider=token_provider
-    )
+    mirror_root = Path(settings.local_documents_path) / settings.sharepoint_local_subdir
+    graph = GraphClient(drive_id=settings.sharepoint_drive_id, token_provider=token_provider)
     return Syncer(
         mirror_root=mirror_root,
         root_folder_path=settings.sharepoint_root_folder_path,
@@ -64,9 +60,7 @@ def _build_syncer(token_provider: Callable[[], str]) -> Syncer:
 
 async def run_loop(*, once: bool = False) -> None:
     if not settings.sharepoint_enabled:
-        log.error(
-            "SharePoint sync requested but settings.sharepoint_enabled is False"
-        )
+        log.error("SharePoint sync requested but settings.sharepoint_enabled is False")
         raise SystemExit(2)
 
     setup_observability()
@@ -88,9 +82,7 @@ async def run_loop(*, once: bool = False) -> None:
                 await cache.refresh()
                 await syncer.run_once()
             except Exception:
-                log.exception(
-                    "sharepoint sync cycle failed; will retry next interval"
-                )
+                log.exception("sharepoint sync cycle failed; will retry next interval")
             if once or stop.is_set():
                 return
             try:

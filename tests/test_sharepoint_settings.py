@@ -27,7 +27,7 @@ def _clear_sharepoint_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_sharepoint_defaults_are_empty(monkeypatch: pytest.MonkeyPatch) -> None:
     _clear_sharepoint_env(monkeypatch)
-    s = Settings(neo4j_password="x")  # type: ignore[call-arg]
+    s = Settings(neo4j_password="x")
     assert s.sharepoint_tenant_id == ""
     assert s.sharepoint_client_id == ""
     assert s.sharepoint_client_secret == ""
@@ -47,7 +47,7 @@ def test_sharepoint_enabled_when_all_required_set(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setenv("SHAREPOINT_SITE_ID", "site")
     monkeypatch.setenv("SHAREPOINT_DRIVE_ID", "drive")
     monkeypatch.setenv("SHAREPOINT_ROOT_FOLDER_PATH", "/Engineering/Specs")
-    s = Settings(neo4j_password="x")  # type: ignore[call-arg]
+    s = Settings(neo4j_password="x")
     assert s.sharepoint_enabled is True
 
 
@@ -56,5 +56,5 @@ def test_sharepoint_disabled_when_any_required_missing(
 ) -> None:
     _clear_sharepoint_env(monkeypatch)
     monkeypatch.setenv("SHAREPOINT_TENANT_ID", "tenant")
-    s = Settings(neo4j_password="x")  # type: ignore[call-arg]
+    s = Settings(neo4j_password="x")
     assert s.sharepoint_enabled is False

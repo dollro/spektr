@@ -44,9 +44,7 @@ class LocalIndex:
 
     def get_etag(self, item_id: str) -> str | None:
         with self._connect() as cx:
-            row = cx.execute(
-                "SELECT etag FROM items WHERE item_id=?", (item_id,)
-            ).fetchone()
+            row = cx.execute("SELECT etag FROM items WHERE item_id=?", (item_id,)).fetchone()
         return row[0] if row else None
 
     def delete(self, item_id: str) -> None:

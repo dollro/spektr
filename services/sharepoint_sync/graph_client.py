@@ -29,19 +29,13 @@ class GraphClient:
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self._token()}"}
 
-    async def iter_delta(
-        self, initial_url: str | None = None
-    ) -> AsyncIterator[DeltaItem]:
+    async def iter_delta(self, initial_url: str | None = None) -> AsyncIterator[DeltaItem]:
         items = await self._fetch_all_delta_items(initial_url)
         for item in items:
             yield item
 
-    async def _fetch_all_delta_items(
-        self, initial_url: str | None
-    ) -> list[DeltaItem]:
-        url: str | None = (
-            initial_url or f"{_GRAPH_BASE}/drives/{self._drive_id}/root/delta"
-        )
+    async def _fetch_all_delta_items(self, initial_url: str | None) -> list[DeltaItem]:
+        url: str | None = initial_url or f"{_GRAPH_BASE}/drives/{self._drive_id}/root/delta"
         items: list[DeltaItem] = []
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             while url:

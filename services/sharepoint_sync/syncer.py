@@ -17,9 +17,7 @@ log = logging.getLogger(__name__)
 class GraphLike(Protocol):
     next_delta_link: str | None
 
-    def iter_delta(
-        self, initial_url: str | None = None
-    ) -> AsyncIterator[DeltaItem]: ...
+    def iter_delta(self, initial_url: str | None = None) -> AsyncIterator[DeltaItem]: ...
 
     async def download(self, url: str, dest: Path) -> None: ...
 
