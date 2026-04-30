@@ -71,6 +71,17 @@ class Settings(BaseSettings):
     s3_bucket_name: str = ""
     s3_sqs_queue_url: str = ""
 
+    # SharePoint (only used when all sharepoint_* required fields are set)
+    sharepoint_tenant_id: str = ""
+    sharepoint_client_id: str = ""
+    sharepoint_client_secret: str = ""
+    sharepoint_site_id: str = ""
+    sharepoint_drive_id: str = ""
+    sharepoint_root_folder_path: str = ""  # e.g. "/Engineering/Specs"
+    sharepoint_local_subdir: str = "sharepoint"
+    sharepoint_sync_interval_seconds: int = 180
+    sharepoint_state_dir: str = "state/sharepoint"
+
     # LLM
     llm_api_type: str = "anthropic"
     llm_model: str = "claude-sonnet-4-20250514"
@@ -119,6 +130,20 @@ class Settings(BaseSettings):
     logfire_token: str = ""
     observability_local_only: bool = True
     service_name: str = "spektr"
+
+    @property
+    def sharepoint_enabled(self) -> bool:
+        """True only when all required SharePoint fields are populated."""
+        return all(
+            (
+                self.sharepoint_tenant_id,
+                self.sharepoint_client_id,
+                self.sharepoint_client_secret,
+                self.sharepoint_site_id,
+                self.sharepoint_drive_id,
+                self.sharepoint_root_folder_path,
+            )
+        )
 
     @property
     def dense_dimensions(self) -> int:
