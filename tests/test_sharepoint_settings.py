@@ -4,7 +4,6 @@ import pytest
 
 from config.settings import Settings
 
-
 _REQUIRED_VARS = (
     "SHAREPOINT_TENANT_ID",
     "SHAREPOINT_CLIENT_ID",
