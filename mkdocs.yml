@@ -45,6 +45,7 @@ nav:
     - Knowledge Graph: ingestion/knowledge-graph.md
     - CocoIndex Pipeline: ingestion/cocoindex.md
     - S3 + SQS Setup: ingestion/s3-sqs-setup.md
+    - SharePoint Setup: ingestion/sharepoint-setup.md
   - MCP Server:
     - Overview: server/overview.md
     - Search Tools: server/search-tools.md

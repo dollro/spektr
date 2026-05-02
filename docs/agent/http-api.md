@@ -10,7 +10,7 @@ both synchronous responses and streaming SSE.
 uv run python -m agent.api
 ```
 
-The server runs on **port 8001** by default.
+The server binds to `0.0.0.0:8001` by default (host `0.0.0.0`, port `8001`).
 
 ## App Lifecycle
 
@@ -20,15 +20,25 @@ hold the MCP server connection open for the entire application lifetime:
 ```python
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    setup_observability()
     global _agent, _server
     _agent, _server = await create_rag_agent()
     async with _server:
         yield
     _agent, _server = None, None
+
+# At module scope, after `app = FastAPI(...)`:
+instrument_fastapi(app)
 ```
 
+The real `agent/api.py` calls `setup_observability()` inside `lifespan`
+and `instrument_fastapi(app)` at module scope (once `app` exists) so that
+runtime spans and FastAPI request instrumentation are both wired up. See
+`agent/api.py` for the exact code.
+
 When the app starts, it connects to the [MCP server](../server/overview.md)
-over SSE. When the app shuts down, the connection is closed automatically.
+using the transport selected by `MCP_TRANSPORT` (streamable-http by
+default). When the app shuts down, the connection is closed automatically.
 
 ## Endpoints
 
@@ -61,10 +71,17 @@ the appropriate [search tools](../server/search-tools.md) via MCP.
 
 **Response body — `QueryResponse`** (when `stream=false`):
 
-| Field | Type | Description |
-|-|-|-|
-| `answer` | `str` | Agent-generated answer |
-| `sources` | `list[dict]` | Source documents referenced (may be empty) |
+| Field | Type | Default | Description |
+|-|-|-|-|
+| `answer` | `str` | *(required)* | Agent-generated answer |
+| `sources` | `list[dict]` | `[]` | Source documents referenced (may be empty) |
+
+**Status codes:**
+
+|-|-|
+| Code | Meaning |
+| `200` | Successful response (`QueryResponse` JSON or SSE stream) |
+| `500` | Agent not initialized — the lifespan handler hasn't completed, so the endpoint raises `RuntimeError("Agent not initialized")` |
 
 #### Standard Request
 

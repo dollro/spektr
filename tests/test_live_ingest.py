@@ -1,4 +1,4 @@
-"""Tests for live transcript ingestion FastAPI endpoints."""
+"""Tests for live chunk ingestion FastAPI endpoints."""
 
 from __future__ import annotations
 
@@ -185,14 +185,14 @@ class TestSessionStart:
                 resp = await client.post(
                     "/session/start",
                     json={
-                        "session_id": "meeting-1",
-                        "metadata": {"title": "Test Meeting"},
+                        "session_id": "session-1",
+                        "metadata": {"title": "Test Session"},
                     },
                 )
 
         assert resp.status_code == 200
         data = resp.json()
-        assert data["session_id"] == "meeting-1"
+        assert data["session_id"] == "session-1"
         assert data["status"] == "active"
 
     @pytest.mark.asyncio
@@ -213,24 +213,24 @@ class TestSessionStart:
             ) as client:
                 resp = await client.post(
                     "/session/start",
-                    json={"session_id": "meeting-2"},
+                    json={"session_id": "session-2"},
                 )
 
         assert resp.status_code == 409
 
 
-class TestIngestTranscript:
+class TestIngestChunk:
     @pytest.mark.asyncio
-    async def test_ingest_transcript_chunk(
+    async def test_ingest_chunk(
         self,
         mock_qdrant,
         mock_embedder,
         mock_graphiti,
     ) -> None:
-        """POST /ingest/transcript embeds and upserts to Qdrant."""
+        """POST /ingest/chunk embeds and upserts to Qdrant."""
         import ingestion.live_ingest as mod
 
-        mod._active_session = {"session_id": "meeting-1"}
+        mod._active_session = {"session_id": "session-1"}
 
         with (
             patch("ingestion.live_ingest._get_qdrant_client", return_value=mock_qdrant),
@@ -243,12 +243,11 @@ class TestIngestTranscript:
                 transport=ASGITransport(app=app), base_url="http://test"
             ) as client:
                 resp = await client.post(
-                    "/ingest/transcript",
+                    "/ingest/chunk",
                     json={
-                        "session_id": "meeting-1",
-                        "text": "Alice: Hello everyone.",
+                        "session_id": "session-1",
+                        "text": "text content one",
                         "timestamp": "2026-03-06T14:30:00Z",
-                        "speaker": "Alice",
                     },
                 )
 
@@ -269,7 +268,7 @@ class TestIngestTranscript:
         """Background task calls Graphiti add_episode with correct args."""
         import ingestion.live_ingest as mod
 
-        mod._active_session = {"session_id": "meeting-1"}
+        mod._active_session = {"session_id": "session-1"}
 
         with (
             patch("ingestion.live_ingest._get_qdrant_client", return_value=mock_qdrant),
@@ -282,12 +281,11 @@ class TestIngestTranscript:
                 transport=ASGITransport(app=app), base_url="http://test"
             ) as client:
                 await client.post(
-                    "/ingest/transcript",
+                    "/ingest/chunk",
                     json={
-                        "session_id": "meeting-1",
-                        "text": "Alice: Hello everyone.",
+                        "session_id": "session-1",
+                        "text": "text content one",
                         "timestamp": "2026-03-06T14:30:00Z",
-                        "speaker": "Alice",
                     },
                 )
                 # Let the background task complete
@@ -295,9 +293,9 @@ class TestIngestTranscript:
 
         mock_graphiti.add_episode.assert_called_once()
         call_kwargs = mock_graphiti.add_episode.call_args[1]
-        assert call_kwargs["episode_body"] == "Alice: Hello everyone."
-        assert call_kwargs["group_id"] == "meeting-1"
-        assert "Alice" in call_kwargs["source_description"]
+        assert call_kwargs["episode_body"] == "text content one"
+        assert call_kwargs["group_id"] == "session-1"
+        assert "session-1" in call_kwargs["source_description"]
 
     @pytest.mark.asyncio
     async def test_ingest_session_mismatch_rejected(
@@ -308,7 +306,7 @@ class TestIngestTranscript:
         """Ingesting with a mismatched session_id returns 400."""
         import ingestion.live_ingest as mod
 
-        mod._active_session = {"session_id": "meeting-1"}
+        mod._active_session = {"session_id": "session-1"}
 
         with (
             patch("ingestion.live_ingest._get_qdrant_client", return_value=mock_qdrant),
@@ -320,10 +318,10 @@ class TestIngestTranscript:
                 transport=ASGITransport(app=app), base_url="http://test"
             ) as client:
                 resp = await client.post(
-                    "/ingest/transcript",
+                    "/ingest/chunk",
                     json={
                         "session_id": "wrong-session",
-                        "text": "Hello",
+                        "text": "text content one",
                         "timestamp": "2026-03-06T14:30:00Z",
                     },
                 )
@@ -348,10 +346,10 @@ class TestIngestTranscript:
                 transport=ASGITransport(app=app), base_url="http://test"
             ) as client:
                 resp = await client.post(
-                    "/ingest/transcript",
+                    "/ingest/chunk",
                     json={
-                        "session_id": "meeting-1",
-                        "text": "Hello",
+                        "session_id": "session-1",
+                        "text": "text content one",
                         "timestamp": "2026-03-06T14:30:00Z",
                     },
                 )
@@ -365,7 +363,7 @@ class TestSessionEnd:
         """POST /session/end with archive=true updates points."""
         import ingestion.live_ingest as mod
 
-        mod._active_session = {"session_id": "meeting-1"}
+        mod._active_session = {"session_id": "session-1"}
 
         mock_qdrant.scroll = MagicMock(return_value=([MagicMock(id="point-1")], None))
 
@@ -380,7 +378,7 @@ class TestSessionEnd:
             ) as client:
                 resp = await client.post(
                     "/session/end",
-                    json={"session_id": "meeting-1", "archive": True},
+                    json={"session_id": "session-1", "archive": True},
                 )
 
         assert resp.status_code == 200
@@ -398,7 +396,7 @@ class TestSessionEnd:
         """POST /session/end with archive=false deletes points."""
         import ingestion.live_ingest as mod
 
-        mod._active_session = {"session_id": "meeting-1"}
+        mod._active_session = {"session_id": "session-1"}
 
         mock_qdrant.scroll = MagicMock(return_value=([MagicMock(id="point-1")], None))
 
@@ -414,7 +412,7 @@ class TestSessionEnd:
             ) as client:
                 resp = await client.post(
                     "/session/end",
-                    json={"session_id": "meeting-1", "archive": False},
+                    json={"session_id": "session-1", "archive": False},
                 )
 
         assert resp.status_code == 200
@@ -441,7 +439,7 @@ class TestSessionAuth:
             ) as client:
                 resp = await client.post(
                     "/session/start",
-                    json={"session_id": "meeting-1"},
+                    json={"session_id": "session-1"},
                 )
 
         assert resp.status_code == 401
@@ -464,7 +462,7 @@ class TestSessionAuth:
             ) as client:
                 resp = await client.post(
                     "/session/start",
-                    json={"session_id": "meeting-1"},
+                    json={"session_id": "session-1"},
                     headers={"Authorization": "Bearer wrong-key"},
                 )
 
@@ -488,7 +486,7 @@ class TestSessionAuth:
             ) as client:
                 resp = await client.post(
                     "/session/start",
-                    json={"session_id": "meeting-1"},
+                    json={"session_id": "session-1"},
                     headers={"Authorization": f"Bearer {_TEST_API_KEY}"},
                 )
 
@@ -501,10 +499,10 @@ class TestSessionAuth:
     async def test_ingest_rejected_without_session_token(
         self, mock_qdrant, mock_embedder
     ) -> None:
-        """POST /ingest/transcript without session token returns 401."""
+        """POST /ingest/chunk without session token returns 401."""
         import ingestion.live_ingest as mod
 
-        mod._active_session = {"session_id": "meeting-1", "session_token": "real-token"}
+        mod._active_session = {"session_id": "session-1", "session_token": "real-token"}
 
         with (
             patch("ingestion.live_ingest._get_qdrant_client", return_value=mock_qdrant),
@@ -518,9 +516,9 @@ class TestSessionAuth:
                 transport=ASGITransport(app=app), base_url="http://test"
             ) as client:
                 resp = await client.post(
-                    "/ingest/transcript",
+                    "/ingest/chunk",
                     json={
-                        "session_id": "meeting-1",
+                        "session_id": "session-1",
                         "text": "Hello",
                         "timestamp": "2026-03-06T14:30:00Z",
                     },
@@ -532,10 +530,10 @@ class TestSessionAuth:
     async def test_ingest_rejected_with_wrong_session_token(
         self, mock_qdrant, mock_embedder
     ) -> None:
-        """POST /ingest/transcript with wrong session token returns 403."""
+        """POST /ingest/chunk with wrong session token returns 403."""
         import ingestion.live_ingest as mod
 
-        mod._active_session = {"session_id": "meeting-1", "session_token": "real-token"}
+        mod._active_session = {"session_id": "session-1", "session_token": "real-token"}
 
         with (
             patch("ingestion.live_ingest._get_qdrant_client", return_value=mock_qdrant),
@@ -549,9 +547,9 @@ class TestSessionAuth:
                 transport=ASGITransport(app=app), base_url="http://test"
             ) as client:
                 resp = await client.post(
-                    "/ingest/transcript",
+                    "/ingest/chunk",
                     json={
-                        "session_id": "meeting-1",
+                        "session_id": "session-1",
                         "text": "Hello",
                         "timestamp": "2026-03-06T14:30:00Z",
                     },
@@ -581,7 +579,7 @@ class TestSessionAuth:
                 # 1. Start session with API key
                 resp = await client.post(
                     "/session/start",
-                    json={"session_id": "meeting-1"},
+                    json={"session_id": "session-1"},
                     headers={"Authorization": f"Bearer {_TEST_API_KEY}"},
                 )
                 assert resp.status_code == 200
@@ -589,12 +587,11 @@ class TestSessionAuth:
 
                 # 2. Ingest with session token
                 resp = await client.post(
-                    "/ingest/transcript",
+                    "/ingest/chunk",
                     json={
-                        "session_id": "meeting-1",
-                        "text": "Alice: Hello everyone.",
+                        "session_id": "session-1",
+                        "text": "text content one",
                         "timestamp": "2026-03-06T14:30:00Z",
-                        "speaker": "Alice",
                     },
                     headers={"Authorization": f"Bearer {session_token}"},
                 )
@@ -604,7 +601,7 @@ class TestSessionAuth:
                 # 3. End session with session token
                 resp = await client.post(
                     "/session/end",
-                    json={"session_id": "meeting-1", "archive": True},
+                    json={"session_id": "session-1", "archive": True},
                     headers={"Authorization": f"Bearer {session_token}"},
                 )
                 assert resp.status_code == 200

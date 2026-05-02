@@ -5,7 +5,7 @@ Requires all Docker services running and valid API keys in .env.
 
 Flow:
   1. Start session
-  2. Ingest transcript chunks (vector + Graphiti temporal graph)
+  2. Ingest live chunks (vector + Graphiti temporal graph)
   3. Verify vectors in Qdrant with correct payloads
   4. Verify Graphiti created entities/edges in Neo4j
   5. Search via vector_search with session_id
@@ -32,27 +32,24 @@ SESSION_ID = "e2e-live-real"
 CHUNKS = [
     {
         "text": (
-            "Alice proposed migrating the user database from SQLite to PostgreSQL "
-            "for better concurrency."
+            "The team proposed migrating the user database from SQLite to "
+            "PostgreSQL for better concurrency."
         ),
         "timestamp": "2026-03-07T10:00:00Z",
-        "speaker": "Alice",
     },
     {
         "text": (
-            "Bob agreed and suggested using Alembic for schema migrations "
+            "The team agreed and suggested using Alembic for schema migrations "
             "and adding connection pooling."
         ),
         "timestamp": "2026-03-07T10:01:00Z",
-        "speaker": "Bob",
     },
     {
         "text": (
-            "Carol raised concerns about downtime during the migration "
+            "The team raised concerns about downtime during the migration "
             "and proposed a blue-green deployment strategy."
         ),
         "timestamp": "2026-03-07T10:02:00Z",
-        "speaker": "Carol",
     },
 ]
 
@@ -136,7 +133,7 @@ class TestLiveIngestRealE2E:
     async def test_full_live_lifecycle(
         self, qdrant_client, _cleanup_session
     ) -> None:
-        """Ingest real transcript, verify vector + graph, search, archive."""
+        """Ingest real live chunks, verify vector + graph, search, archive."""
         from ingestion.live_ingest import app
 
         # --- 1. Start session ---
@@ -145,7 +142,7 @@ class TestLiveIngestRealE2E:
         ) as client:
             resp = await client.post(
                 "/session/start",
-                json={"session_id": SESSION_ID, "metadata": {"title": "DB Migration Meeting"}},
+                json={"session_id": SESSION_ID, "metadata": {"title": "DB Migration"}},
             )
             assert resp.status_code == 200
             assert resp.json()["status"] == "active"
@@ -153,7 +150,7 @@ class TestLiveIngestRealE2E:
             # --- 2. Ingest chunks ---
             for chunk in CHUNKS:
                 resp = await client.post(
-                    "/ingest/transcript",
+                    "/ingest/chunk",
                     json={"session_id": SESSION_ID, **chunk},
                 )
                 assert resp.status_code == 200
@@ -187,9 +184,7 @@ class TestLiveIngestRealE2E:
         payloads = [p.payload for p in points]
         assert all(p["is_live"] is True for p in payloads)
         assert all(p["session_id"] == SESSION_ID for p in payloads)
-        assert all(p["content_type"] == "transcript" for p in payloads)
-        speakers = {p["speaker"] for p in payloads}
-        assert speakers == {"Alice", "Bob", "Carol"}
+        assert all(p["content_type"] == "live" for p in payloads)
         logger.info("Qdrant: %d points with correct payloads", len(points))
 
         # --- 4. Verify Graphiti wrote to Neo4j ---
@@ -231,16 +226,16 @@ class TestLiveIngestRealE2E:
                 )
 
             assert len(results) >= 1
-            transcript_results = [
+            live_results = [
                 r
                 for r in results
-                if r.get("metadata", {}).get("source_type") == "transcript"
+                if r.get("metadata", {}).get("source_type") == "live"
             ]
-            assert len(transcript_results) >= 1, f"No transcript results found in {results}"
+            assert len(live_results) >= 1, f"No live results found in {results}"
             logger.info(
-                "Vector search: %d results (%d transcript)",
+                "Vector search: %d results (%d live)",
                 len(results),
-                len(transcript_results),
+                len(live_results),
             )
         finally:
             await real_embedder.close()
@@ -251,7 +246,7 @@ class TestLiveIngestRealE2E:
         graph_results = await graph_search(
             "database migration", session_id=SESSION_ID
         )
-        # Graphiti should have extracted some facts about the meeting
+        # Graphiti should have extracted some facts about the session
         graphiti_facts = [r for r in graph_results if "error" not in r]
         logger.info("Graph search: %d facts returned", len(graphiti_facts))
         # At minimum, Graphiti should return something for these clear entities

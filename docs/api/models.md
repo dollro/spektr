@@ -2,6 +2,10 @@
 
 Pydantic models used by MCP search tools and the live ingestion API, defined in `server/models.py`.
 
+The agent HTTP layer defines its own request/response models (`QueryRequest`,
+`QueryResponse`) in `agent/api.py` — see [HTTP API](../agent/http-api.md)
+for their fields and usage.
+
 ## SearchResult
 
 Returned by the dense vector search tool.
@@ -88,13 +92,13 @@ GLiNER example:
 
 ## HybridSearchResponse
 
-Returned by the hybrid search tool, which executes vector and graph searches in parallel and fuses the results. When `session_id` is provided, live session data is separated into `transcript_results`.
+Returned by the hybrid search tool, which executes vector and graph searches in parallel and fuses the results. When `session_id` is provided, live session data is separated into `live_results`.
 
 | Field | Type | Default | Description |
 |-|-|-|-|
 | `vector_results` | `list[SearchResult]` | `[]` | Dense vector search results (bulk KB) |
 | `graph_results` | `list[GraphFact]` | `[]` | Knowledge graph facts |
-| `transcript_results` | `list[SearchResult]` | `[]` | Live session results, sorted chronologically (only populated with `session_id`) |
+| `live_results` | `list[SearchResult]` | `[]` | Live session results, sorted chronologically (only populated with `session_id`) |
 | `query` | `str` | — | The original search query |
 | `session_id` | `str \| None` | `None` | Session ID if session-aware search was used |
 | `strategy` | `str` | `"parallel"` | Fusion strategy used |
@@ -112,7 +116,7 @@ Returned by the hybrid search tool, which executes vector and graph searches in 
       "metadata": {}
     }
   ],
-  "transcript_results": [],
+  "live_results": [],
   "graph_results": [
     {
       "fact": "Transformers replaced recurrent architectures for NLP tasks",
@@ -127,16 +131,15 @@ Returned by the hybrid search tool, which executes vector and graph searches in 
 }
 ```
 
-## TranscriptChunk
+## LiveChunk
 
-Request model for live ingestion (`POST /ingest/transcript`).
+Request model for live ingestion (`POST /ingest/chunk`).
 
 | Field | Type | Default | Description |
 |-|-|-|-|
 | `session_id` | `str` | — | Active session identifier |
 | `text` | `str` | — | Text content of the chunk |
 | `timestamp` | `datetime` | — | When the chunk was produced |
-| `speaker` | `str \| None` | `None` | Speaker identifier (optional) |
 
 ## SessionStartRequest
 
@@ -145,7 +148,7 @@ Request model for starting a live session (`POST /session/start`).
 | Field | Type | Default | Description |
 |-|-|-|-|
 | `session_id` | `str` | — | Unique session identifier |
-| `metadata` | `dict` | `{}` | Arbitrary session metadata (title, participants, etc.) |
+| `metadata` | `dict` | `{}` | Arbitrary session metadata |
 
 ## SessionEndRequest
 
@@ -158,7 +161,7 @@ Request model for ending a live session (`POST /session/end`).
 
 ## IngestResponse
 
-Response from live transcript ingestion.
+Response from live text ingestion.
 
 | Field | Type | Default | Description |
 |-|-|-|-|

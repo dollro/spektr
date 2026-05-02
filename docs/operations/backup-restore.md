@@ -33,7 +33,7 @@ The `manifest.json` records service versions, collection names, and per-artefact
 
 ## Restore
 
-Destructive: Qdrant collections are deleted first, Neo4j is loaded with `--overwrite-destination=true`, Postgres gets `pg_restore --clean`.
+Destructive: Qdrant collections are deleted first, Neo4j is loaded with `--overwrite-destination=true`, Postgres gets `pg_restore --clean --if-exists`.
 
 ```bash
 task restore -- --from backups/20260419-153000 \
@@ -45,7 +45,7 @@ Without the `--yes-i-know-this-wipes-things` flag the script refuses to run. `--
 
 ### Neo4j restore requires service downtime
 
-Neo4j Community Edition doesn't support online restore. `task restore` stops the neo4j container, runs `neo4j-admin database load`, and restarts. Expect a ~30s gap during which any MCP graph query will fail.
+Neo4j Community Edition doesn't support online restore. `task restore` stops the neo4j container, runs `neo4j-admin database load`, and restarts. Expect a ~10-30s gap during which any MCP graph query will fail.
 
 ### Postgres restore rewinds CocoIndex state
 
@@ -55,7 +55,7 @@ After a postgres-only restore, the `ragingestion__cocoindex_tracking` table refl
 
 For a single-node production deployment:
 
-- **Nightly**: `task backup all --prune-older-than 30` via cron.
+- **Nightly**: `task backup -- all --prune-older-than 30` via cron.
 - **Before any risky change**: model swap, schema migration, Neo4j version bump.
 - **Weekly**: ship a copy to off-host storage (e.g. `rclone sync backups/ s3:spektr-backups/`).
 

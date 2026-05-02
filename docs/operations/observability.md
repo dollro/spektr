@@ -9,7 +9,7 @@ Out of the box, tracing is **on** and **stays in the process** — no token, no 
 ```bash
 OBSERVABILITY_LOCAL_ONLY=true      # default
 LOGFIRE_TOKEN=                     # empty
-SERVICE_NAME=spektr
+SERVICE_NAME=spektr                # optional; defaults to "spektr"
 ```
 
 You'll see `trace_id` / `span_id` appear in every JSON log once something starts a span. Useful for:
@@ -41,6 +41,11 @@ Instrumentation is wired in these entrypoints:
 - `server/mcp_server.py`
 - `agent/api.py::lifespan`
 - `scripts/ask.py::main`
+- `services/sharepoint_sync/main.py::main`
+
+FastAPI apps additionally call `instrument_fastapi(app)` after `setup_observability()`. The two FastAPI entrypoints are:
+- `ingestion/live_ingest.py` (module-level)
+- `agent/api.py` (module-level, after app construction)
 
 ## Correlating logs with traces
 

@@ -408,7 +408,13 @@ class TestMCPServer:
 
         tools = await mcp.list_tools()
         tool_names = {t.name for t in tools}
-        assert {"vector_search", "graph_search", "hybrid_search"} <= tool_names
+        assert {
+            "vector_search",
+            "graph_search",
+            "hybrid_search",
+            "list_documents",
+            "list_document_chunks",
+        } <= tool_names
         from config.settings import settings
 
         if settings.multivec_enabled:
@@ -717,45 +723,33 @@ class TestVLMGenerator:
 
 
 class TestLiveIngestModels:
-    def test_transcript_chunk_model(self) -> None:
-        """TranscriptChunk validates required fields."""
-        from server.models import TranscriptChunk
+    def test_live_chunk_model(self) -> None:
+        """LiveChunk validates required fields."""
+        from server.models import LiveChunk
 
-        chunk = TranscriptChunk(
-            session_id="meeting-1",
-            text="Alice: Hello",
-            timestamp="2026-03-06T14:30:00Z",
-            speaker="Alice",
-        )
-        assert chunk.session_id == "meeting-1"
-        assert chunk.speaker == "Alice"
-
-    def test_transcript_chunk_optional_speaker(self) -> None:
-        """TranscriptChunk speaker is optional."""
-        from server.models import TranscriptChunk
-
-        chunk = TranscriptChunk(
-            session_id="meeting-1",
-            text="Hello",
+        chunk = LiveChunk(
+            session_id="session-1",
+            text="text content one",
             timestamp="2026-03-06T14:30:00Z",
         )
-        assert chunk.speaker is None
+        assert chunk.session_id == "session-1"
+        assert chunk.text == "text content one"
 
     def test_session_start_request(self) -> None:
         """SessionStartRequest validates fields."""
         from server.models import SessionStartRequest
 
         req = SessionStartRequest(
-            session_id="meeting-1",
+            session_id="session-1",
             metadata={"title": "Q1 Review"},
         )
-        assert req.session_id == "meeting-1"
+        assert req.session_id == "session-1"
 
     def test_session_end_request(self) -> None:
         """SessionEndRequest defaults archive to False."""
         from server.models import SessionEndRequest
 
-        req = SessionEndRequest(session_id="meeting-1")
+        req = SessionEndRequest(session_id="session-1")
         assert req.archive is False
 
     def test_ingest_response(self) -> None:
@@ -770,16 +764,16 @@ class TestLiveIngestModels:
         assert resp.status == "accepted"
 
     def test_hybrid_search_response_with_session(self) -> None:
-        """HybridSearchResponse supports session_id and transcript_results."""
+        """HybridSearchResponse supports session_id and live_results."""
         from server.models import HybridSearchResponse
 
         resp = HybridSearchResponse(
             query="test",
-            session_id="meeting-1",
-            transcript_results=[],
+            session_id="session-1",
+            live_results=[],
         )
-        assert resp.session_id == "meeting-1"
-        assert resp.transcript_results == []
+        assert resp.session_id == "session-1"
+        assert resp.live_results == []
 
 
 # ---------------------------------------------------------------------------
@@ -795,16 +789,15 @@ class TestSessionAwareVectorSearch:
         mock_embedder.embed_text_query = AsyncMock(return_value=[0.1] * 512)
 
         # Mock Qdrant to return different results per call
-        transcript_point = MagicMock()
-        transcript_point.score = 0.9
-        transcript_point.payload = {
-            "text_content": "Alice: Contract terms",
-            "source_file": "session:meeting-1",
+        live_point = MagicMock()
+        live_point.score = 0.9
+        live_point.payload = {
+            "text_content": "text content one",
+            "source_file": "session:session-1",
             "page_number": 0,
-            "content_type": "transcript",
+            "content_type": "live",
             "metadata": {},
             "timestamp": "2026-03-06T14:32:00Z",
-            "speaker": "Alice",
         }
         kb_point = MagicMock()
         kb_point.score = 0.85
@@ -816,14 +809,14 @@ class TestSessionAwareVectorSearch:
             "metadata": {},
         }
 
-        mock_response_transcript = MagicMock()
-        mock_response_transcript.points = [transcript_point]
+        mock_response_live = MagicMock()
+        mock_response_live.points = [live_point]
         mock_response_kb = MagicMock()
         mock_response_kb.points = [kb_point]
 
         mock_qdrant = MagicMock()
         mock_qdrant.query_points = MagicMock(
-            side_effect=[mock_response_transcript, mock_response_kb]
+            side_effect=[mock_response_live, mock_response_kb]
         )
 
         with (
@@ -832,7 +825,7 @@ class TestSessionAwareVectorSearch:
         ):
             from server.tools.vector_search import vector_search
 
-            results = await vector_search("contract", session_id="meeting-1")
+            results = await vector_search("contract", session_id="session-1")
 
         assert len(results) == 2
         assert mock_qdrant.query_points.call_count == 2
@@ -902,7 +895,7 @@ class TestSessionAwareGraphSearch:
         ):
             from server.tools.graph_search import graph_search
 
-            results = await graph_search("contract", session_id="meeting-1")
+            results = await graph_search("contract", session_id="session-1")
 
         # Should have results from both engines
         assert len(results) >= 2
@@ -940,8 +933,8 @@ class TestSessionAwareHybridSearch:
             return_value=[
                 {
                     "score": 0.9,
-                    "text": "transcript",
-                    "metadata": {"source_type": "transcript"},
+                    "text": "live chunk",
+                    "metadata": {"source_type": "live"},
                 },
                 {"score": 0.8, "text": "kb doc", "metadata": {}},
             ]
@@ -954,25 +947,25 @@ class TestSessionAwareHybridSearch:
         ):
             from server.tools.hybrid_search import hybrid_search
 
-            result = await hybrid_search("test", session_id="meeting-1")
+            result = await hybrid_search("test", session_id="session-1")
 
         # vector_search should receive session_id
         mock_vector.assert_called_once()
-        assert mock_vector.call_args.kwargs.get("session_id") == "meeting-1"
+        assert mock_vector.call_args.kwargs.get("session_id") == "session-1"
         # graph_search should receive session_id
         mock_graph.assert_called_once()
-        assert mock_graph.call_args.kwargs.get("session_id") == "meeting-1"
-        assert result["session_id"] == "meeting-1"
+        assert mock_graph.call_args.kwargs.get("session_id") == "session-1"
+        assert result["session_id"] == "session-1"
 
     @pytest.mark.asyncio
-    async def test_hybrid_search_separates_transcript_results(self) -> None:
-        """Hybrid search separates transcript from KB results."""
+    async def test_hybrid_search_separates_live_results(self) -> None:
+        """Hybrid search separates live chunks from KB results."""
         mock_vector = AsyncMock(
             return_value=[
                 {
                     "score": 0.9,
-                    "text": "transcript chunk",
-                    "metadata": {"source_type": "transcript"},
+                    "text": "live chunk",
+                    "metadata": {"source_type": "live"},
                 },
                 {"score": 0.8, "text": "kb doc", "metadata": {}},
             ]
@@ -985,7 +978,7 @@ class TestSessionAwareHybridSearch:
         ):
             from server.tools.hybrid_search import hybrid_search
 
-            result = await hybrid_search("test", session_id="meeting-1")
+            result = await hybrid_search("test", session_id="session-1")
 
-        assert len(result["transcript_results"]) == 1
+        assert len(result["live_results"]) == 1
         assert len(result["vector_results"]) == 1

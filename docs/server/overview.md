@@ -1,6 +1,6 @@
 # MCP Server Overview
 
-Spektr exposes its RAG search capabilities to LLM agents through a [FastMCP](https://github.com/jlowin/fastmcp) server. The server registers five tools (search + introspection) and optionally enforces Bearer token authentication.
+Spektr exposes its RAG search capabilities to LLM agents through a [FastMCP](https://github.com/jlowin/fastmcp) server. The server registers six tools (search + introspection) — five always on, plus `visual_search` when `MULTIVEC_ENABLED=true` — and optionally enforces Bearer token authentication.
 
 ## Server Setup
 
@@ -17,6 +17,7 @@ mcp.tool()(vector_search)
 mcp.tool()(graph_search)
 mcp.tool()(hybrid_search)
 mcp.tool()(list_documents)
+mcp.tool()(list_document_chunks)
 # visual_search registered only when MULTIVEC_ENABLED=true
 ```
 
@@ -30,6 +31,7 @@ FastMCP inspects each function's signature and docstring to generate the MCP too
 | `graph_search` | yes | Engine-agnostic graph search (GLiNER2 or Graphiti) |
 | `hybrid_search` | yes | Parallel vector + graph fusion with session separation |
 | `list_documents` | yes | Enumerate ingested docs with chunk + page counts |
+| `list_document_chunks` | yes | Exhaustive paginated enumeration of one document's chunks in `(page, chunk_index)` order |
 | `visual_search` | needs `MULTIVEC_ENABLED=true` | ColBERT multi-vector search for visual content |
 
 See [Search Tools](search-tools.md) for full parameter and return schema documentation. See [Client Setup](client-setup.md) for wiring the server into Claude Code, Cursor, or any other MCP-aware agent.
@@ -58,7 +60,7 @@ On startup the server logs the transport, endpoint URL, and list of registered t
 
 ```
 MCP server starting on http http://0.0.0.0:8080/mcp with tools: vector_search,
-graph_search, hybrid_search, list_documents
+graph_search, hybrid_search, list_documents, list_document_chunks
 ```
 
 ## Middleware Stack

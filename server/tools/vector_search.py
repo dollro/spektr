@@ -1,7 +1,7 @@
 """Dense vector search tool for MCP server.
 
 Embeds a query and searches the Qdrant dense collection.
-When session_id is provided, runs dual queries for transcript + KB.
+When session_id is provided, runs dual queries for live session + KB.
 """
 
 from __future__ import annotations
@@ -47,7 +47,7 @@ async def vector_search(
     """Search documents by semantic similarity.
 
     When session_id is provided, runs two parallel queries:
-    1. Transcript chunks from the active session
+    1. Text chunks from the active live session
     2. Bulk KB results (excluding live data)
 
     Args:
@@ -55,7 +55,7 @@ async def vector_search(
         limit: Maximum number of results (default 10).
         content_type: Optional MIME type filter.
         source_file: Optional source file name filter.
-        session_id: Optional session ID for live meeting context.
+        session_id: Optional session ID for live session context.
         _skip_rerank: Internal flag — skip reranking.
     """
     if not query or not query.strip():
@@ -137,8 +137,8 @@ def _dual_query(
     content_type: str | None,
     source_file: str | None,
 ) -> list[dict]:  # type: ignore[type-arg]
-    """Run dual queries: transcript (by session) + KB (excluding live)."""
-    transcript_filter = models.Filter(
+    """Run dual queries: live session (by session_id) + KB (excluding live)."""
+    live_filter = models.Filter(
         must=[
             models.FieldCondition(
                 key="session_id",
@@ -182,10 +182,10 @@ def _dual_query(
         ],
     )
 
-    transcript_resp = qdrant.query_points(
+    live_resp = qdrant.query_points(
         collection_name=DENSE_COLLECTION,
         query=query_vector,
-        query_filter=transcript_filter,
+        query_filter=live_filter,
         limit=limit,
         with_payload=True,
     )
@@ -199,12 +199,12 @@ def _dual_query(
 
     results: list[dict] = []  # type: ignore[type-arg]
 
-    # Transcript results sorted by timestamp
-    transcript_points = sorted(
-        transcript_resp.points,
+    # Live session results sorted by timestamp
+    live_points = sorted(
+        live_resp.points,
         key=lambda p: (p.payload or {}).get("timestamp", ""),
     )
-    for point in transcript_points:
+    for point in live_points:
         payload = point.payload or {}
         results.append(
             SearchResult(
@@ -215,8 +215,7 @@ def _dual_query(
                 content_type=payload.get("content_type", ""),
                 metadata={
                     **payload.get("metadata", {}),
-                    "source_type": "transcript",
-                    "speaker": payload.get("speaker"),
+                    "source_type": "live",
                     "timestamp": payload.get("timestamp"),
                 },
             ).model_dump()

@@ -91,7 +91,7 @@ In production behind the Caddy reverse proxy:
 ## Claude Code specifics
 
 - Claude Code reads `.mcp.json` at session start — there is **no hot reload**. After editing the file, exit (`/exit`) and run `claude` again.
-- On startup Claude Code prompts once: *"Approve MCP server 'spektr'?"*. Accept → the tools are injected as `mcp__spektr__vector_search`, `mcp__spektr__graph_search`, `mcp__spektr__hybrid_search`, `mcp__spektr__list_documents`.
+- On startup Claude Code prompts once: *"Approve MCP server 'spektr'?"*. Accept → the tools are injected as `mcp__spektr__vector_search`, `mcp__spektr__graph_search`, `mcp__spektr__hybrid_search`, `mcp__spektr__list_documents`, `mcp__spektr__list_document_chunks` (and `mcp__spektr__visual_search` when `MULTIVEC_ENABLED=true`).
 - `/mcp` slash command shows the active server list and connection state; useful for debugging a broken config.
 
 ## Cursor specifics

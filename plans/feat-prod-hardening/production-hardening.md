@@ -80,7 +80,7 @@ Grouped into two logical commits:
 
 **Files to change:**
 - `ingestion/embedders/jina.py` and `ingestion/embedders/voyage.py`: expose `model_name: str` and `dim: int` properties (probably already known internally — surface them). Keep the `Embedder` protocol in `ingestion/embedder.py` requiring both.
-- `ingestion/pipeline.py`: in the dense-point payload construction (lines ~229-241) and in `ingestion/live_ingest.py` (lines ~137-147 for transcript payloads), add `embedder_model`, `embedder_dim` keys.
+- `ingestion/pipeline.py`: in the dense-point payload construction (lines ~229-241) and in `ingestion/live_ingest.py` (lines ~137-147 for live-chunk payloads), add `embedder_model`, `embedder_dim` keys.
 - `scripts/doctor.py`: scroll a sample of points, detect mixed `embedder_model`/`embedder_dim` across the collection, warn if inconsistent with current `settings.embedding_provider`.
 
 **Tests:**
@@ -244,7 +244,7 @@ Four short additions:
 
 ### Interaction with live-ingest Path B
 - Atomicity: live ingest should return HTTP 5xx on ingestion failure rather than returning `status=accepted` silently. A middleware increments the same `_failure_tracker` and returns 503 with `Retry-After` when over threshold.
-- Versioning: live transcript payloads get the same `embedder_model`/`embedder_dim` keys.
+- Versioning: live-chunk payloads get the same `embedder_model`/`embedder_dim` keys.
 - Observability: `setup_observability()` called once per process — FastAPI instrumentation covers Path B automatically.
 - Backups: path-agnostic.
 

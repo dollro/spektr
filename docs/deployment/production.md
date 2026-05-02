@@ -4,26 +4,32 @@ This page describes the fully containerized deployment for a single Linux VM. Th
 
 ## Architecture
 
-Everything runs inside one Docker Compose project on a private `spektr-net`. Only Caddy publishes ports to the internet; data services are not reachable from outside the network.
+Everything runs inside one Docker Compose project on a private `spektr-net`. The `mcp` service additionally joins an external `proxy` network so an existing Traefik instance can route traffic to it. Data services are not reachable from outside `spektr-net`.
 
 ```
 Internet
    │
    ▼ :80 / :443
-┌─────────┐
-│  caddy  │  auto-TLS (Let's Encrypt)
-└────┬────┘
+┌─────────────────┐
+│  Traefik        │  external instance, auto-TLS (Let's Encrypt)
+│  (proxy net)    │
+└────┬────────────┘
+     │ proxy network (external)
+     ▼
+┌─────────────────┐
+│  mcp            │  python -m server.mcp_server, :8080
+└────┬────────────┘
      │ spektr-net
-     ├──► mcp          (python -m server.mcp_server, :8080)
-     ├──► agent-api    (python -m agent.api,         :8001)
-     └──► ingest-live  (python -m ingestion.pipeline --live)
-              │
-              ├──► qdrant    (:6333, internal only)
-              ├──► neo4j     (:7687, internal only)
-              └──► postgres  (:5432, internal only)
+     ├──► agent-api       (python -m agent.api,                :8001)
+     ├──► ingest-live     (python -m ingestion.pipeline --live)
+     ├──► sharepoint-sync (python -m services.sharepoint_sync, optional)
+     │
+     ├──► qdrant    (:6333, internal only; 127.0.0.1 publish for backup scripts)
+     ├──► neo4j     (:7687, internal only)
+     └──► postgres  (:5432, internal only)
 ```
 
-The three app services (`mcp`, `agent-api`, `ingest-live`) all share a single image built from the repo `Dockerfile`.
+The app services (`mcp`, `agent-api`, `ingest-live`, `sharepoint-sync`, one-shot `ingest`) all share a single image built from the repo `Dockerfile`.
 
 ## Files
 
@@ -31,8 +37,8 @@ The three app services (`mcp`, `agent-api`, `ingest-live`) all share a single im
 |-|-|
 | `Dockerfile` | Multi-stage Python 3.13 + uv image. Non-root user, tini as PID 1 |
 | `.dockerignore` | Keeps the build context small (excludes `documents/`, `backups/`, `state/`, …) |
-| `docker-compose.prod.yml` | Full production stack |
-| `Caddyfile` | Reverse proxy config with auto-TLS — **edit before deploy** |
+| `docker-compose.prod.yml` | Full production stack with Traefik labels on `mcp` |
+| `Caddyfile` | Optional sample config for a self-managed Caddy reverse proxy — only used if you choose the "Alternative: Caddy" path below |
 | `.env.example` | Template; copy to `.env.prod` on the VM and override hostnames + secrets |
 
 ## Prerequisites on the VM
@@ -42,12 +48,12 @@ The three app services (`mcp`, `agent-api`, `ingest-live`) all share a single im
 | Docker Engine 24+ | Container runtime |
 | Docker Compose plugin v2+ | `docker compose ...` |
 | go-task | Task shortcuts (`task prod:up` …). Optional — you can call `docker compose` directly. |
-| Public DNS | A/AAAA records for `mcp.yourdomain.tld` + `agent.yourdomain.tld` pointing at the VM |
-| Open ports | 80 and 443 inbound (ACME HTTP-01 + TLS traffic) |
+| External Traefik | An existing Traefik instance with a Docker-attached external network named `proxy`, configured with a `tls_resolver` certresolver (e.g. Let's Encrypt). Spektr's `mcp` service joins this network. |
+| Public DNS | A/AAAA record for `${MCP_PUBLIC_DOMAIN}` (and any other hostnames you front) pointing at the Traefik VM |
 
-If you're fronting Spektr with an existing reverse proxy (nginx, Traefik on the host, a cloud load balancer), skip Caddy — see [Without Caddy](#without-caddy) below.
+If you don't have an external Traefik, see [Alternative: Caddy](#alternative-caddy) or [Alternative: any other reverse proxy](#alternative-any-other-reverse-proxy).
 
-## Deploy
+## Deploy (Traefik — default)
 
 ### 1. Clone the repo on the VM
 
@@ -65,33 +71,17 @@ cp .env.example .env.prod
 Edit `.env.prod`. Required values in production:
 
 - `NEO4J_PASSWORD`, `POSTGRES_PASSWORD` — strong, randomly generated
-- `JINA_API_KEY`
+- `JINA_API_KEY` (or `VOYAGE_API_KEY` / `OPENROUTER_API_KEY` depending on `EMBEDDING_PROVIDER`)
 - `LLM_API_KEY`
 - `MCP_API_KEY` — Bearer token clients must present
+- `MCP_PUBLIC_DOMAIN` — public hostname Traefik should route to `mcp` (e.g. `mcp.example.com`)
 - `INGEST_API_KEY` — gates `/session/start` on the live-ingest endpoint
-- AWS block (`AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `S3_BUCKET`, `S3_SQS_QUEUE_URL`) if you're using live ingestion
+- AWS block (`AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `S3_BUCKET_NAME`, `S3_SQS_QUEUE_URL`) when `DOCUMENT_SOURCE=s3`
+- SharePoint block (`SHAREPOINT_*`) when `DOCUMENT_SOURCE=sharepoint`
 
 Service hostnames use container names: `qdrant`, `neo4j`, `postgres`. Do not change these — other services resolve each other by name on `spektr-net`.
 
-### 3. Configure Caddy
-
-Edit `Caddyfile`:
-
-```caddyfile
-{
-    email you@yourdomain.tld
-}
-
-mcp.yourdomain.tld {
-    reverse_proxy mcp:8080
-}
-
-agent.yourdomain.tld {
-    reverse_proxy agent-api:8001
-}
-```
-
-### 4. Build the image and start the stack
+### 3. Build the image and start the stack
 
 ```bash
 task prod:build
@@ -105,15 +95,15 @@ docker compose -f docker-compose.prod.yml build
 docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
 ```
 
-### 5. Verify
+Traefik auto-discovers the `mcp` container via the Docker labels in `docker-compose.prod.yml` and provisions a Let's Encrypt certificate the first time the route is hit. The labels also disable response buffering so streamable-http / SSE responses flow through immediately.
+
+### 4. Verify
 
 ```bash
-task prod:ps                 # docker compose ps
-task prod:logs -- mcp        # follow mcp logs
-curl https://mcp.yourdomain.tld/health   # or whatever health endpoint you expose
+task prod:ps                          # docker compose ps
+task prod:logs -- mcp                 # follow mcp logs
+curl https://${MCP_PUBLIC_DOMAIN}/mcp # Traefik routes to mcp:8080
 ```
-
-Caddy takes ~10-60 seconds to obtain a certificate the first time.
 
 ## Day-2 operations
 
@@ -184,21 +174,9 @@ See [Backup & Restore](../operations/backup-restore.md) for the full procedure (
 
 `.env.prod` lives on the VM and is gitignored. Keep it `chmod 600`, owner root (or the user running Docker). For multi-operator setups, graduate to Docker secrets / a vault — not included by default because a single-VM deploy does not need it.
 
-## Traefik Integration (default)
+## Alternative: any other reverse proxy
 
-The prod compose is designed for an external Traefik instance. The `mcp` service joins Traefik's `proxy` network and declares routing labels. Caddy is not included.
-
-Set `MCP_PUBLIC_DOMAIN` in `.env.prod` to the domain Traefik should route:
-
-```bash
-MCP_PUBLIC_DOMAIN=mcp.example.com
-```
-
-Traefik auto-discovers the container via Docker labels and provisions a Let's Encrypt certificate. The `MCP_API_KEY` bearer token handles application-level auth.
-
-## Without Traefik
-
-If you don't have an external Traefik, publish the app services on localhost and front them with your own reverse proxy (nginx, Caddy, cloud LB):
+If you don't have an external Traefik, publish the app services on localhost and front them with your own reverse proxy (nginx, cloud LB, etc.):
 
 ```yaml
 mcp:
@@ -210,7 +188,48 @@ agent-api:
     - "127.0.0.1:8001:8001"
 ```
 
-Remove the `proxy` external network and Traefik labels from the `mcp` service.
+Remove the `proxy` external network entry and the `traefik.*` labels from the `mcp` service. Then point your reverse proxy at `127.0.0.1:8080`.
+
+## Alternative: Caddy
+
+The repo ships a sample `Caddyfile` for users who prefer Caddy with built-in Let's Encrypt over Traefik. **Caddy is not part of `docker-compose.prod.yml`** — you have to add the service yourself. A minimal addition:
+
+```yaml
+caddy:
+  image: caddy:2-alpine
+  ports:
+    - "80:80"
+    - "443:443"
+  volumes:
+    - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    - caddy_data:/data
+    - caddy_config:/config
+  networks:
+    - spektr-net
+  restart: unless-stopped
+
+# also add to top-level volumes:
+# caddy_data:
+# caddy_config:
+```
+
+Then drop the `proxy` external network and the `traefik.*` labels from the `mcp` service so it stays on `spektr-net` only, and edit `Caddyfile` to set the email and your two domains:
+
+```caddyfile
+{
+    email you@yourdomain.tld
+}
+
+mcp.yourdomain.tld {
+    reverse_proxy mcp:8080
+}
+
+agent.yourdomain.tld {
+    reverse_proxy agent-api:8001
+}
+```
+
+Caddy takes ~10-60 seconds to obtain a certificate the first time. Open ports 80 and 443 on the VM (security group / UFW) so ACME HTTP-01 succeeds.
 
 ## Sizing
 
@@ -224,21 +243,21 @@ Rough baseline for a small instance:
 | mcp | 512 MB | mostly idle |
 | agent-api | 512 MB | |
 | ingest-live | 1-2 GB | spikes during extraction |
-| caddy | 64 MB | |
 
 A 4 vCPU / 8 GB VM handles a modest deployment. Bulk ingestion is the CPU-heavy step — run it off-peak or on a larger instance.
 
 ## Image size
 
-The app image weighs in at ~2-3 GB because of `docling`, `onnxruntime`, and `pymupdf`. All three app services share the same image, so you only pay for it once on disk. If that becomes a constraint, we can split into a slim `spektr-mcp` image (no ingestion deps) and a full `spektr-ingest` image — not worth the complexity today.
+The app image weighs in at ~2-3 GB because of `docling`, `onnxruntime`, and `pymupdf`. All app services share the same image, so you only pay for it once on disk. If that becomes a constraint, we can split into a slim `spektr-mcp` image (no ingestion deps) and a full `spektr-ingest` image — not worth the complexity today.
 
 ## Troubleshooting
 
-### Caddy can't get a certificate
+### Traefik isn't routing to mcp
 
-- Check that ports 80 and 443 are open on the VM (security group / UFW).
-- Verify `mcp.yourdomain.tld` and `agent.yourdomain.tld` resolve to the VM's public IP.
-- Inspect: `task prod:logs -- caddy`.
+- Confirm the external `proxy` network exists and Traefik is attached to it: `docker network inspect proxy`.
+- Check Traefik picked up the labels: visit Traefik's dashboard or `docker logs <traefik-container>`.
+- Verify `MCP_PUBLIC_DOMAIN` resolves to the Traefik VM's public IP.
+- Inspect: `task prod:logs -- mcp` for app-side errors.
 
 ### MCP returns 401
 

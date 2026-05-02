@@ -1,8 +1,8 @@
-"""Live transcript ingestion via FastAPI.
+"""Live text ingestion via FastAPI.
 
-Provides HTTP endpoints for real-time meeting transcript ingestion:
-- POST /session/start — create a meeting session (requires INGEST_API_KEY)
-- POST /ingest/transcript — ingest a transcript chunk (requires session token)
+Provides HTTP endpoints for real-time text input:
+- POST /session/start — create a live session (requires INGEST_API_KEY)
+- POST /ingest/chunk — ingest a single text chunk (requires session token)
 - POST /session/end — end session (requires session token)
 """
 
@@ -23,9 +23,9 @@ from ingestion.embedder import Embedder, create_embedder
 from ingestion.graphiti_client import get_graphiti
 from server.models import (
     IngestResponse,
+    LiveChunk,
     SessionEndRequest,
     SessionStartRequest,
-    TranscriptChunk,
 )
 
 logger = logging.getLogger(__name__)
@@ -90,7 +90,7 @@ def _make_point_id(key: str) -> str:
 
 @app.post("/session/start", dependencies=[Depends(_require_ingest_api_key)])
 async def start_session(req: SessionStartRequest) -> dict:  # type: ignore[type-arg]
-    """Create a new meeting session. Returns a session_token for subsequent calls."""
+    """Create a new live session. Returns a session_token for subsequent calls."""
     global _active_session  # noqa: PLW0603
 
     if _active_session is not None:
@@ -116,9 +116,9 @@ async def start_session(req: SessionStartRequest) -> dict:  # type: ignore[type-
     }
 
 
-@app.post("/ingest/transcript", dependencies=[Depends(_require_session_token)])
-async def ingest_transcript(chunk: TranscriptChunk) -> IngestResponse:
-    """Ingest a single transcript chunk."""
+@app.post("/ingest/chunk", dependencies=[Depends(_require_session_token)])
+async def ingest_chunk(chunk: LiveChunk) -> IngestResponse:
+    """Ingest a single text chunk."""
     if _active_session is None:
         raise HTTPException(status_code=404, detail="No active session")
     if _active_session["session_id"] != chunk.session_id:
@@ -140,10 +140,9 @@ async def ingest_transcript(chunk: TranscriptChunk) -> IngestResponse:
                 vector=vectors[0],
                 payload={
                     "source_file": f"session:{chunk.session_id}",
-                    "content_type": "transcript",
+                    "content_type": "live",
                     "is_live": True,
                     "session_id": chunk.session_id,
-                    "speaker": chunk.speaker,
                     "timestamp": chunk.timestamp.isoformat(),
                     "text_content": chunk.text,
                     "page_number": 0,
@@ -165,7 +164,7 @@ async def ingest_transcript(chunk: TranscriptChunk) -> IngestResponse:
     )
 
 
-async def _graphiti_ingest(chunk: TranscriptChunk) -> None:
+async def _graphiti_ingest(chunk: LiveChunk) -> None:
     """Background task: ingest chunk as Graphiti episode."""
     try:
         client = await get_graphiti()
@@ -173,7 +172,7 @@ async def _graphiti_ingest(chunk: TranscriptChunk) -> None:
         await client.add_episode(
             name=episode_name,
             episode_body=chunk.text,
-            source_description=f"Meeting transcript, speaker: {chunk.speaker or 'unknown'}",
+            source_description=f"Live session chunk for session {chunk.session_id}",
             reference_time=chunk.timestamp,
             group_id=chunk.session_id,
         )

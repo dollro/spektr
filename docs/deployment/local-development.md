@@ -50,11 +50,12 @@ cp .env.example .env
 
 Edit `.env` and fill in the required values. At minimum you need:
 
-- `JINA_API_KEY` — Jina v4 API key
+- `JINA_API_KEY` (or `VOYAGE_API_KEY` / `OPENROUTER_API_KEY` matching `EMBEDDING_PROVIDER`)
 - `NEO4J_PASSWORD` — Neo4j password (must match `docker-compose.yml`)
 - `LLM_API_KEY` — LLM provider API key
-- `MCP_API_KEY` — Bearer token for MCP server auth
-- `S3_BUCKET_NAME` and `S3_SQS_QUEUE_URL` — AWS S3 source (or use LocalStack, see [AWS Setup](aws-setup.md#localstack-local-development))
+- `MCP_API_KEY` — Bearer token for MCP server auth (leave empty to disable auth in dev)
+
+`DOCUMENT_SOURCE` defaults to `local` and the pipeline reads files from `LOCAL_DOCUMENTS_PATH` (default `documents/` in the repo). Drop PDFs / images / text files into that directory and they will be picked up. LocalStack/S3 is **optional** — only needed if you set `DOCUMENT_SOURCE=s3` to test the S3 + SQS path locally (see [AWS Setup](aws-setup.md#localstack-local-development)).
 
 See [Environment Variables](../configuration/environment.md) for the full reference.
 
@@ -64,7 +65,7 @@ See [Environment Variables](../configuration/environment.md) for the full refere
 uv run python -m ingestion.pipeline
 ```
 
-This processes documents from S3, generates embeddings, stores vectors in Qdrant, and builds the knowledge graph in Neo4j.
+With the default `DOCUMENT_SOURCE=local`, this reads from `LOCAL_DOCUMENTS_PATH`, generates embeddings, stores vectors in Qdrant, and builds the knowledge graph in Neo4j. With `DOCUMENT_SOURCE=s3` (or `sharepoint`), it pulls from the configured remote source instead.
 
 ### 6. Start the MCP server
 
@@ -138,7 +139,7 @@ curl http://localhost:6333/healthz
 
 ### Pipeline hangs on S3 source
 
-If running without AWS, ensure `S3_BUCKET_NAME` and `S3_SQS_QUEUE_URL` are configured. For local-only development, use [LocalStack](aws-setup.md#localstack-local-development).
+Only relevant when `DOCUMENT_SOURCE=s3`. Ensure `S3_BUCKET_NAME` and `S3_SQS_QUEUE_URL` are configured (the pipeline fails fast at startup otherwise). For S3 testing without real AWS, use [LocalStack](aws-setup.md#localstack-local-development). For purely local work, leave `DOCUMENT_SOURCE` unset (defaults to `local`).
 
 ### Import errors
 

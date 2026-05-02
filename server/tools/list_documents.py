@@ -2,7 +2,7 @@
 
 Scrolls the Qdrant dense collection and returns the distinct
 source files with per-document chunk + page counts. Excludes
-live transcript sessions (is_live=True).
+live session data (is_live=True).
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ async def list_documents(limit: int = 100) -> list[dict]:  # type: ignore[type-a
     """List distinct documents in the knowledge base.
 
     Returns one entry per source file with chunk and page counts.
-    Excludes live transcript data (use session-aware search for that).
+    Excludes live session data (use session-aware search for that).
 
     Args:
         limit: Max number of documents to return (default 100).

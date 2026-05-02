@@ -27,7 +27,7 @@
 
 ## 1. The Problem We're Solving
 
-Imagine you have a growing collection of documents: quarterly financial reports as PDFs, scanned invoices, architecture diagrams, meeting notes in markdown, presentation slides. Some are text-heavy, some are scanned images with tables and charts that no OCR tool can reliably parse.
+Imagine you have a growing collection of documents: quarterly financial reports as PDFs, scanned invoices, architecture diagrams, project notes in markdown, presentation slides. Some are text-heavy, some are scanned images with tables and charts that no OCR tool can reliably parse.
 
 You want an AI agent to be able to answer questions like:
 
@@ -995,8 +995,8 @@ See `ingestion/graph_engine.py` for the `GraphEngine` protocol and factory.
 
 The body covers only **Path A** (bulk files from local/S3 via CocoIndex). The current system adds **Path B**:
 
-- **Path B — Live streaming:** FastAPI endpoint (`ingestion/live_ingest.py`) accepts streaming text (e.g., meeting transcripts) via `POST /ingest/transcript`, written into Qdrant with `session_id` and `is_live` payload tags, and into Neo4j via Graphiti temporal episodes.
-- Session lifecycle: `POST /session/start` → `/ingest/transcript` → `/session/end`.
+- **Path B — Live streaming:** FastAPI endpoint (`ingestion/live_ingest.py`) accepts streaming text via `POST /ingest/chunk`, written into Qdrant with `session_id` and `is_live` payload tags, and into Neo4j via Graphiti temporal episodes.
+- Session lifecycle: `POST /session/start` → `/ingest/chunk` → `/session/end`.
 - Both paths write to the same `documents_dense` collection; live content is distinguished by payload filters.
 - MCP search tools are **session-aware** — they can scope or prioritize results by `session_id`.
 
@@ -1005,7 +1005,7 @@ The body covers only **Path A** (bulk files from local/S3 via CocoIndex). The cu
 Two independent opt-in auth layers, both disabled when the corresponding key is empty:
 
 - **MCP server:** `MCP_API_KEY` — Bearer token middleware on all tool calls.
-- **Live ingest:** two-layer auth — `INGEST_API_KEY` gates `/session/start`, which returns an **ephemeral per-session token** required for `/ingest/transcript` and `/session/end`.
+- **Live ingest:** two-layer auth — `INGEST_API_KEY` gates `/session/start`, which returns an **ephemeral per-session token** required for `/ingest/chunk` and `/session/end`.
 
 ### C.5 Embedding Provider Abstraction
 

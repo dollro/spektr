@@ -69,7 +69,7 @@ The live ingest API (`ingestion/live_ingest.py`) uses a two-layer auth scheme: a
 ### Flow
 
 1. **Start session** — `POST /session/start` with `Authorization: Bearer <INGEST_API_KEY>`. Returns a `session_token`.
-2. **Ingest chunks** — `POST /ingest/transcript` with `Authorization: Bearer <session_token>`.
+2. **Ingest chunks** — `POST /ingest/chunk` with `Authorization: Bearer <session_token>`.
 3. **End session** — `POST /session/end` with `Authorization: Bearer <session_token>`. Token is invalidated.
 
 ### Design

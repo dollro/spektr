@@ -2,7 +2,7 @@
 
 Engine-agnostic: dispatches to whichever GraphEngine is configured
 via the GRAPH_ENGINE setting. When session_id is provided, also
-queries Graphiti for temporal meeting context.
+queries Graphiti for temporal session context.
 """
 
 from __future__ import annotations
@@ -24,14 +24,14 @@ async def graph_search(
     """Search the knowledge graph for entities and relationships.
 
     When session_id is provided, queries both:
-    1. Graphiti (temporal facts from live meeting, filtered by group_id)
+    1. Graphiti (temporal facts from the live session, filtered by group_id)
     2. The configured graph engine (GLiNER2 entities from bulk KB)
 
     Args:
         query: Search text.
         search_type: 'entity' (default). Reserved for future modes.
         limit: Maximum results (default 10).
-        session_id: Optional session ID for live meeting context.
+        session_id: Optional session ID for live session context.
     """
     if not query or not query.strip():
         return []
@@ -45,7 +45,7 @@ async def graph_search(
         results: list[dict] = []  # type: ignore[type-arg]
 
         if session_id is not None:
-            # Query Graphiti for temporal meeting facts
+            # Query Graphiti for temporal session facts
             try:
                 from ingestion.graphiti_client import get_graphiti
 

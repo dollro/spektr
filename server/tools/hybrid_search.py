@@ -2,7 +2,7 @@
 
 Runs dense vector search and graph search in parallel,
 returning results from both for comprehensive retrieval.
-When session_id is provided, separates transcript results
+When session_id is provided, separates live session results
 from KB results.
 """
 
@@ -28,19 +28,19 @@ async def hybrid_search(
     Runs semantic vector search and graph entity search in
     parallel, returning results from both sources.
 
-    When session_id is provided, transcript results are separated
+    When session_id is provided, live session results are separated
     from KB results for clearer presentation to the LLM.
 
     Args:
         query: Natural language search query.
         limit: Max results per backend (default 10).
-        session_id: Optional session ID for live meeting context.
+        session_id: Optional session ID for live session context.
     """
     if not query or not query.strip():
         return {
             "vector_results": [],
             "graph_results": [],
-            "transcript_results": [],
+            "live_results": [],
             "query": query,
             "session_id": session_id,
             "strategy": "parallel",
@@ -70,16 +70,16 @@ async def hybrid_search(
         graph_results = [{"error": "Graph search unavailable"}]
         errors.append(f"graph_search: {exc}")
 
-    # Separate transcript from KB results when session is active
-    transcript_results: list[dict] = []  # type: ignore[type-arg]
+    # Separate live session results from KB results when session is active
+    live_results: list[dict] = []  # type: ignore[type-arg]
     kb_results: list[dict] = []  # type: ignore[type-arg]
 
     has_vector_error = any("error" in r for r in vector_results)
     if session_id and not has_vector_error:
         for r in vector_results:
             meta = r.get("metadata", {})
-            if meta.get("source_type") == "transcript":
-                transcript_results.append(r)
+            if meta.get("source_type") == "live":
+                live_results.append(r)
             else:
                 kb_results.append(r)
     else:
@@ -103,7 +103,7 @@ async def hybrid_search(
 
     result: dict = {  # type: ignore[type-arg]
         "vector_results": kb_results,
-        "transcript_results": transcript_results,
+        "live_results": live_results,
         "graph_results": graph_results,
         "query": query,
         "session_id": session_id,

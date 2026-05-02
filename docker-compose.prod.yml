@@ -21,6 +21,9 @@ volumes:
   neo4j_data:
   postgres_data:
   ingest_state:
+  # Shared between sharepoint-sync (writer) and ingest-live (reader, in
+  # LocalFile source mode). Used only when ingesting from SharePoint.
+  sharepoint_documents:
 
 x-app-image: &app-image
   build:
@@ -120,6 +123,18 @@ services:
       - postgres
     volumes:
       - ingest_state:/app/state
+      # Shared with sharepoint-sync. Ignored when S3_BUCKET_NAME +
+      # S3_SQS_QUEUE_URL are set (CocoIndex picks AmazonS3 source instead).
+      - sharepoint_documents:/app/documents
+
+  sharepoint-sync:
+    <<: *app-image
+    command: ["python", "-m", "services.sharepoint_sync"]
+    depends_on:
+      - postgres
+    volumes:
+      - ingest_state:/app/state
+      - sharepoint_documents:/app/documents
 
   # One-shot batch ingest. Run via:
   #   docker compose -f docker-compose.prod.yml run --rm ingest

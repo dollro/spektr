@@ -78,7 +78,7 @@ class TestLiveIngestE2E:
     async def test_ingest_and_search_with_session(
         self, qdrant_client, mock_embedder, mock_graphiti, patched_app
     ) -> None:
-        """Ingested transcript chunks are searchable via vector_search."""
+        """Ingested live chunks are searchable via vector_search."""
         async with AsyncClient(
             transport=ASGITransport(app=patched_app), base_url="http://test"
         ) as client:
@@ -90,19 +90,18 @@ class TestLiveIngestE2E:
             assert resp.status_code == 200
 
             # Ingest two chunks
-            for i, (text, speaker) in enumerate(
+            for i, text in enumerate(
                 [
-                    ("We should migrate the database to PostgreSQL.", "Alice"),
-                    ("I agree, the current SQLite setup won't scale.", "Bob"),
+                    "We should migrate the database to PostgreSQL.",
+                    "I agree, the current SQLite setup won't scale.",
                 ]
             ):
                 resp = await client.post(
-                    "/ingest/transcript",
+                    "/ingest/chunk",
                     json={
                         "session_id": "e2e-1",
                         "text": text,
                         "timestamp": f"2026-03-07T10:0{i}:00Z",
-                        "speaker": speaker,
                     },
                 )
                 assert resp.status_code == 200
@@ -123,8 +122,7 @@ class TestLiveIngestE2E:
         payloads = [p.payload for p in points]
         assert all(p["is_live"] is True for p in payloads)
         assert all(p["session_id"] == "e2e-1" for p in payloads)
-        speakers = {p["speaker"] for p in payloads}
-        assert speakers == {"Alice", "Bob"}
+        assert all(p["content_type"] == "live" for p in payloads)
 
         # Search with session_id via vector_search
         with (
@@ -136,13 +134,10 @@ class TestLiveIngestE2E:
             results = await vector_search("database migration", session_id="e2e-1")
 
         assert len(results) >= 1
-        transcript_results = [
-            r for r in results if r.get("metadata", {}).get("source_type") == "transcript"
+        live_results = [
+            r for r in results if r.get("metadata", {}).get("source_type") == "live"
         ]
-        assert len(transcript_results) >= 1
-        assert any(
-            "Alice" in str(r["metadata"].get("speaker", "")) for r in transcript_results
-        )
+        assert len(live_results) >= 1
 
         # Graphiti was called for both chunks
         assert mock_graphiti.add_episode.call_count == 2
@@ -159,12 +154,11 @@ class TestLiveIngestE2E:
                 json={"session_id": "e2e-archive"},
             )
             await client.post(
-                "/ingest/transcript",
+                "/ingest/chunk",
                 json={
                     "session_id": "e2e-archive",
                     "text": "Archivable content.",
                     "timestamp": "2026-03-07T11:00:00Z",
-                    "speaker": "Carol",
                 },
             )
             await asyncio.sleep(0.1)
@@ -199,7 +193,7 @@ class TestLiveIngestE2E:
                 json={"session_id": "e2e-discard"},
             )
             await client.post(
-                "/ingest/transcript",
+                "/ingest/chunk",
                 json={
                     "session_id": "e2e-discard",
                     "text": "Disposable content.",

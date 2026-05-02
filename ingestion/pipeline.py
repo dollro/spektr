@@ -48,22 +48,26 @@ def _get_qdrant_client() -> QdrantClient:
     return _qdrant_client
 
 
+# globset patterns: bare *.pdf matches a single path segment, so it would
+# miss files in subdirectories. Use **/*.ext to cover any depth — required
+# for the SharePoint syncer (which mirrors folder structure) and harmless
+# for flat layouts.
 _SUPPORTED_PATTERNS = [
-    "*.pdf",
-    "*.png",
-    "*.jpg",
-    "*.jpeg",
-    "*.gif",
-    "*.bmp",
-    "*.webp",
-    "*.md",
-    "*.txt",
-    "*.csv",
-    "*.json",
-    "*.xml",
-    "*.html",
-    "*.yaml",
-    "*.yml",
+    "**/*.pdf",
+    "**/*.png",
+    "**/*.jpg",
+    "**/*.jpeg",
+    "**/*.gif",
+    "**/*.bmp",
+    "**/*.webp",
+    "**/*.md",
+    "**/*.txt",
+    "**/*.csv",
+    "**/*.json",
+    "**/*.xml",
+    "**/*.html",
+    "**/*.yaml",
+    "**/*.yml",
 ]
 
 
@@ -684,6 +688,15 @@ def _use_s3_source() -> bool:
     return settings.document_source == "s3"
 
 
+def _describe_watched_source() -> str:
+    """Human-readable label for the source CocoIndex is currently watching."""
+    if settings.document_source == "s3":
+        return "SQS"
+    if settings.document_source == "sharepoint":
+        return f"local mirror at {settings.local_documents_path} (fed by sharepoint-sync)"
+    return f"local filesystem at {settings.local_documents_path}"
+
+
 @cocoindex.flow_def(name="RagIngestion")
 def rag_ingestion_flow(
     flow_builder: cocoindex.FlowBuilder,
@@ -780,10 +793,16 @@ def run_pipeline(live: bool = False) -> None:
     # Setup and run pipeline
     cocoindex.setup_all_flows()
     if live:
+        watched = _describe_watched_source()
         logger.info(
             "Entering live mode — watching %s for changes. Press Ctrl-C to stop.",
-            "SQS" if _use_s3_source() else "local filesystem",
+            watched,
         )
+        if settings.document_source == "sharepoint":
+            logger.info(
+                "DOCUMENT_SOURCE=sharepoint: ensure `task sharepoint-sync` "
+                "is also running so the local mirror gets populated."
+            )
     run_async(
         cocoindex.update_all_flows_async(
             cocoindex.FlowLiveUpdaterOptions(

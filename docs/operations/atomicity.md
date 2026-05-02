@@ -55,12 +55,18 @@ After fixing the root cause:
 sqlite3 state/ingestion_failures.db \
   "DELETE FROM ingestion_failures WHERE source_file = 'bad.pdf';"
 
-# 2. Tell CocoIndex to reprocess — task doctor-fix handles this
-task doctor-fix         # interactive; deletes orphan tracking rows
-
-# 3. Run ingest
+# 2. Run ingest
 task ingest
 ```
+
+`task doctor-fix` only deletes **orphan tracking rows** — rows tracked by CocoIndex but missing from Qdrant. After a poison-pill, the file is *marked processed* in CocoIndex's tracking table but has zero (or partial) Qdrant points; `doctor-fix` won't necessarily reprocess it. To force reprocessing, manually drop the tracking row:
+
+```bash
+docker compose exec -T postgres psql -U postgres -d cocoindex -c \
+  "DELETE FROM ragingestion__cocoindex_tracking WHERE source_key='\"bad.pdf\"';"
+```
+
+Note the jsonb-quoted `source_key` (the inner double-quotes are part of the value).
 
 `task doctor` alone (without `--fix`) is safe to run any time — it reports drift but doesn't mutate state.
 

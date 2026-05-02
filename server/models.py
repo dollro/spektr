@@ -46,38 +46,37 @@ class HybridSearchResponse(BaseModel):
 
     vector_results: list[SearchResult] = []
     graph_results: list[GraphFact] = []
-    transcript_results: list[SearchResult] = []
+    live_results: list[SearchResult] = []
     query: str
     session_id: str | None = None
     strategy: str = "parallel"
     errors: list[str] | None = None
 
 
-class TranscriptChunk(BaseModel):
-    """A single transcript chunk from a live meeting."""
+class LiveChunk(BaseModel):
+    """A single text chunk from a live session."""
 
     session_id: str
     text: str
     timestamp: datetime
-    speaker: str | None = None
 
 
 class SessionStartRequest(BaseModel):
-    """Request to start a new meeting session."""
+    """Request to start a new live session."""
 
     session_id: str
     metadata: dict = {}  # type: ignore[type-arg]
 
 
 class SessionEndRequest(BaseModel):
-    """Request to end a meeting session."""
+    """Request to end a live session."""
 
     session_id: str
     archive: bool = False
 
 
 class IngestResponse(BaseModel):
-    """Response from transcript ingestion."""
+    """Response from live text ingestion."""
 
     status: str
     vector_indexed: bool

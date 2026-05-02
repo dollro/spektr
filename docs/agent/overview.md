@@ -1,13 +1,14 @@
 # Agent Overview
 
 The Spektr agent is a **Pydantic AI** agent that connects to the
-[MCP server](../server/overview.md) over SSE and exposes all
+[MCP server](../server/overview.md) and exposes all
 [search tools](../server/search-tools.md) as callable functions for any LLM.
 
 ## Creating the Agent
 
-`create_rag_agent()` returns a `(Agent, MCPServerSSE)` tuple. The caller
-owns the server lifecycle.
+`create_rag_agent()` returns an `(Agent, MCPServer)` tuple, where
+`MCPServer = MCPServerStreamableHTTP | MCPServerSSE`. The caller owns the
+server lifecycle.
 
 ```python
 from agent.agent import create_rag_agent
@@ -18,6 +19,25 @@ async with server:
     result = await agent.run("What changed in the Q4 report?")
     print(result.output)
 ```
+
+## MCP Server Connection
+
+The transport is selected by `MCP_TRANSPORT`:
+
+|-|-|
+| `MCP_TRANSPORT` | Server class |
+| `http` *(default)* / `streamable-http` | `MCPServerStreamableHTTP` |
+| `sse` | `MCPServerSSE` |
+
+The server URL is built from settings as
+`http://localhost:{settings.mcp_port}{settings.mcp_path}`. By default
+`MCP_PATH=/mcp`, so the agent connects to `http://localhost:8080/mcp`.
+
+### MCP Authentication
+
+When `MCP_API_KEY` is set, the agent injects an
+`Authorization: Bearer <MCP_API_KEY>` header on every MCP request. If the
+key is empty, no auth header is sent.
 
 ## System Prompt
 
@@ -61,7 +81,16 @@ LLM_MODEL=anthropic/claude-sonnet-4-20250514
 LLM_API_KEY=sk-or-...
 ```
 
-The MCP server URL defaults to `http://localhost:{settings.mcp_port}/sse`.
+## CLI
+
+`scripts/ask.py` provides a one-shot command-line entry point that wires
+the agent to the running MCP server and prints the answer:
+
+```bash
+task ask -- "What changed in the Q4 report?"
+```
+
+This requires `task serve` to be running so the MCP server is reachable.
 
 ## Testing
 
@@ -70,6 +99,10 @@ or an MCP server:
 
 ```python
 from pydantic_ai.models.function import FunctionModel
+
+from agent.agent import create_rag_agent
+
+agent, server = await create_rag_agent()
 
 async def mock_model(messages, info):
     return "mocked answer"
@@ -81,4 +114,4 @@ with agent.override(model=FunctionModel(mock_model), toolsets=[]):
 
 ## Source
 
-:   `agent/agent.py`
+:   `agent/agent.py`, `scripts/ask.py`

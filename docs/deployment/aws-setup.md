@@ -111,9 +111,10 @@ For comprehensive filtering, the pipeline's `included_patterns` setting handles 
 
 ## Environment Variables
 
-Add to your `.env` (see [Environment Variables](../configuration/environment.md#aws) for full reference):
+Add to your `.env` (see [Environment Variables](../configuration/environment.md#aws-when-document_sources3) for full reference):
 
 ```bash
+DOCUMENT_SOURCE=s3
 S3_BUCKET_NAME=your-bucket-name
 S3_SQS_QUEUE_URL=https://sqs.us-east-1.amazonaws.com/123456789012/your-queue
 AWS_REGION=us-east-1
@@ -123,8 +124,7 @@ AWS_ACCESS_KEY_ID=your-access-key
 AWS_SECRET_ACCESS_KEY=your-secret-key
 ```
 
-When both `S3_BUCKET_NAME` and `S3_SQS_QUEUE_URL` are set, the pipeline
-automatically switches from local file source to S3 source.
+Set `DOCUMENT_SOURCE=s3` to enable S3 ingestion. Both `S3_BUCKET_NAME` and `S3_SQS_QUEUE_URL` are required when `DOCUMENT_SOURCE=s3`; the pipeline fails fast at startup if either is missing. Without `DOCUMENT_SOURCE=s3`, the pipeline ignores S3 settings even when populated.
 
 ## LocalStack (Local Development)
 
@@ -161,6 +161,7 @@ awslocal s3 cp tests/fixtures/sample.txt s3://test-bucket/sample.txt
 Set environment for LocalStack:
 
 ```bash
+DOCUMENT_SOURCE=s3
 S3_BUCKET_NAME=test-bucket
 S3_SQS_QUEUE_URL=http://localhost:4566/000000000000/test-queue
 AWS_REGION=us-east-1

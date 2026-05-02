@@ -78,10 +78,18 @@ Graphiti tracks time on all edges:
 
 `graphiti_client.py` manages the shared Graphiti client lifecycle.
 
-| Function | Description |
+|Function|Description|
 |-|-|
-| `get_graphiti()` | Returns (and lazily initializes) the singleton. On first call, connects to Neo4j, builds indices/constraints, and wires up LLM + embedder. |
-| `close_graphiti()` | Closes the embedder and client, resets both singletons to `None`. |
+|`get_graphiti()`|Returns (and lazily initializes) the singleton. On first call, connects to Neo4j, builds indices/constraints, and wires up LLM + embedder + cross-encoder.|
+|`close_graphiti()`|Closes the embedder and client, resets both singletons to `None`.|
+
+The client is constructed with three pluggable components:
+
+- `llm_client=OpenAIGenericClient(config=llm_config)` — entity/relationship extraction (Chat Completions API, OpenRouter-compatible).
+- `embedder=_JinaGraphitiEmbedder()` — adapts the project embedder via `create_embedder()`.
+- `cross_encoder=OpenAIRerankerClient(config=llm_config)` — Graphiti's reranker for search relevance, sharing the same `LLMConfig` as the extraction client.
+
+> **Side effect at import time:** `graphiti_client.py` calls `os.environ.setdefault("EMBEDDING_DIM", "512")` because `graphiti_core` reads `EMBEDDING_DIM` at import to size its Neo4j vector indexes. Importing this module mutates the process environment — keep this in mind when running tests in isolation.
 
 ### LLM Configuration
 
@@ -225,13 +233,13 @@ Reuses the existing schema from `neo4j_setup.py`:
 
 ### Comparison
 
-| Aspect | Graphiti | GLiNER2 |
+|Aspect|Graphiti|GLiNER2|
 |-|-|-|
-| Entity extraction | LLM-discovered types | Schema-driven with descriptions from `constants.py` |
-| Relation extraction | LLM-discovered, temporal | Schema-driven with descriptions, post-processed |
-| Entity dedup | Automatic (Graphiti resolves) | MERGE on normalized `name`, types accumulated as array |
-| Temporal tracking | Built-in `created_at`/`expired_at` | `first_seen`/`last_seen` only |
-| Dependencies | LLM API key, network | None (local model) |
+|Entity extraction|LLM-discovered types|Schema-driven with descriptions from `constants.py`|
+|Relation extraction|LLM-discovered, temporal|Schema-driven with descriptions, post-processed|
+|Entity dedup|Automatic (Graphiti resolves)|MERGE on normalized `name`, types accumulated as array|
+|Temporal tracking|Built-in `created_at`/`expired_at` on every edge|**Entity-level only**: `Entity.first_seen` (set on create) and `Entity.last_seen` (updated on every ingest). Relationships carry `source` (file key) and `confidence` (always `1.0`) — no per-edge timestamps and no expiry.|
+|Dependencies|LLM API key, network|None (local model)|
 
 ## `_LegacyGraphWriter` (Deprecated)
 

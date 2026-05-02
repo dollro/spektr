@@ -4,7 +4,7 @@ DENSE_DIM = 512
 MULTIVEC_DIM = 128
 
 ENTITY_TYPES: dict[str, str] = {
-    "person": "A named individual, author, speaker, or public figure",
+    "person": "A named individual, author, executive, or public figure",
     "organization": "A company, institution, government body, or team",
     "location": "A physical place, address, region, country, or facility",
     "date_time": "A specific date, time period, deadline, or schedule reference",
@@ -13,7 +13,7 @@ ENTITY_TYPES: dict[str, str] = {
     "product": "A named product, service, platform, or deliverable",
     "technology": "A programming language, framework, tool, protocol, or system",
     "metric": "A quantitative measure, KPI, percentage, statistic, or benchmark",
-    "event": "A named meeting, conference, milestone, incident, or release",
+    "event": "A named conference, milestone, incident, or release",
     "legal_term": "A clause, obligation, right, liability, warranty, or legal concept",
     "role": "A job title, department, committee, or functional responsibility",
     "concept": "An abstract idea, methodology, strategy, design pattern, or practice",
