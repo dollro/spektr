@@ -324,4 +324,6 @@ Runbooks: [docs/operations/](docs/operations/).
 
 ## License
 
-See [LICENSE](LICENSE).
+Spektr is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE) — free for personal, research, educational, and other noncommercial use.
+
+**For commercial use, a separate license is required.** Get in touch at roland@dolltons.com.
