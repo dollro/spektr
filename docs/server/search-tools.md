@@ -16,14 +16,14 @@ Three of the search tools (`vector_search`, `graph_search`, `hybrid_search`) sup
 
 ## `vector_search`
 
-Dense semantic search against the Qdrant `documents_dense` collection. Embeds the query with Jina v4, performs nearest-neighbor lookup, and optionally reranks results when `RERANK_ENABLED=true`.
+Dense semantic search against the Qdrant `documents_dense` collection. Embeds the query with the configured embedder (Jina v4 by default; Voyage or OpenRouter when configured), performs nearest-neighbor lookup, and optionally reranks results when `RERANK_ENABLED=true`.
 
 ### Parameters
 
 | Name | Type | Default | Description |
 |-|-|-|-|
 | `query` | `str` | required | Natural language search query |
-| `limit` | `int` | `10` | Maximum number of results |
+| `limit` | `int` | `10` | Maximum number of results. Clamped to `[1, 100]` |
 | `content_type` | `str \| None` | `None` | MIME type filter (e.g. `application/pdf`) |
 | `source_file` | `str \| None` | `None` | Source file name filter |
 | `session_id` | `str \| None` | `None` | When set, runs dual queries: one for session data (filtered by `session_id`), one for bulk KB (excluding live data). Session results are sorted chronologically by timestamp |
@@ -65,7 +65,7 @@ ColBERT multi-vector search against the Qdrant `documents_multivec` collection. 
 | Name | Type | Default | Description |
 |-|-|-|-|
 | `query` | `str` | required | Natural language search query |
-| `limit` | `int` | `5` | Maximum number of results |
+| `limit` | `int` | `5` | Maximum number of results. Clamped to `[1, 100]` |
 
 ### Return Schema
 
@@ -112,7 +112,7 @@ Searches the Neo4j knowledge graph for entities and relationships. The search ba
 |-|-|-|-|
 | `query` | `str` | required | Search text |
 | `search_type` | `str` | `"entity"` | Search mode. Currently only `"entity"` is supported; reserved for future modes |
-| `limit` | `int` | `10` | Maximum number of results |
+| `limit` | `int` | `10` | Maximum number of results. Clamped to `[1, 100]` |
 | `session_id` | `str \| None` | `None` | When set, also queries Graphiti with `group_ids=[session_id]` for temporal facts from the active session, in addition to standard engine search |
 
 ### Return Schema
@@ -149,12 +149,14 @@ Runs `vector_search` and `graph_search` in parallel using `asyncio.create_task`,
 
 When `RERANK_ENABLED=true`, vector results are reranked before being included in the response.
 
+**Graph-vs-vector deduplication.** After both backends return, graph facts whose `source` matches the `source_file` of any vector hit are dropped. This avoids surfacing the same document twice (once as a chunk, once as a graph fact). Dedup is skipped when either backend errored.
+
 ### Parameters
 
 | Name | Type | Default | Description |
 |-|-|-|-|
 | `query` | `str` | required | Natural language search query |
-| `limit` | `int` | `10` | Maximum results per backend |
+| `limit` | `int` | `10` | Maximum results per backend. Clamped to `[1, 100]` |
 | `session_id` | `str \| None` | `None` | When set, separates live session results into `transcript_results` and bulk KB results into `vector_results` |
 
 ### Return Schema
@@ -179,6 +181,42 @@ Returns `HybridSearchResponse`:
   "arguments": {
     "query": "latest compliance requirements",
     "limit": 10
+  }
+}
+```
+
+---
+
+## `list_documents`
+
+Enumerate distinct documents ingested into the knowledge base, with chunk and page counts. Scrolls the Qdrant `documents_dense` collection and excludes live transcript data (`is_live=True`).
+
+Use this for discovery — answering "what's in the knowledge base?" before drilling in with `vector_search` or `list_document_chunks`.
+
+### Parameters
+
+| Name | Type | Default | Description |
+|-|-|-|-|
+| `limit` | `int` | `100` | Max number of documents to return. Clamped to `[1, 1000]` |
+
+### Return Schema
+
+Returns `list[dict]` sorted by `source_file`:
+
+| Field | Type | Description |
+|-|-|-|
+| `source_file` | `str` | Document key (file name) |
+| `chunk_count` | `int` | Number of chunks ingested for this document |
+| `page_count` | `int` | Number of distinct pages observed |
+| `content_types` | `list[str]` | Sorted list of MIME / payload content types present |
+
+### Example
+
+```json
+{
+  "name": "list_documents",
+  "arguments": {
+    "limit": 50
   }
 }
 ```

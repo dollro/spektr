@@ -2,6 +2,10 @@
 
 Pydantic models used by MCP search tools and the live ingestion API, defined in `server/models.py`.
 
+The agent HTTP layer defines its own request/response models (`QueryRequest`,
+`QueryResponse`) in `agent/api.py` — see [HTTP API](../agent/http-api.md)
+for their fields and usage.
+
 ## SearchResult
 
 Returned by the dense vector search tool.

@@ -7,10 +7,10 @@
 - **Dual-path ingestion** -- batch pipeline for bulk documents (CocoIndex + GLiNER2) and real-time HTTP endpoint for streaming text data with temporal tracking (Graphiti episodes)
 - **Dual retrieval** -- vector similarity (Qdrant) and knowledge graph (Neo4j) in a single server
 - **Session-aware search** -- MCP tools accept an optional `session_id` to combine live session context with bulk KB results
-- **Multimodal embeddings** -- Jina v4 produces dense 512-d vectors for text and images (Matryoshka truncation), plus ColBERT 128-d multi-vectors for layout-aware visual search
+- **Multimodal embeddings** -- pluggable provider (Jina v4 / Voyage / OpenRouter) produces dense vectors for text and images, plus optional ColBERT 128-d multi-vectors (Jina only) for layout-aware visual search
 - **Dynamic schema induction** -- per-document LLM call proposes domain-specific entity types for GLiNER2, improving extraction quality across diverse document types
 - **Automatic sync** -- CocoIndex pipeline watches S3 via SQS event notifications; new, updated, and deleted files are processed incrementally
-- **Four MCP search tools** -- `vector_search`, `visual_search`, `graph_search`, `hybrid_search`
+- **Six MCP tools** -- search: `vector_search`, `visual_search`, `graph_search`, `hybrid_search`; listing: `list_documents`, `list_document_chunks`
 - **Bearer auth middleware** -- optional token-based protection on `tools/call` requests
 - **Pluggable graph engine** -- choose Graphiti (LLM-based, temporal awareness) or GLiNER2 (local CPU, zero API cost) via `GRAPH_ENGINE` setting
 
@@ -72,10 +72,10 @@ See [Local Development](deployment/local-development.md) for the full setup guid
 | Language | Python 3.13 |
 | Package manager | uv |
 | Ingestion pipeline | CocoIndex |
-| Embeddings | Jina v4 API (dense 512-d + ColBERT 128-d) |
-| Vector store | Qdrant v1.13 |
-| Knowledge graph | Neo4j 5.26 + Graphiti or GLiNER2 (pluggable via `GRAPH_ENGINE`) |
+| Embeddings | Jina v4 / Voyage / OpenRouter (provider selectable; ColBERT 128-d available with Jina) |
+| Vector store | Qdrant v1.17 |
+| Knowledge graph | Neo4j 5.26 + Graphiti (default) or GLiNER2 (pluggable via `GRAPH_ENGINE`) |
 | State DB | PostgreSQL 17.2 |
-| MCP server | FastMCP (SSE + stdio) |
+| MCP server | FastMCP (streamable-http default + SSE legacy + stdio) |
 | Agent framework | Pydantic AI |
-| Cloud | AWS S3 + SQS |
+| Document sources | Local filesystem, AWS S3 + SQS, SharePoint |

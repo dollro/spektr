@@ -1,6 +1,6 @@
 # Architecture Overview
 
-Spektr is a hybrid GraphRAG + multimodal vector search system exposed as an MCP server. It supports two ingestion paths: a **bulk pipeline** (CocoIndex + GLiNER2) for batch document processing from S3, and a **live ingestion** endpoint for streaming text data with temporal tracking via Graphiti. Both paths write to shared Qdrant and Neo4j stores, and are made searchable by LLM agents through four session-aware MCP tools.
+Spektr is a hybrid GraphRAG + multimodal vector search system exposed as an MCP server. It supports two ingestion paths: a **bulk pipeline** (CocoIndex with a pluggable graph engine — Graphiti by default, GLiNER2 opt-in) for batch document processing from local filesystem, S3, or SharePoint, and a **live ingestion** endpoint for streaming text data with temporal tracking via Graphiti. Both paths write to shared Qdrant and Neo4j stores, and are made searchable by LLM agents through six session-aware MCP tools.
 
 ## System diagram
 
@@ -38,6 +38,8 @@ graph TB
         VIS[visual_search]
         GS[graph_search]
         HS[hybrid_search]
+        LD[list_documents]
+        LC[list_document_chunks]
     end
 
     Agent[LLM Agents]
@@ -46,21 +48,22 @@ graph TB
     SQS -->|push events| Pipeline
     Pipeline --> Classify --> Chunk --> Embed
     Chunk --> SchemaInd --> Extract
-    Embed -->|dense 512-d| Qdrant
+    Embed -->|dense| Qdrant
     Embed -->|ColBERT 128-d| Qdrant
     Extract -->|entities + relations| Neo4j
     Pipeline -->|state| PG
 
     LiveAPI -->|text chunks| LiveEmbed
-    LiveEmbed -->|dense 512-d| Qdrant
+    LiveEmbed -->|dense| Qdrant
     LiveAPI -->|episodes| Graphiti
     Graphiti -->|temporal graph| Neo4j
 
     Agent -->|MCP protocol| Auth
-    Auth --> VS & VIS & GS & HS
+    Auth --> VS & VIS & GS & HS & LD & LC
     VS & VIS -->|query| Qdrant
     GS -->|search| Neo4j
     HS -->|parallel| Qdrant & Neo4j
+    LD & LC -->|enumerate| Qdrant
 ```
 
 ## Component roles
@@ -76,7 +79,7 @@ graph TB
 | **Qdrant** | Vector store | Two collections: `documents_dense` (single-vector NN search) and `documents_multivec` (ColBERT late interaction). Both paths write to `documents_dense`; live data tagged with `session_id` and `is_live` |
 | **Neo4j** | Knowledge graph | Dual-engine: GLiNER2 (Path A, schema-driven CPU extraction) writes flat entities; Graphiti (Path B, LLM-based) writes temporal episodes with fact evolution tracking. Both coexist in the same instance |
 | **PostgreSQL** | Pipeline state | CocoIndex stores flow state and ingestion logs |
-| **FastMCP** | MCP server | Registers four session-aware search tools; supports SSE and stdio transports; optional Bearer auth middleware |
+| **FastMCP** | MCP server | Registers six tools (four search + two listing/inventory); supports streamable-http (default), SSE (legacy), and stdio transports; optional Bearer auth middleware |
 | **Pydantic AI** | Agent framework | Connects to MCP server, binds tools, orchestrates multi-step retrieval |
 
 ## Technology rationale
@@ -117,7 +120,20 @@ CocoIndex provides incremental processing with state tracking. When a file chang
 
 ### Why FastMCP?
 
-FastMCP is a lightweight MCP server framework that supports both SSE (for network clients) and stdio (for local agent processes). It has built-in middleware support, which Spektr uses for Bearer token authentication.
+FastMCP is a lightweight MCP server framework that supports streamable-http (the modern default for network clients), SSE (legacy long-lived stream — kept for older clients), and stdio (for subprocess agent processes). It has built-in middleware support, which Spektr uses for Bearer token authentication.
+
+### MCP tools
+
+Six tools are registered. Four are search; two are listing/inventory helpers used by agents to enumerate what's in the corpus before querying.
+
+| Tool | Category |
+|-|-|
+| `vector_search` | Search |
+| `visual_search` | Search |
+| `graph_search` | Search |
+| `hybrid_search` | Search |
+| `list_documents` | Listing/Inventory |
+| `list_document_chunks` | Listing/Inventory |
 
 ## Security model
 

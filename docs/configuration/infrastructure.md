@@ -31,7 +31,7 @@ docker compose down -v
 
 | Property | Value |
 |-|-|
-| Image | `qdrant/qdrant:v1.13.2` |
+| Image | `qdrant/qdrant:v1.17.0` |
 | HTTP API | `localhost:6333` |
 | gRPC API | `localhost:6334` |
 | Volume | `qdrant_data:/qdrant/storage` |
@@ -39,8 +39,8 @@ docker compose down -v
 
 Qdrant stores two collections:
 
-- **`documents_dense`** — 512-dimensional dense vectors (Jina v4 Matryoshka truncation)
-- **`documents_multivec`** — 128-dimensional ColBERT multi-vectors (Jina v4)
+- **`documents_dense`** — dense vectors. Dimensionality follows the active embedding provider (`JINA_DENSE_DIMENSIONS` default `2048`, `VOYAGE_DENSE_DIMENSIONS` default `1024`, `OPENROUTER_DENSE_DIMENSIONS` default `3072`)
+- **`documents_multivec`** — 128-dimensional ColBERT multi-vectors (Jina v4 only, opt-in via `MULTIVEC_ENABLED=true`)
 
 Collections are provisioned automatically by the ingestion pipeline on first run.
 

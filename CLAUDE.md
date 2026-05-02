@@ -36,11 +36,11 @@ Before modifying or exploring ANY module, you MUST first read the corresponding 
 
 ## Architecture
 
-- **Ingestion (Path A — Bulk):** CocoIndex pipeline + Docling/PyMuPDF for file processing, Jina/Voyage for embeddings, GLiNER2 for entity extraction with dynamic schema induction. Triggered by S3→SQS events (long-running `--live` daemon polls SQS) or local filesystem watch. Without `--live`, runs as one-shot batch. The `ingest-live` prod service is this SQS daemon — not an HTTP endpoint.
-- **Ingestion (Path B — Live):** FastAPI HTTP endpoint (`live_ingest.py`, port 8001) for streaming text, Jina for embeddings, Graphiti for temporal episodic memory
-- **Vector Store:** Qdrant (dense + optional ColBERT multi-vector). Both paths write to `documents_dense`; live data tagged with `session_id` and `is_live`
-- **Knowledge Graph:** Neo4j with dual engines — GLiNER2 (Path A, schema-driven CPU extraction) and Graphiti (Path B, LLM-based temporal episodes). Coexist in same instance
-- **MCP Server:** FastMCP (streamable-http default, SSE legacy, stdio) exposing session-aware search tools. Bearer auth via `MCP_API_KEY`.
+- **Ingestion (Path A — Bulk):** CocoIndex pipeline + Docling/PyMuPDF for file processing, Jina/Voyage/OpenRouter for embeddings (selected by `EMBEDDING_PROVIDER`), pluggable `GraphEngine` for entity/relation extraction. Document source is selected by `DOCUMENT_SOURCE` (`local` default, or `s3` / `sharepoint`). Triggered by S3→SQS events (long-running `--live` daemon polls SQS), SharePoint sync (`services/sharepoint_sync/`), or local filesystem watch. Without `--live`, runs as one-shot batch. The `ingest-live` prod service is this SQS daemon — not an HTTP endpoint.
+- **Ingestion (Path B — Live):** FastAPI HTTP endpoint (`live_ingest.py`, port 8001) for streaming text, configured embedding provider, Graphiti for temporal episodic memory
+- **Vector Store:** Qdrant (dense + optional ColBERT multi-vector, Jina-only). Both paths write to `documents_dense`; live data tagged with `session_id` and `is_live`
+- **Knowledge Graph:** Neo4j with two pluggable engines for Path A — **Graphiti is the default** (`GRAPH_ENGINE=graphiti`, LLM-based temporal episodes); **GLiNER2 is opt-in** (`GRAPH_ENGINE=gliner`, schema-driven CPU extraction). Path B always uses Graphiti directly, regardless of `GRAPH_ENGINE`. Both engines coexist in the same Neo4j instance.
+- **MCP Server:** FastMCP (streamable-http default, SSE legacy, stdio) exposing six tools: four search (`vector_search`, `visual_search`, `graph_search`, `hybrid_search`) and two listing (`list_documents`, `list_document_chunks`). Bearer auth via `MCP_API_KEY`.
 - **Agent:** Pydantic AI agent with MCP tool access
 - **LLM:** Anthropic or OpenAI-compatible (configurable via `LLM_API_TYPE`)
 - **Config:** Pydantic Settings from `.env`
@@ -54,12 +54,13 @@ Before modifying or exploring ANY module, you MUST first read the corresponding 
 ├── config/                 # Configuration
 │   ├── settings.py         # Pydantic Settings (single source of truth)
 │   ├── constants.py        # Shared constants (collections, dimensions, 14 entity types, 12 relationship types)
-│   └── logging.py          # Logging configuration
+│   ├── logging.py          # Logging configuration
+│   └── observability.py    # Logfire/OTel setup (setup_observability, instrument_fastapi)
 ├── ingestion/              # Document ingestion pipeline
 │   ├── pipeline.py         # Main ingestion orchestrator
 │   ├── file_processor.py   # PDF/image processing (Docling + PyMuPDF fallback)
 │   ├── embedder.py         # Embedding dispatcher
-│   ├── embedders/          # Provider implementations (jina.py, voyage.py)
+│   ├── embedders/          # Provider implementations (jina.py, voyage.py, openrouter.py)
 │   ├── graph_engine.py     # GraphEngine protocol + factory (Graphiti/GLiNER2)
 │   ├── entity_extractor.py # LLM-based entity extraction
 │   ├── graph_writer.py     # Graphiti-based graph writer
@@ -67,6 +68,9 @@ Before modifying or exploring ANY module, you MUST first read the corresponding 
 │   ├── schema_inducer.py   # LLM-based per-document schema induction
 │   ├── live_ingest.py      # Live streaming ingestion (FastAPI, Path B)
 │   ├── cocoindex_ops.py    # CocoIndex operations
+│   ├── target_connector.py # Qdrant/Neo4j target connectors for CocoIndex flow
+│   ├── _failure_tracker.py # SQLite-backed per-file retry counter (poison-pill)
+│   ├── _utils.py           # Internal ingestion helpers
 │   ├── qdrant_setup.py     # Qdrant collection setup
 │   └── neo4j_setup.py      # Neo4j schema setup
 ├── server/                 # MCP server
@@ -78,16 +82,22 @@ Before modifying or exploring ANY module, you MUST first read the corresponding 
 │       ├── graph_search.py
 │       ├── hybrid_search.py
 │       ├── visual_search.py
+│       ├── list_documents.py
+│       ├── list_document_chunks.py
 │       ├── reranker.py
 │       └── vlm_generator.py
+├── services/               # Long-running auxiliary services
+│   └── sharepoint_sync/    # SharePoint → local-volume sync daemon (Path A source)
 ├── tests/                  # Test suite
 ├── docs/                   # MkDocs documentation — READ FIRST (see top of file)
 ├── plans/                  # Disposable brainstorming — NOT source of truth
-├── scripts/                # Utility scripts
+├── scripts/                # Utility scripts (backup.py, restore.py, doctor.py, …)
 ├── docker-compose.yml      # Qdrant + Neo4j + PostgreSQL (local dev)
-├── docker-compose.prod.yml # Full production stack (app + data services + reverse proxy)
+├── docker-compose.prod.yml # Full production stack (app + data services + Traefik labels on mcp)
+├── Dockerfile              # Multi-stage Python 3.13 + uv image (shared by all app services)
+├── Caddyfile               # Sample reverse-proxy config (alternative to external Traefik)
+├── Taskfile.yml            # go-task entry points (task --list to enumerate)
 ├── pyproject.toml          # Python config (single source of truth)
-├── Makefile                # docs-serve, docs-build
 └── mkdocs.yml              # Documentation site config
 ```
 

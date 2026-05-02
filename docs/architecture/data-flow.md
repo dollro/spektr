@@ -133,7 +133,7 @@ sequenceDiagram
 
 ## Query path
 
-An LLM agent calls one of the four MCP tools. The server embeds the query, searches the relevant store, and returns results.
+An LLM agent calls one of the six MCP tools. The four search tools (`vector_search`, `visual_search`, `graph_search`, `hybrid_search`) embed the query and search the relevant store. The two listing/inventory tools (`list_documents`, `list_document_chunks`) enumerate what's in the corpus without running a similarity query — useful for agents that need to ground a question against an exhaustive view of the available material before searching. The sequence diagram below covers the search tools; listing tools follow a simpler path (Auth → Tool → Qdrant scroll → results).
 
 ```mermaid
 sequenceDiagram
@@ -190,10 +190,12 @@ sequenceDiagram
 
 | Tool | Backend | Embedding | Best for |
 |-|-|-|-|
-| `vector_search` | Qdrant `documents_dense` | Dense 512-d | General semantic search over text and images |
+| `vector_search` | Qdrant `documents_dense` | Dense (provider-dependent) | General semantic search over text and images |
 | `visual_search` | Qdrant `documents_multivec` | ColBERT 128-d | Charts, diagrams, tables, formatted content |
 | `graph_search` | Neo4j via GraphEngine | Graphiti semantic or Neo4j full-text | Entity lookup, facts, relationships |
-| `hybrid_search` | Both (parallel) | Dense 512-d | Comprehensive retrieval combining both stores |
+| `hybrid_search` | Both (parallel) | Dense (provider-dependent) | Comprehensive retrieval combining both stores |
+| `list_documents` | Qdrant scroll | None | Enumerating distinct source files in the corpus |
+| `list_document_chunks` | Qdrant scroll | None | Exhaustive paginated listing of chunks for a given document |
 
 ### Filtering and reranking
 
