@@ -99,3 +99,14 @@ RELATION_CONSTRAINTS: dict[str, tuple[frozenset[str], frozenset[str]]] = {
         _ALL_TYPES,
     ),
 }
+
+# Named vectors on DENSE_COLLECTION. Sparse vectors must be named in Qdrant,
+# and named/unnamed vectors cannot coexist — this is why the collection is
+# recreated rather than updated in place.
+DENSE_VECTOR_NAME = "dense"
+SPARSE_VECTOR_NAME = "sparse"
+
+# miniCOIL length normalisation. Average chunk length in tokens, derived from
+# the 512-character chunk target (~80 tokens). Index-time only; not used when
+# encoding queries. Revisit if chunk sizing changes.
+MINICOIL_AVG_LEN = 80

@@ -23,6 +23,7 @@ dependencies = [
     "tenacity",
     "mkdocs-with-pdf>=0.9.3",
     "azure-identity>=1.19,<2",
+    "fastembed>=0.7.0",
 ]
 
 [project.optional-dependencies]

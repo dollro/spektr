@@ -84,7 +84,7 @@ class Settings(BaseSettings):
 
     # LLM
     llm_api_type: str = "anthropic"
-    llm_model: str = "claude-sonnet-4-20250514"
+    llm_model: str = "claude-sonnet-5"
     llm_api_key: str | None = None
     llm_base_url: str = ""
 
@@ -111,6 +111,20 @@ class Settings(BaseSettings):
     tool_timeout: int = 30
     max_retries: int = 3
     rerank_enabled: bool = True
+
+    # Retrieval pipeline
+    sparse_enabled: bool = True
+    sparse_model: str = "Qdrant/minicoil-v1"
+    rrf_k: int = 60
+    rerank_model: str = "jina-reranker-v3.5"
+    rerank_candidates: int = 50  # fused candidates sent to the reranker
+    rerank_score_floor: float = 0.3  # gate threshold for the retry
+    retry_enabled: bool = True
+    retry_limit_multiplier: int = 3  # candidate-pool widening on gated retry
+    decompose_enabled: bool = True
+    decompose_model: str = ""  # empty -> fall back to llm_model
+    decompose_max_subqueries: int = 4
+
     vlm_generation_enabled: bool = False
     multivec_enabled: bool = False
     graph_enabled: bool = True
