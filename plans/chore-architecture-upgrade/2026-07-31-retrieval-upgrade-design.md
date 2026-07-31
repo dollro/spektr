@@ -30,12 +30,21 @@ The published 2026 consensus pipeline is `rewrite → sparse + dense → RRF →
 
 **Explicitly out of scope** (candidates for later branches):
 
-- Jina v5 / v5-omni embedding migration
 - MUVERA for the multivector visual collection
 - GraphRAG community summarization (`search_type` beyond `"entity"`)
 - HyDE and step-back query rewriting
 - DeepEval adoption
 - Anthropic-style contextual retrieval (LLM-generated per-chunk context)
+
+### Ruled out — Jina v5
+
+Not a deferred candidate. Investigated and rejected:
+
+- **v5 drops late chunking.** Jina maintainer, on the v5-text model card: *"This model does not support late chunking because of the different pooling method"* (last-token pooling). This would kill the Docling `HybridChunker` → `late_chunking=True` path and make `contextualized_text` dead weight.
+- **v5-omni does not document multi-vector output.** `visual_search` depends on `embed_multi_vector()` producing ColBERT-style 128d-per-patch vectors for MaxSim over `documents_multivec`. v5-omni reaches 79.08 on ViDoRe MIEB via *single-vector* multimodal embeddings — a different retrieval architecture, not a drop-in swap.
+- **Hosting risk.** v5-omni points at Elastic Inference Service rather than the hosted Jina API that `jina_api_url` targets. Jina is now "Jina AI by Elastic."
+
+v4 is the multimodal/visually-rich retrieval model; v5-text is a compressed text base layer. Spektr uses v4 for what it is for. Revisit only if Jina ships late chunking plus documented multi-vector output in a v5 multimodal variant, if `documents_multivec` is retired, or if the v4 endpoint is deprecated.
 
 Path B (live ingest), the graph engine layer, `visual_search`, `graph_search`, `list_documents`, and `list_document_chunks` are untouched.
 
