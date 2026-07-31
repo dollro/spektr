@@ -68,10 +68,14 @@ Add to `tests/test_settings.py`:
 
 ```python
 def test_retrieval_defaults() -> None:
-    """New retrieval settings expose the documented defaults."""
+    """New retrieval settings expose the documented defaults.
+
+    _env_file=None isolates from the developer's .env — Settings() otherwise
+    reads it and this would assert the local config, not the defaults.
+    """
     from config.settings import Settings
 
-    s = Settings()
+    s = Settings(_env_file=None)  # type: ignore[call-arg]
     assert s.sparse_enabled is True
     assert s.sparse_model == "Qdrant/minicoil-v1"
     assert s.rrf_k == 60
@@ -81,7 +85,7 @@ def test_retrieval_defaults() -> None:
     assert s.retry_enabled is True
     assert s.retry_limit_multiplier == 3
     assert s.decompose_enabled is True
-    assert s.decompose_model == "claude-haiku-4-5-20251001"
+    assert s.decompose_model == ""
     assert s.decompose_max_subqueries == 4
     assert s.llm_model == "claude-sonnet-5"
 
@@ -117,15 +121,19 @@ In `config/settings.py`, replace the line `rerank_enabled: bool = True` with thi
     retry_enabled: bool = True
     retry_limit_multiplier: int = 3  # candidate-pool widening on gated retry
     decompose_enabled: bool = True
-    decompose_model: str = "claude-haiku-4-5-20251001"
+    decompose_model: str = ""  # empty -> fall back to llm_model
     decompose_max_subqueries: int = 4
 ```
 
-Then change the existing `llm_model` line to:
+`decompose_model` defaults to empty rather than a model string on purpose: this deployment routes Anthropic models through OpenRouter (`LLM_API_TYPE=openai`, `LLM_MODEL=anthropic/claude-haiku-4.5`), so a hardcoded native-Anthropic id like `claude-haiku-4-5-20251001` would be wrong here. Empty means "use whatever `llm_model` is", and anyone wanting a separately cheaper decomposition model sets `DECOMPOSE_MODEL` in `.env`.
+
+Then change the existing `llm_model` default to:
 
 ```python
     llm_model: str = "claude-sonnet-5"
 ```
+
+Note: `.env` sets `LLM_MODEL`, which overrides this default at runtime. The default only applies to deployments without that variable — see the test note in Step 1.
 
 - [ ] **Step 4: Add constants**
 
@@ -1522,7 +1530,25 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from retrieval.decompose import _parse_subqueries, decompose
+from retrieval.decompose import _model_name, _parse_subqueries, decompose
+
+
+def test_model_name_falls_back_to_llm_model() -> None:
+    """An unset decompose_model routes to the primary LLM model."""
+    with (
+        patch("retrieval.decompose.settings.decompose_model", ""),
+        patch("retrieval.decompose.settings.llm_model", "primary/model"),
+    ):
+        assert _model_name() == "primary/model"
+
+
+def test_model_name_prefers_explicit_decompose_model() -> None:
+    """An explicit decompose_model wins over llm_model."""
+    with (
+        patch("retrieval.decompose.settings.decompose_model", "cheap/model"),
+        patch("retrieval.decompose.settings.llm_model", "primary/model"),
+    ):
+        assert _model_name() == "cheap/model"
 
 
 def test_parse_extracts_numbered_lines() -> None:
@@ -1651,17 +1677,41 @@ def _parse_subqueries(raw: str, max_n: int) -> list[str]:
     return out
 
 
-async def _call_llm(prompt: str) -> str:
-    """Send the decomposition prompt to the configured cheap model."""
-    from anthropic import AsyncAnthropic
+def _model_name() -> str:
+    """Decomposition model, falling back to the primary LLM when unset."""
+    return settings.decompose_model or settings.llm_model
 
-    client = AsyncAnthropic(api_key=settings.anthropic_api_key)
-    response = await client.messages.create(
-        model=settings.decompose_model,
+
+async def _call_llm(prompt: str) -> str:
+    """Send the decomposition prompt to the configured provider.
+
+    Follows the same anthropic/openai dispatch as ingestion/entity_extractor.py
+    — this deployment may route Anthropic models through an OpenAI-compatible
+    gateway, so the provider is a config choice, not a model-name choice.
+    """
+    if settings.llm_api_type.lower() == "anthropic":
+        import anthropic
+
+        client = anthropic.AsyncAnthropic(api_key=settings.llm_api_key)
+        response = await client.messages.create(
+            model=_model_name(),
+            max_tokens=256,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return "".join(b.text for b in response.content if b.type == "text")
+
+    import openai
+
+    client_oa = openai.AsyncOpenAI(
+        api_key=settings.llm_api_key,
+        base_url=settings.llm_base_url or None,
+    )
+    completion = await client_oa.chat.completions.create(
+        model=_model_name(),
         max_tokens=256,
         messages=[{"role": "user", "content": prompt}],
     )
-    return "".join(block.text for block in response.content if block.type == "text")
+    return completion.choices[0].message.content or ""
 
 
 async def decompose(query: str) -> list[str]:
@@ -1692,7 +1742,7 @@ async def decompose(query: str) -> list[str]:
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `uv run pytest tests/test_decompose.py -v`
-Expected: PASS — 8 tests
+Expected: PASS — 10 tests
 
 If `test_parse_ignores_blank_and_noise_lines` or the enumerator-stripping tests fail, fix `_parse_subqueries` until they pass — the parser must handle numbered, bulleted, and bare lines.
 
