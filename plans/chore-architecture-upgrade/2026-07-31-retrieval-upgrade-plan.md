@@ -2669,7 +2669,9 @@ git commit -m "feat(agent): consume the fused search schema"
 - Consumes: `server.tools.multi_search.multi_search`, `server.tools.hybrid_search.hybrid_search`
 - Produces: `task eval-retrieval`; metrics `recall@10`, `ndcg@10`, `mrr`
 
-This task needs domain judgment about the corpus. The metric code is mechanical; the labels are not.
+**Scope decision (2026-08-01):** the corpus is currently two PDFs, too thin for the 40-query multi-document set the design called for. This task builds the *instrument* — metric functions, ablation harness, Taskfile entries, all fully unit-tested — plus a small smoke-level labeled set over the existing documents. The full labeled set is deferred until the corpus grows; the thresholds stay non-gating until then.
+
+The metric code is mechanical. The labels are not, and thin labels produce noise, so this task deliberately does not pretend otherwise.
 
 - [ ] **Step 1: Write the failing metric tests**
 
@@ -2754,15 +2756,35 @@ def test_ndcg_penalises_late_hits() -> None:
 
 
 def test_retrieval_set_is_wellformed() -> None:
-    """Every entry has a query and at least one labelled relevant chunk."""
+    """Every entry has a query, a category, and at least one label.
+
+    The size floor is deliberately low: the corpus is currently two
+    documents, so this set is a smoke check on the harness, not a
+    statistically meaningful benchmark. Raise the floor when the corpus
+    grows — see docs/eval/golden-set.md.
+    """
     data = yaml.safe_load(SET_PATH.read_text())
-    assert len(data["queries"]) >= 40, "need at least 40 labelled queries"
+    assert len(data["queries"]) >= 6, "need at least 6 labelled queries"
+    valid_categories = {"exact_id", "multi_hop", "semantic"}
     for entry in data["queries"]:
         assert entry["query"].strip()
+        assert entry["category"] in valid_categories, entry["query"]
         assert entry["relevant"], f"no labels for: {entry['query']}"
         for rel in entry["relevant"]:
             assert "source_file" in rel
             assert "chunk_index" in rel
+
+
+def test_all_three_categories_are_represented() -> None:
+    """Each channel's reason for existing has at least one probe.
+
+    exact_id exercises sparse, semantic exercises dense, multi_hop
+    exercises decomposition. A set missing one cannot detect a regression
+    in that stage.
+    """
+    data = yaml.safe_load(SET_PATH.read_text())
+    present = {entry["category"] for entry in data["queries"]}
+    assert present == {"exact_id", "multi_hop", "semantic"}, f"missing: {present}"
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -2821,7 +2843,17 @@ for c in out['chunks'][:40]:
 "
 ```
 
-Write at least 40 entries. Fewer than that and the metrics are noise.
+**Write at least 6 entries covering all three categories**, drawn from `arxiv.pdf` and `sample.pdf`. Read the actual chunks first with the command above and label honestly — a query whose "relevant" chunk you had to stretch to justify is worse than no query.
+
+Add this header comment to the file, above `queries:`:
+
+```yaml
+# STATUS: smoke-level set. The corpus is two documents, so these metrics
+# validate that the harness works — they are NOT a meaningful benchmark and
+# the thresholds below are non-gating. Expand to 40+ queries across a real
+# multi-document corpus before treating recall/nDCG movements as signal.
+# Tracking: see docs/eval/golden-set.md "Expanding the retrieval set".
+```
 
 - [ ] **Step 4: Write the scoring harness**
 
@@ -2880,19 +2912,23 @@ Run the harness to get real numbers before setting floors:
 uv run pytest tests/eval/test_retrieval_metrics.py::test_retrieval_quality_meets_thresholds -v -s -m integration
 ```
 
-Then append to `tests/eval/thresholds.yaml`, using values slightly below the observed baseline so normal variance does not fail CI:
+Then append to `tests/eval/thresholds.yaml`. **Comment the retrieval floors out for now** — a six-query set over two documents produces too much variance to gate CI on, and a gate that fires spuriously gets disabled, which is worse than no gate:
 
 ```yaml
 # Retrieval-only metrics (task eval-retrieval). No LLM in the loop, so these
-# are far less noisy than the RAGAS bars above. Set from the measured
-# baseline on the day this lands; raise as the system improves, never
-# silently lower. Record the measuring commit in the commit message.
-recall_at_10: 0.00     # replace with measured baseline minus ~0.05
-ndcg_at_10: 0.00       # replace with measured baseline minus ~0.05
-mrr: 0.00              # replace with measured baseline minus ~0.05
+# are far less noisy than the RAGAS bars above.
+#
+# NON-GATING until the retrieval set grows past smoke level — see
+# tests/eval/retrieval_set.yaml. Uncomment and set from a measured baseline
+# once the corpus supports 40+ queries. Raise over time, never silently
+# lower, and record the measuring commit in the commit message.
+#
+# recall_at_10: 0.00
+# ndcg_at_10: 0.00
+# mrr: 0.00
 ```
 
-Replace each `0.00` with the actual measured value minus 0.05. Do not commit zeros.
+`test_retrieval_quality_meets_thresholds` already skips any metric absent from the file (`thresholds.get(metric)` returns `None`), so with these commented out it runs, prints the scores, and asserts nothing. That is the intended state — the harness is exercised on every run, so it cannot rot before the labels arrive.
 
 - [ ] **Step 6: Add the ablation script**
 
@@ -3035,6 +3071,8 @@ Register the new page in `mkdocs.yml` under the Operations nav section, alongsid
 - [ ] **Step 4: Document the retrieval eval**
 
 In `docs/eval/golden-set.md`, add sections for `task eval-retrieval` and `task eval-ablation`: the three metrics, the `retrieval_set.yaml` format, the three query categories and why each exists, and how to read the ablation table when deciding whether a stage earns its cost.
+
+Add a section titled **"Expanding the retrieval set"** stating plainly that the current set is smoke-level over a two-document corpus, that the thresholds are commented out and non-gating for that reason, and listing what to do when the corpus grows: write 40+ queries balanced across the three categories, measure a baseline, uncomment the floors at baseline minus ~0.05, and note the measuring commit. This is the tracking record for the deferred work — do not leave it implicit.
 
 - [ ] **Step 5: Update the production contracts**
 
