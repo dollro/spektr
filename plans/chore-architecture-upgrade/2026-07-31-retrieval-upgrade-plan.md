@@ -14,6 +14,8 @@
 
 - Python 3.13. Package manager is `uv` — never `pip` directly.
 - Ruff line length 95. Run `uv run ruff check .` before every commit — it must pass clean.
+- **Pre-existing test failure at branch base:** `tests/test_agent.py::TestCreateRagAgent::test_server_url_composed_from_port_and_path` fails at commit `3bef023` and is NOT caused by this work (a MagicMock returns a truthy `mcp_server_url`, so the compose-from-port branch is never taken). Baseline for the full suite is therefore **1 failed, 362 passed**. Do not fix it unless your task touches that file; do not count it as a regression.
+- **cocoindex is pinned `>=0.3.39,<1.0`.** v1.0.x is an async-first API rewrite with no drop-in path from the `flow_def`/`FlowBuilder`/`op.target_connector` surface this repo uses. Never relax that upper bound as a side effect of another change.
 - mypy strict, **but the repo does not currently pass `uv run mypy .`**: 14 pre-existing errors in 6 files (missing `gliner2`, `boto3`/`yaml`/`ragas` stubs, and a `scripts/backup.py` dual-module-name clash) are present at the branch base and are out of scope here. `task check` therefore fails for reasons unrelated to this work. The binding requirement is: **introduce no new mypy errors**. Verify with `uv run mypy . 2>&1 | tail -1` and confirm the count is still 14 (or lower) — never higher. Do not "fix" the pre-existing errors; that is a separate chore.
 - Max file 600 lines, max function 60 lines, max class 100 lines.
 - `retrieval/` must not import from `server/` or `fastmcp` — it is transport-agnostic.
