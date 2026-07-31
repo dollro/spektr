@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
+import respx
 
 from retrieval.models import FusedResult
-from retrieval.rerank import RerankError, rerank, rerank_dicts
+from retrieval.rerank import RERANK_URL, RerankError, rerank, rerank_dicts
+from retrieval.rerank import settings as rerank_settings
 
 
 def _result(doc_id: str, text: str) -> FusedResult:
@@ -53,17 +57,26 @@ async def test_rerank_empty_input_returns_empty() -> None:
 
 
 @pytest.mark.asyncio
-async def test_rerank_uses_configured_model() -> None:
-    """The model string comes from settings, not a hardcoded constant."""
-    captured: dict = {}  # type: ignore[type-arg]
+@respx.mock
+async def test_rerank_uses_configured_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The model string in the request body comes from settings, not a hardcoded constant.
 
-    async def _fake(query: str, documents: list[str], top_n: int) -> list[dict]:  # type: ignore[type-arg]
-        captured["called"] = True
-        return [{"index": 0, "relevance_score": 0.5}]
+    Patches settings.rerank_model to a sentinel unrelated to the real default, then
+    inspects the actual HTTP request body the Jina client sent — proving the
+    settings -> request wiring, not just that some function got called.
+    """
+    monkeypatch.setattr(rerank_settings, "rerank_model", "sentinel-model-xyz")
+    route = respx.post(RERANK_URL).mock(
+        return_value=httpx.Response(
+            200, json={"results": [{"index": 0, "relevance_score": 0.5}]}
+        )
+    )
 
-    with patch("retrieval.rerank._rerank_request", _fake):
-        await rerank("q", [_result("a", "x")], top_k=1)
-    assert captured["called"] is True
+    await rerank("q", [_result("a", "x")], top_k=1)
+
+    assert route.called
+    sent_payload = json.loads(route.calls.last.request.content)
+    assert sent_payload["model"] == "sentinel-model-xyz"
 
 
 @pytest.mark.asyncio

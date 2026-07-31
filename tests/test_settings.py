@@ -111,7 +111,7 @@ def test_retrieval_defaults(monkeypatch):  # type: ignore[no-untyped-def]
     assert s.rrf_k == 60
     assert s.rerank_model == "jina-reranker-v3.5"
     assert s.rerank_candidates == 50
-    assert s.rerank_score_floor == 0.3
+    assert s.rerank_score_floor == 0.0
     assert s.retry_enabled is True
     assert s.retry_limit_multiplier == 3
     assert s.decompose_enabled is True

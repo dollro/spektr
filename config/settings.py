@@ -118,7 +118,7 @@ class Settings(BaseSettings):
     rrf_k: int = 60
     rerank_model: str = "jina-reranker-v3.5"
     rerank_candidates: int = 50  # fused candidates sent to the reranker
-    rerank_score_floor: float = 0.3  # gate threshold for the retry
+    rerank_score_floor: float = 0.0  # v3.5 scores are unbounded; <0 means judged irrelevant
     retry_enabled: bool = True
     retry_limit_multiplier: int = 3  # candidate-pool widening on gated retry
     decompose_enabled: bool = True
