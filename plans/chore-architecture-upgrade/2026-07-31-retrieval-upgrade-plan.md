@@ -1427,9 +1427,12 @@ def build_filter(
             )
         )
     if session_id is not None:
+        # session_id is written at the TOP LEVEL of the payload by
+        # ingestion/live_ingest.py, not nested under metadata. The existing
+        # _dual_query in server/tools/vector_search.py filters on the same key.
         conditions.append(
             models.FieldCondition(
-                key="metadata.session_id", match=models.MatchValue(value=session_id)
+                key="session_id", match=models.MatchValue(value=session_id)
             )
         )
     return models.Filter(must=conditions) if conditions else None  # type: ignore[arg-type]
