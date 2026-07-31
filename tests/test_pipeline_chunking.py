@@ -125,6 +125,38 @@ class TestQdrantPayloadContextualizedText:
         assert payload["contextualized_text"] == "Heading > Sub\nRaw text"
 
 
+class TestBuildChunkPoint:
+    def test_text_chunk_points_carry_named_dense_and_sparse(self) -> None:
+        """Upserted points use the named-vector dict with a sparse entry."""
+        from qdrant_client import models
+
+        from config.constants import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
+
+        fake_sparse = [models.SparseVector(indices=[1], values=[0.5])]
+        with patch(
+            "ingestion.pipeline.encode_documents", return_value=fake_sparse
+        ) as enc:
+            from ingestion.pipeline import _build_chunk_point
+
+            point = _build_chunk_point(
+                source_file="doc.pdf",
+                page_number=1,
+                chunk_index=0,
+                text="hello",
+                contextualized_text=None,
+                vector=[0.1] * 512,
+                mime="application/pdf",
+                now="2026-07-31T00:00:00Z",
+                embedder_model="jina-embeddings-v4",
+                embedder_dim=512,
+            )
+
+        enc.assert_called_once_with(["hello"])
+        assert DENSE_VECTOR_NAME in point.vector
+        assert SPARSE_VECTOR_NAME in point.vector
+        assert point.payload["text_content"] == "hello"
+
+
 class TestGraphEngineContextualizedText:
     async def test_engine_receives_contextualized_text(self) -> None:
         """Graph engine ingestion receives chunks with contextualized_text."""

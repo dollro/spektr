@@ -70,3 +70,60 @@ class TestEmbedderConsistency:
             warnings = doctor._check_embedder_consistency()
             assert any("no embedder_* tags" in w for w in warnings)
             assert not any("Mixed" in w for w in warnings)
+
+
+class TestMissingSparseVectors:
+    def test_scroll_requests_vectors(self) -> None:
+        with patch("qdrant_client.QdrantClient") as mock_cls:
+            mock_cls.return_value.scroll.return_value = ([], None)
+            doctor._check_embedder_consistency()
+            call_kwargs = mock_cls.return_value.scroll.call_args.kwargs
+            assert call_kwargs["with_vectors"] is True
+
+    def test_no_missing_sparse_is_silent(self) -> None:
+        points = [
+            MagicMock(
+                payload={
+                    "embedder_model": "jina-embeddings-v4",
+                    "embedder_dim": 512,
+                    "content_type": "text_chunk",
+                },
+                vector={"dense": [0.1], "sparse": {"indices": [1], "values": [0.5]}},
+            ),
+        ]
+        with patch("qdrant_client.QdrantClient") as mock_cls:
+            mock_cls.return_value.scroll.return_value = (points, None)
+            warnings = doctor._check_embedder_consistency()
+            assert not any("missing sparse" in w for w in warnings)
+
+    def test_missing_sparse_warns(self) -> None:
+        points = [
+            MagicMock(
+                payload={
+                    "embedder_model": "jina-embeddings-v4",
+                    "embedder_dim": 512,
+                    "content_type": "text_chunk",
+                },
+                vector={"dense": [0.1]},
+            ),
+        ]
+        with patch("qdrant_client.QdrantClient") as mock_cls:
+            mock_cls.return_value.scroll.return_value = (points, None)
+            warnings = doctor._check_embedder_consistency()
+            assert any("1 text chunks missing sparse vectors" in w for w in warnings)
+
+    def test_non_text_chunk_points_are_ignored(self) -> None:
+        points = [
+            MagicMock(
+                payload={
+                    "embedder_model": "jina-embeddings-v4",
+                    "embedder_dim": 512,
+                    "content_type": "image",
+                },
+                vector={"dense": [0.1]},
+            ),
+        ]
+        with patch("qdrant_client.QdrantClient") as mock_cls:
+            mock_cls.return_value.scroll.return_value = (points, None)
+            warnings = doctor._check_embedder_consistency()
+            assert not any("missing sparse" in w for w in warnings)

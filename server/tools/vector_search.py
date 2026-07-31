@@ -10,7 +10,7 @@ import logging
 
 from qdrant_client import QdrantClient, models
 
-from config.constants import DENSE_COLLECTION
+from config.constants import DENSE_COLLECTION, DENSE_VECTOR_NAME
 from config.settings import settings
 from ingestion.embedder import Embedder, create_embedder
 from server.models import SearchResult
@@ -93,6 +93,7 @@ async def vector_search(
         response = qdrant.query_points(
             collection_name=DENSE_COLLECTION,
             query=query_vector,
+            using=DENSE_VECTOR_NAME,
             query_filter=query_filter,
             limit=limit,
             with_payload=True,
@@ -185,6 +186,7 @@ def _dual_query(
     live_resp = qdrant.query_points(
         collection_name=DENSE_COLLECTION,
         query=query_vector,
+        using=DENSE_VECTOR_NAME,
         query_filter=live_filter,
         limit=limit,
         with_payload=True,
@@ -192,6 +194,7 @@ def _dual_query(
     kb_resp = qdrant.query_points(
         collection_name=DENSE_COLLECTION,
         query=query_vector,
+        using=DENSE_VECTOR_NAME,
         query_filter=kb_filter,
         limit=limit,
         with_payload=True,

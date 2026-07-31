@@ -23,7 +23,7 @@ import subprocess
 import sys
 from collections import Counter
 
-from config.constants import DENSE_COLLECTION
+from config.constants import DENSE_COLLECTION, SPARSE_VECTOR_NAME
 from config.settings import settings
 from server.tools.list_documents import list_documents
 
@@ -76,7 +76,8 @@ def _delete_tracking_rows(filenames: list[str]) -> None:
 
 
 def _check_embedder_consistency() -> list[str]:
-    """Scan a sample of Qdrant points for mixed embedder_model / embedder_dim.
+    """Scan a sample of Qdrant points for mixed embedder_model / embedder_dim
+    and text chunks missing a sparse vector.
 
     Returns a list of warning lines (empty = all consistent).
     """
@@ -86,7 +87,8 @@ def _check_embedder_consistency() -> list[str]:
     points, _ = client.scroll(
         collection_name=DENSE_COLLECTION,
         limit=500,
-        with_payload=["embedder_model", "embedder_dim"],
+        with_payload=["embedder_model", "embedder_dim", "content_type"],
+        with_vectors=True,
     )
     if not points:
         return []
@@ -94,6 +96,7 @@ def _check_embedder_consistency() -> list[str]:
     models_seen: Counter[str] = Counter()
     dims_seen: Counter[int] = Counter()
     unversioned = 0
+    missing_sparse: list[str] = []
     for p in points:
         payload = p.payload or {}
         model = payload.get("embedder_model")
@@ -103,6 +106,11 @@ def _check_embedder_consistency() -> list[str]:
         else:
             models_seen[str(model)] += 1
             dims_seen[int(dim)] += 1
+
+        if payload.get("content_type") == "text_chunk":
+            vectors = p.vector or {}
+            if SPARSE_VECTOR_NAME not in vectors:
+                missing_sparse.append(p.id)
 
     warnings: list[str] = []
     if len(models_seen) > 1:
@@ -116,6 +124,9 @@ def _check_embedder_consistency() -> list[str]:
             f"ℹ {unversioned}/{len(points)} sampled points have no embedder_* "
             "tags (pre-versioning ingest — reingest to tag)."
         )
+    if missing_sparse:
+        warnings.append(f"  ✗ {len(missing_sparse)} text chunks missing sparse vectors")
+        warnings.append("    Re-ingest required: task ingest")
     return warnings
 
 
@@ -172,8 +183,9 @@ async def main(fix: bool = False, yes: bool = False) -> int:
 
     drift = bool(only_cocoindex or only_qdrant)
     has_model_drift = any("Mixed embedder" in w for w in warnings)
+    has_missing_sparse = any("missing sparse vectors" in w for w in warnings)
 
-    if not drift and not has_model_drift:
+    if not drift and not has_model_drift and not has_missing_sparse:
         print("\n✓ All in sync.")
         return 0
     return 1

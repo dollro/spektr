@@ -17,7 +17,12 @@ import cocoindex
 from PIL import Image
 from qdrant_client import QdrantClient, models
 
-from config.constants import DENSE_COLLECTION, MULTIVEC_COLLECTION
+from config.constants import (
+    DENSE_COLLECTION,
+    DENSE_VECTOR_NAME,
+    MULTIVEC_COLLECTION,
+    SPARSE_VECTOR_NAME,
+)
 from config.logging import get_logger
 from config.settings import settings
 from ingestion._failure_tracker import get_tracker
@@ -33,6 +38,7 @@ from ingestion.graph_engine import GraphEngine, close_graph_engine, get_graph_en
 from ingestion.neo4j_setup import create_neo4j_schema, get_driver
 from ingestion.qdrant_setup import ensure_collections
 from ingestion.schema_inducer import SchemaInducer
+from ingestion.sparse_embedder import encode_documents
 from ingestion.target_connector import RagTarget
 
 logger = get_logger(__name__)
@@ -178,6 +184,47 @@ def _build_page_tasks(
     return tasks
 
 
+def _build_chunk_point(
+    *,
+    source_file: str,
+    page_number: int,
+    chunk_index: int,
+    text: str,
+    contextualized_text: str | None,
+    vector: list[float],
+    mime: str,
+    now: str,
+    embedder_model: str,
+    embedder_dim: int,
+) -> models.PointStruct:
+    """Build one dense-collection point with named dense + sparse vectors."""
+    chunk_id = _make_chunk_id(source_file, page_number, chunk_index)
+    payload = {
+        "source_file": source_file,
+        "content_type": "text_chunk",
+        "page_number": page_number,
+        "chunk_index": chunk_index,
+        "char_count": len(text),
+        "text_content": text,
+        "embedder_model": embedder_model,
+        "embedder_dim": embedder_dim,
+        "metadata": {
+            "mime_type": mime,
+            "ingested_at": now,
+            "source_key": source_file,
+        },
+    }
+    if contextualized_text is not None:
+        payload["contextualized_text"] = contextualized_text
+
+    sparse = encode_documents([text])[0]
+    return models.PointStruct(
+        id=_make_point_id(chunk_id),
+        vector={DENSE_VECTOR_NAME: vector, SPARSE_VECTOR_NAME: sparse},
+        payload=payload,
+    )
+
+
 async def _process_text_page(
     source_file: str,
     text: str,
@@ -223,39 +270,21 @@ async def _process_text_page(
         )
         return
 
-    dense_points: list[models.PointStruct] = []
-    for chunk, vector in zip(chunks, vectors):
-        chunk_id = _make_chunk_id(
-            source_file,
-            page_number,
-            chunk.chunk_index,
+    dense_points: list[models.PointStruct] = [
+        _build_chunk_point(
+            source_file=source_file,
+            page_number=page_number,
+            chunk_index=chunk.chunk_index,
+            text=chunk.text,
+            contextualized_text=chunk.contextualized_text,
+            vector=vector,
+            mime=mime,
+            now=now,
+            embedder_model=embedder.model_name,
+            embedder_dim=embedder.dim,
         )
-        point_id = _make_point_id(chunk_id)
-        payload = {
-            "source_file": source_file,
-            "content_type": "text_chunk",
-            "page_number": page_number,
-            "chunk_index": chunk.chunk_index,
-            "char_count": len(chunk.text),
-            "text_content": chunk.text,
-            "embedder_model": embedder.model_name,
-            "embedder_dim": embedder.dim,
-            "metadata": {
-                "mime_type": mime,
-                "ingested_at": now,
-                "source_key": source_file,
-            },
-        }
-        if chunk.contextualized_text is not None:
-            payload["contextualized_text"] = chunk.contextualized_text
-
-        dense_points.append(
-            models.PointStruct(
-                id=point_id,
-                vector=vector,
-                payload=payload,
-            ),
-        )
+        for chunk, vector in zip(chunks, vectors)
+    ]
 
     if dense_points:
         qdrant.upsert(
@@ -290,7 +319,7 @@ async def _process_visual_page(
             points=[
                 models.PointStruct(
                     id=_make_point_id(page_key),
-                    vector=vector,
+                    vector={DENSE_VECTOR_NAME: vector},
                     payload={
                         "source_file": source_file,
                         "content_type": content_type,
