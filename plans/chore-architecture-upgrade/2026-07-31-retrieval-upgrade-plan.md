@@ -13,7 +13,8 @@
 ## Global Constraints
 
 - Python 3.13. Package manager is `uv` — never `pip` directly.
-- Ruff line length 95. mypy strict. Run `task check` before every commit.
+- Ruff line length 95. Run `uv run ruff check .` before every commit — it must pass clean.
+- mypy strict, **but the repo does not currently pass `uv run mypy .`**: 14 pre-existing errors in 6 files (missing `gliner2`, `boto3`/`yaml`/`ragas` stubs, and a `scripts/backup.py` dual-module-name clash) are present at the branch base and are out of scope here. `task check` therefore fails for reasons unrelated to this work. The binding requirement is: **introduce no new mypy errors**. Verify with `uv run mypy . 2>&1 | tail -1` and confirm the count is still 14 (or lower) — never higher. Do not "fix" the pre-existing errors; that is a separate chore.
 - Max file 600 lines, max function 60 lines, max class 100 lines.
 - `retrieval/` must not import from `server/` or `fastmcp` — it is transport-agnostic.
 - Existing dict-based tool returns use `# type: ignore[type-arg]` on bare `dict`. Match that convention.
@@ -207,7 +208,7 @@ Run: `uv add 'fastembed>=0.7.0'`
 
 - [ ] **Step 7: Run tests to verify they pass**
 
-Run: `uv run pytest tests/test_settings.py -v && uv run task check`
+Run: `uv run pytest tests/test_settings.py -v && uv run ruff check . && uv run mypy . 2>&1 | tail -1`
 Expected: PASS, clean lint and types
 
 - [ ] **Step 8: Commit**
@@ -788,7 +789,7 @@ git rm server/tools/reranker.py
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `uv run pytest tests/test_rerank.py tests/test_tools.py -v && uv run task check`
+Run: `uv run pytest tests/test_rerank.py tests/test_tools.py -v && uv run ruff check . && uv run mypy . 2>&1 | tail -1`
 Expected: PASS. `tests/test_tools.py` must still pass — it exercises the existing tools through the moved reranker.
 
 If `tests/test_tools.py` patches `server.tools.reranker.rerank`, update those patch targets to `retrieval.rerank.rerank_dicts`.
@@ -1217,7 +1218,7 @@ Initialise `missing_sparse: list[str] = []` before the loop, import `SPARSE_VECT
 
 - [ ] **Step 7: Run tests to verify they pass**
 
-Run: `uv run pytest tests/test_qdrant_setup.py tests/test_pipeline_chunking.py tests/test_doctor.py tests/test_tools.py -v && uv run task check`
+Run: `uv run pytest tests/test_qdrant_setup.py tests/test_pipeline_chunking.py tests/test_doctor.py tests/test_tools.py -v && uv run ruff check . && uv run mypy . 2>&1 | tail -1`
 Expected: PASS
 
 - [ ] **Step 8: Perform the migration**
@@ -2093,7 +2094,7 @@ async def smart_pipeline(
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `uv run pytest tests/test_pipeline_retrieval.py -v && uv run task check`
+Run: `uv run pytest tests/test_pipeline_retrieval.py -v && uv run ruff check . && uv run mypy . 2>&1 | tail -1`
 Expected: PASS — 9 tests
 
 Note on `test_gate_triggers_exactly_one_retry`: the assertion reads `dense.await_args_list[-1].kwargs["limit"]`, so `_gather_channels` must pass `limit` as a keyword argument. It does.
@@ -2557,7 +2558,7 @@ grep -rn "HybridSearchResponse" --include=*.py . || echo "no references — safe
 
 - [ ] **Step 8: Run tests to verify they pass**
 
-Run: `uv run pytest tests/test_multi_search.py tests/test_tools.py -v && uv run task check`
+Run: `uv run pytest tests/test_multi_search.py tests/test_tools.py -v && uv run ruff check . && uv run mypy . 2>&1 | tail -1`
 Expected: PASS
 
 `tests/test_tools.py` contains assertions against the old `hybrid_search` shape. Update those to the new schema — they should assert on `results` and `graph_facts` rather than `vector_results` and `graph_results`.
@@ -3131,7 +3132,8 @@ git commit -m "docs: document fused retrieval, sparse channel, and re-ingest run
 - [ ] **Run the full check**
 
 ```bash
-task check
+uv run ruff check .
+uv run mypy . 2>&1 | tail -1   # must still read "Found 14 errors" or fewer
 task test-integration
 task eval
 task eval-retrieval
