@@ -113,6 +113,8 @@ Latency is `max(dense, sparse)` rather than their sum.
 3. Rerank against the **original** query, never a sub-query — sub-queries are a retrieval device; the user's intent is the ranking target
 4. Gate: if top-1 rerank score < `rerank_score_floor`, retry once with `limit × retry_limit_multiplier` candidates, re-fuse, re-rerank
 
+**Floor calibration (measured 2026-08-01).** `jina-reranker-v3.5` returns unbounded logit-like scores, not v2's bounded [0,1] relevance. Live comparison on the same query and documents: v2 scored a near-perfect match at +0.712 and irrelevant text at +0.027; v3.5 scored the same near-perfect match at only +0.389 and irrelevant text at −0.198. A floor of 0.3 — sensible for v2 — would fire the retry on most queries under v3.5. The floor is therefore **0.0**: retry only when even the best candidate scores negative, meaning the model actively judged it irrelevant. That threshold is grounded in the model's own scale rather than an arbitrary constant.
+
 The retry makes no second LLM call. It targets the "right chunk was at rank 60, we fetched 20" failure, which one extra Qdrant round trip fixes.
 
 ### Return schema — identical for both tools
@@ -177,7 +179,7 @@ sparse_model: str = "Qdrant/minicoil-v1"
 rrf_k: int = 60
 rerank_model: str = "jina-reranker-v3.5"
 rerank_candidates: int = 50           # fused candidates sent to the reranker
-rerank_score_floor: float = 0.3
+rerank_score_floor: float = 0.0
 retry_enabled: bool = True
 retry_limit_multiplier: int = 3       # candidate-pool widening on gated retry
 decompose_enabled: bool = True

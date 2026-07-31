@@ -82,7 +82,7 @@ def test_retrieval_defaults() -> None:
     assert s.rrf_k == 60
     assert s.rerank_model == "jina-reranker-v3.5"
     assert s.rerank_candidates == 50
-    assert s.rerank_score_floor == 0.3
+    assert s.rerank_score_floor == 0.0
     assert s.retry_enabled is True
     assert s.retry_limit_multiplier == 3
     assert s.decompose_enabled is True
@@ -118,7 +118,7 @@ In `config/settings.py`, replace the line `rerank_enabled: bool = True` with thi
     rrf_k: int = 60
     rerank_model: str = "jina-reranker-v3.5"
     rerank_candidates: int = 50  # fused candidates sent to the reranker
-    rerank_score_floor: float = 0.3  # gate threshold for the retry
+    rerank_score_floor: float = 0.0  # gate threshold; see calibration note below
     retry_enabled: bool = True
     retry_limit_multiplier: int = 3  # candidate-pool widening on gated retry
     decompose_enabled: bool = True
