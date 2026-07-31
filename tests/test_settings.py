@@ -91,18 +91,19 @@ class TestSettingsValidation:
         assert s.embedding_provider == "voyage"
 
 
-def test_retrieval_defaults() -> None:
+def test_retrieval_defaults(monkeypatch):  # type: ignore[no-untyped-def]
     """New retrieval settings expose the documented defaults.
 
     _env_file=None isolates from the developer's .env — Settings() otherwise
     reads it and this would assert the local config, not the defaults.
-    Explicit llm_model overrides the OS environment set by conftest.load_dotenv().
+    monkeypatch removes LLM_MODEL from os.environ set by conftest.load_dotenv()
+    to verify the code-level default, not constructor override.
     """
     from config.settings import Settings
 
+    monkeypatch.delenv("LLM_MODEL", raising=False)
     s = Settings(
         neo4j_password="test",
-        llm_model="claude-sonnet-5",
         _env_file=None,
     )  # type: ignore[call-arg]
     assert s.sparse_enabled is True
