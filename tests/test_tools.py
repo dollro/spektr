@@ -619,13 +619,13 @@ class TestReranker:
         ]
 
         with patch(
-            "server.tools.reranker._rerank_request",
+            "retrieval.rerank._rerank_request",
             new_callable=AsyncMock,
             return_value=mock_api_results,
         ):
-            from server.tools.reranker import rerank
+            from retrieval.rerank import rerank_dicts
 
-            reranked = await rerank("query", results, top_k=2)
+            reranked = await rerank_dicts("query", results, top_k=2)
 
         assert len(reranked) == 2
         assert reranked[0]["score"] == 0.9
@@ -634,9 +634,9 @@ class TestReranker:
 
     async def test_rerank_empty_results(self):
         """Empty input returns empty output."""
-        from server.tools.reranker import rerank
+        from retrieval.rerank import rerank_dicts
 
-        result = await rerank("query", [], top_k=5)
+        result = await rerank_dicts("query", [], top_k=5)
         assert result == []
 
     async def test_rerank_fallback_on_failure(self):
@@ -647,13 +647,13 @@ class TestReranker:
         ]
 
         with patch(
-            "server.tools.reranker._rerank_request",
+            "retrieval.rerank._rerank_request",
             new_callable=AsyncMock,
             side_effect=RuntimeError("API down"),
         ):
-            from server.tools.reranker import rerank
+            from retrieval.rerank import rerank_dicts
 
-            reranked = await rerank("query", results, top_k=1)
+            reranked = await rerank_dicts("query", results, top_k=1)
 
         assert len(reranked) == 1
         assert reranked[0]["text"] == "doc"

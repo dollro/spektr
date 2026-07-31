@@ -113,9 +113,9 @@ async def vector_search(
             )
 
         if settings.rerank_enabled and results and not _skip_rerank:
-            from server.tools.reranker import rerank
+            from retrieval.rerank import rerank_dicts
 
-            results = await rerank(query, results, top_k=limit)
+            results = await rerank_dicts(query, results, top_k=limit)
 
         return results
     except Exception as exc:

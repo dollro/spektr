@@ -88,10 +88,10 @@ async def hybrid_search(
     if settings.rerank_enabled and kb_results:
         has_error = any("error" in r for r in kb_results)
         if not has_error:
-            from server.tools.reranker import rerank
+            from retrieval.rerank import rerank_dicts
 
             try:
-                kb_results = await rerank(query, kb_results, top_k=limit)
+                kb_results = await rerank_dicts(query, kb_results, top_k=limit)
             except Exception as exc:
                 logger.warning("Rerank failed in hybrid: %s", exc)
 
