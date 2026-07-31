@@ -932,7 +932,12 @@ def _load_model() -> Any:
     from fastembed import SparseTextEmbedding
 
     logger.info("Loading sparse model %s", settings.sparse_model)
-    return SparseTextEmbedding(model_name=settings.sparse_model)
+    # avg_len is a CONSTRUCTOR kwarg, not a per-call embed() option. Passing it
+    # as embed(options={"avg_len": ...}) is silently swallowed and has zero
+    # effect on length normalisation — verified empirically against fastembed
+    # 0.8.0. Document values shift with avg_len; query_embed() ignores it, so
+    # the document/query asymmetry falls out without per-call handling.
+    return SparseTextEmbedding(model_name=settings.sparse_model, avg_len=MINICOIL_AVG_LEN)
 
 
 def _get_model() -> Any:
@@ -960,7 +965,7 @@ def encode_documents(texts: list[str]) -> list[SparseVector]:
     if not texts:
         return []
 
-    embeddings = _get_model().embed(texts, options={"avg_len": MINICOIL_AVG_LEN})
+    embeddings = _get_model().embed(texts)
     return [
         models.SparseVector(indices=list(e.indices), values=list(e.values))
         for e in embeddings
