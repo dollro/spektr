@@ -89,6 +89,7 @@ async def test_rerank_failure_degrades_to_fusion_order() -> None:
     from retrieval.rerank import RerankError
 
     with (
+        patch("retrieval.pipeline.settings.rerank_enabled", True),
         patch(
             "retrieval.pipeline.dense_channel", AsyncMock(return_value=[_cand("a", "dense")])
         ),
@@ -147,6 +148,7 @@ async def test_smart_pipeline_reranks_against_original_query() -> None:
         return results[:top_k]
 
     with (
+        patch("retrieval.pipeline.settings.rerank_enabled", True),
         patch("retrieval.pipeline.decompose", AsyncMock(return_value=["sub1", "sub2"])),
         patch(
             "retrieval.pipeline.dense_channel", AsyncMock(return_value=[_cand("a", "dense")])
