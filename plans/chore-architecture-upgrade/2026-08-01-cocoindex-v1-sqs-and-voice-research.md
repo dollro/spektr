@@ -130,8 +130,10 @@ Notes:
 - One loop ⇒ updates are naturally serialised; no overlapping scans to guard against.
 - Delete SQS messages **only after** `update()` succeeds, so a crash replays rather than drops.
 - New settings: `S3_SQS_DEBOUNCE_SECONDS`, `S3_FULL_SCAN_INTERVAL_HOURS` (default 24).
-- Interaction with the `PIPELINE_MAX_RETRIES` poison-pill contract needs re-checking: a
-  persistently failing `update()` must not wedge the loop or spin hot.
+- **`app.update()` does not raise when files fail** — `mount_each` failures are logged at
+  `ERROR` and never propagate. Check `handle.stats().total.num_errored` before deleting SQS
+  messages, or failures are silent. See the sibling doc, Blocker 3, for the verified
+  poison-pill semantics.
 
 `coco.App.update()` is a documented public API (`await app.update()` /
 `app.update_blocking()`), so this replaces

@@ -161,27 +161,72 @@ Consequences:
   removable — but the db file then needs a persistent volume, and concurrent access
   from multiple containers needs checking.
 
-### 3. Poison-pill retry semantics need re-derivation
+### 3. Poison-pill retry semantics — RESOLVED: contract survives 1:1
 
-Per the production contract in CLAUDE.md: a failing `ingest_file` re-raises so CocoIndex
-leaves the tracking row out and retries next run; after `PIPELINE_MAX_RETRIES` the failure
-is swallowed so CocoIndex marks the file processed. This depends on v0 row-level tracking
-behaviour. Under v1's memoized-component + declared-target-state model, what happens to a
-component that raises — and whether a swallowed failure still marks the item done — must
-be established empirically, not assumed.
+Verified 2026-08-01 against `programming_guide/function.mdx`,
+`programming_guide/processing_component.mdx`, `advanced_topics/exception_handlers.mdx` @ main.
 
-### 4. Custom target connector has no direct v1 analogue
+**Retry-on-failure is the v1 default.** From `function.mdx`, verbatim:
 
-`RagTarget` / `@cocoindex.op.target_connector` exists solely so that deleting a source
-file deletes its Qdrant points and Graphiti episodes; upserts are no-ops because
-`ingest_file` writes directly. v1 removes the custom-target-connector extension point in
-favour of declaring target states through connectors.
+> If a memoized function raises, no cache entry is written for that call. The next
+> invocation with the same inputs sees a cache miss and re-executes the body — exceptions
+> never poison the cache, so you don't need to wrap calls defensively.
 
-- Qdrant cleanup: solved natively — declared points are reconciled, so deletions come free.
-- Graphiti episode cleanup: **no equivalent.** Graphiti is not a CocoIndex connector, and
-  the native Neo4j connector's structural model doesn't map onto Graphiti episodes. Either
-  keep a side-channel cleanup hook, or accept orphaned episodes, or move graph writes onto
-  the native Neo4j connector (only viable for the GLiNER2 path, not Graphiti).
+The CLAUDE.md contract maps directly:
+
+| Behaviour | v0 mechanism | v1 mechanism |
+|-|-|-|
+| Retry next run | re-raise → tracking row not written | re-raise → no cache entry written |
+| Give up after `PIPELINE_MAX_RETRIES` | swallow → row written, file marked done | swallow + return normally → cache entry written, file not retried |
+| Failure counting | `state/ingestion_failures.db` | unchanged — Spektr's own sqlite, independent of CocoIndex |
+
+**Failure isolation is now free.** `processing_component.mdx`: *"A failure in one child does
+not affect the parent or siblings — by default the exception is logged and other components
+continue. One bad file shouldn't take down the entire pipeline."* Half the poison-pill's
+purpose (keep the batch moving) becomes framework behaviour; the counter's only remaining
+job is to stop retrying a file forever.
+
+**Two-phase processing removes partial writes.** Processing declares target states in memory
+and is side-effect-free; submit runs only after processing succeeds. Today `ingest_file`
+writes Qdrant + Neo4j inline, so a mid-file failure can leave partial data — v1 makes that
+structurally impossible, *but only if writes are declared rather than kept as direct side
+effects*.
+
+**Better home for the counter:** `builder.set_exception_handler()` (global, in lifespan) or
+`coco.exception_handler()` (scoped async context manager). Handlers receive
+`ExceptionContext.stable_path`, a stable per-component key, so the failure counter can be
+driven from there rather than by wrapping the function body.
+
+**Operational catch — affects the SQS-trigger daemon.** `mount()` / `mount_each()` failures
+**do not propagate**; they are logged at `ERROR` and nothing else, so **`await app.update()`
+returns successfully even when files failed.** The trigger loop must check
+`handle.stats().total.num_errored` before deleting SQS messages, otherwise failures are
+*silent* — strictly worse than v0, where a raise was visible. `UpdateHandle.watch()` streams
+progress snapshots for the same data.
+
+### 4. Custom target connector — CORRECTION: v1 *does* have this
+
+An earlier draft of this doc claimed v1 removed the custom-target-connector extension point.
+**That was wrong.** v1 documents it at `advanced_topics/custom_target_connector.mdx` with a
+public `TargetHandler` protocol — the same API the built-in Qdrant connector is implemented
+against (`coco.TargetHandler`, `coco.TargetActionSink`,
+`coco.register_root_target_states_provider`, `coco.ChildTargetDef`).
+
+`RagTarget` / `@cocoindex.op.target_connector` exists solely so that deleting a source file
+deletes its Qdrant points and Graphiti episodes; upserts are no-ops because `ingest_file`
+writes directly.
+
+- **Qdrant cleanup:** solved natively — declared points reconcile per key, so deletions come
+  free. See the sibling doc for verified reconciliation scope and the `managed_by` decision.
+- **Graphiti episode cleanup:** an earlier draft said "no equivalent" — also wrong, given the
+  above. A custom `TargetHandler` can do what `RagTarget` does today, with real tracking
+  records instead of a no-op upsert path. Remaining options unchanged otherwise: keep a
+  side-channel hook, accept orphans, or move graph writes to the native Neo4j connector
+  (structural, so GLiNER2-path only).
+
+The docs' own guidance is worth heeding before building one: *"For simple use cases where you
+just need to write data to an external system without sophisticated change tracking, consider
+using a regular function with memoization instead."*
 
 ### 5. Python version
 
