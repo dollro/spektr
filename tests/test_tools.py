@@ -13,6 +13,7 @@ import pytest
 from config.constants import (
     DENSE_COLLECTION,
     DENSE_DIM,
+    DENSE_VECTOR_NAME,
     MULTIVEC_COLLECTION,
     MULTIVEC_DIM,
 )
@@ -34,7 +35,7 @@ def _make_dense_point(
     """Build a Qdrant point payload dict for the dense collection."""
     return {
         "id": idx,
-        "vector": [0.1 * (idx + 1)] * DENSE_DIM,
+        "vector": {DENSE_VECTOR_NAME: [0.1 * (idx + 1)] * DENSE_DIM},
         "payload": {
             "text": text,
             "source_file": source_file,

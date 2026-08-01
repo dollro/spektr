@@ -17,6 +17,7 @@ from pydantic_ai.models.function import AgentInfo
 from config.constants import (
     DENSE_COLLECTION,
     DENSE_DIM,
+    DENSE_VECTOR_NAME,
     MULTIVEC_COLLECTION,
     MULTIVEC_DIM,
 )
@@ -41,7 +42,7 @@ def _seed_qdrant(client) -> None:  # type: ignore[no-untyped-def]
         points=[
             PointStruct(
                 id=1,
-                vector=[0.1] * DENSE_DIM,
+                vector={DENSE_VECTOR_NAME: [0.1] * DENSE_DIM},
                 payload={
                     "text": "Python is a programming language",
                     "source_file": "test_doc.pdf",
@@ -52,7 +53,7 @@ def _seed_qdrant(client) -> None:  # type: ignore[no-untyped-def]
             ),
             PointStruct(
                 id=2,
-                vector=[0.2] * DENSE_DIM,
+                vector={DENSE_VECTOR_NAME: [0.2] * DENSE_DIM},
                 payload={
                     "text": "Machine learning uses neural networks",
                     "source_file": "ml_guide.pdf",
