@@ -122,13 +122,18 @@ def _to_candidates(points: list, channel: str) -> list[Candidate]:  # type: igno
     mirroring server/tools/vector_search.py's old _dual_query. Live points
     never carry this in their stored payload metadata, so callers that need
     to tell live from bulk KB hits (e.g. shape_response) rely on this.
+
+    Always builds a fresh metadata dict rather than reusing
+    payload["metadata"] directly — Candidate.metadata (and, via rrf(),
+    FusedResult.metadata) must never alias the payload dict returned by the
+    Qdrant client, or a downstream mutation would corrupt it.
     """
     out: list[Candidate] = []
     for point in points:
         payload = point.payload or {}
-        metadata = payload.get("metadata", {})
+        metadata = {**payload.get("metadata", {})}
         if payload.get("is_live"):
-            metadata = {**metadata, "source_type": "live"}
+            metadata["source_type"] = "live"
         out.append(
             Candidate(
                 id=str(point.id),

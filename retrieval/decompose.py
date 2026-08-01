@@ -35,7 +35,7 @@ def _parse_subqueries(raw: str, max_n: int) -> list[str]:
         # Strip a leading "1." / "1)" / "- " enumerator if present.
         for sep in (". ", ") ", "- "):
             head, found, tail = text.partition(sep)
-            if found and head.lstrip("-").strip().isdigit() or (sep == "- " and not head):
+            if (found and head.lstrip("-").strip().isdigit()) or (sep == "- " and not head):
                 text = tail.strip()
                 break
         if text:

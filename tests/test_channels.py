@@ -116,6 +116,34 @@ async def test_dense_channel_synthesises_source_type_for_live_points() -> None:
 
 
 @pytest.mark.asyncio
+async def test_dense_channel_metadata_does_not_alias_payload_dict() -> None:
+    """Candidate.metadata must be a fresh dict, never the payload's own object.
+
+    rrf() passes Candidate.metadata straight through to FusedResult.metadata
+    by reference (retrieval/fusion.py). If _to_candidates reused
+    payload["metadata"] directly, mutating a FusedResult's metadata later
+    would corrupt the Qdrant response payload it came from.
+    """
+    point = _point("p1", 0.9, "hello")
+    original_metadata = point.payload["metadata"]
+
+    qdrant = MagicMock()
+    qdrant.query_points.return_value.points = [point]
+    embedder = MagicMock()
+    embedder.embed_text_query = AsyncMock(return_value=[0.1] * 512)
+
+    with (
+        patch("retrieval.channels._get_qdrant_client", return_value=qdrant),
+        patch("retrieval.channels._get_embedder", return_value=embedder),
+    ):
+        out = await dense_channel("hello", limit=10, query_filter=None)
+
+    assert out[0].metadata is not original_metadata
+    out[0].metadata["mutated"] = True
+    assert "mutated" not in original_metadata
+
+
+@pytest.mark.asyncio
 async def test_dense_channel_leaves_bulk_kb_metadata_untouched() -> None:
     """A payload with no is_live field gets no source_type injected."""
     qdrant = MagicMock()
@@ -141,10 +169,17 @@ async def test_dense_channel_empty_query_returns_empty() -> None:
 
 
 def test_build_filter_combines_conditions() -> None:
-    """Content type and source file both become must-conditions."""
+    """Content type and source file both become must-conditions, by key name.
+
+    Asserting only len(f.must) == 2 would stay green even if a condition
+    carried the wrong key (e.g. a typo, or accidentally reusing
+    content_type's key for source_file) — the exact bug class that shipped
+    once already (metadata.session_id vs top-level session_id, fixed before
+    Task 7). Assert the key set so a wrong key name makes this test red.
+    """
     f = build_filter(content_type="text_chunk", source_file="a.pdf")
     assert f is not None
-    assert len(f.must) == 2
+    assert {c.key for c in f.must} == {"content_type", "source_file"}
 
 
 def test_build_filter_returns_none_when_unfiltered() -> None:
@@ -166,6 +201,14 @@ def test_build_kb_filter_excludes_live_but_admits_missing_is_live() -> None:
     condition = f.must_not[0]
     assert condition.key == "is_live"
     assert condition.match.value is True
+
+
+def test_build_kb_filter_scopes_content_type_and_source_file_by_key() -> None:
+    """content_type/source_file land in `must`, by key name, alongside must_not."""
+    f = build_kb_filter(content_type="text_chunk", source_file="a.pdf")
+    assert {c.key for c in f.must} == {"content_type", "source_file"}
+    assert f.must_not is not None
+    assert {c.key for c in f.must_not} == {"is_live"}
 
 
 def test_build_live_filter_scopes_to_session_id() -> None:
