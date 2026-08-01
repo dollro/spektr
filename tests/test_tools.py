@@ -837,6 +837,58 @@ class TestSessionAwareVectorSearch:
         assert mock_qdrant.query_points.call_count == 2
 
     @pytest.mark.asyncio
+    async def test_vector_search_kb_filter_admits_points_missing_is_live(self) -> None:
+        """KB half of the dual query must match bulk points that have no
+        `is_live` key at all (ingestion/pipeline.py never writes one).
+
+        Regression test for a bug where the KB filter used
+        `should=[is_live==False, is_null(is_live)]`. Qdrant's IsNullCondition
+        matches an explicit JSON null, not a missing key, so that clause
+        matched zero real bulk-KB points and the KB half of every
+        session-scoped vector_search call silently returned nothing.
+
+        We can't exercise real Qdrant filtering against a MagicMock client,
+        so this inspects the actual filter object passed to the KB
+        query_points call and asserts it uses `must_not: is_live == True`
+        (which naturally treats a missing field as "not True"), matching the
+        pattern already proven correct in list_documents.py /
+        list_document_chunks.py / retrieval/channels.py's build_kb_filter.
+        """
+        from qdrant_client import models
+
+        mock_embedder = MagicMock()
+        mock_embedder.embed_text_query = AsyncMock(return_value=[0.1] * 512)
+
+        mock_response = MagicMock()
+        mock_response.points = []
+
+        mock_qdrant = MagicMock()
+        mock_qdrant.query_points = MagicMock(return_value=mock_response)
+
+        with (
+            patch("server.tools.vector_search._qdrant_client", mock_qdrant),
+            patch("server.tools.vector_search._embedder", mock_embedder),
+        ):
+            from server.tools.vector_search import vector_search
+
+            await vector_search("contract", session_id="session-1")
+
+        assert mock_qdrant.query_points.call_count == 2
+        # Second call is the KB query (first is the live-session query).
+        kb_call = mock_qdrant.query_points.call_args_list[1]
+        kb_filter = kb_call.kwargs["query_filter"]
+
+        assert kb_filter.must_not is not None
+        assert len(kb_filter.must_not) == 1
+        condition = kb_filter.must_not[0]
+        assert isinstance(condition, models.FieldCondition)
+        assert condition.key == "is_live"
+        assert condition.match.value is True
+
+        # Must not fall back to the broken should/IsNullCondition shape.
+        assert not kb_filter.should
+
+    @pytest.mark.asyncio
     async def test_vector_search_without_session_unchanged(self) -> None:
         """Without session_id, behavior is unchanged (single query)."""
         mock_embedder = MagicMock()

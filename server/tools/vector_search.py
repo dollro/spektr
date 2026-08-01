@@ -148,12 +148,14 @@ def _dual_query(
         ],
     )
 
-    kb_conditions: list[models.Condition] = [
-        models.FieldCondition(
-            key="is_live",
-            match=models.MatchValue(value=False),
-        ),
-    ]
+    # Bulk KB points (Path A) never write an `is_live` key at all, so this
+    # must be `must_not: is_live == True` rather than `is_live == False OR
+    # is_null(is_live)`: Qdrant's IsNullCondition matches an explicit JSON
+    # null, not a missing key, so that should-clause matches zero real KB
+    # points. `must_not` naturally treats a missing field as "not equal to
+    # True". Same pattern as list_documents.py / list_document_chunks.py /
+    # retrieval/channels.py's build_kb_filter.
+    kb_conditions: list[models.Condition] = []
     if content_type is not None:
         kb_conditions.append(
             models.FieldCondition(
@@ -170,15 +172,11 @@ def _dual_query(
         )
 
     kb_filter = models.Filter(
-        should=[
-            models.Filter(must=kb_conditions),
-            # Also match points without is_live field (bulk KB)
-            models.Filter(
-                must=[
-                    models.IsNullCondition(
-                        is_null=models.PayloadField(key="is_live"),
-                    ),
-                ],
+        must=kb_conditions,
+        must_not=[
+            models.FieldCondition(
+                key="is_live",
+                match=models.MatchValue(value=True),
             ),
         ],
     )
