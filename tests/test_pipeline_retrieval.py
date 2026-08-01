@@ -163,6 +163,42 @@ async def test_smart_pipeline_reranks_against_original_query() -> None:
 
 
 @pytest.mark.asyncio
+async def test_fast_pipeline_dual_retrieval_with_session_id() -> None:
+    """Regression test for the session_id dual-retrieval bug.
+
+    With session_id set, fast_pipeline must query Qdrant TWICE — once
+    scoped to bulk KB (build_kb_filter, a `must_not: is_live==True`
+    filter), once scoped to the live session (build_live_filter, a `must`
+    filter on session_id) — so that setting session_id neither excludes KB
+    results nor leaves live_results permanently empty.
+
+    Before the fix, build_filter added session_id as a single narrowing
+    `must` condition applied to one query, so KB results were excluded
+    entirely. Confirmed this test fails against that behavior (single
+    dense_channel call, zero KB results) before restoring dual retrieval;
+    see fix-session-dual-report.md.
+    """
+
+    async def _dense_side_effect(query, limit, query_filter):  # type: ignore[no-untyped-def]
+        assert query_filter is not None
+        if query_filter.must_not is not None:
+            return [_cand("kb-1", "dense")]
+        return [_cand("live-1", "dense")]
+
+    dense = AsyncMock(side_effect=_dense_side_effect)
+    with (
+        patch("retrieval.pipeline.dense_channel", dense),
+        patch("retrieval.pipeline.sparse_channel", AsyncMock(return_value=[])),
+        patch("retrieval.pipeline.rerank", AsyncMock(side_effect=_passthrough_rerank)),
+    ):
+        out = await fast_pipeline("q", limit=10, session_id="s1")
+
+    assert dense.await_count == 2
+    assert [r.id for r in out.results] == ["kb-1"]
+    assert [r.id for r in out.live_results] == ["live-1"]
+
+
+@pytest.mark.asyncio
 async def test_gate_triggers_exactly_one_retry() -> None:
     """A weak result set widens the pool once, never twice."""
     dense = AsyncMock(return_value=[_cand("a", "dense")])

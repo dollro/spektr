@@ -938,14 +938,6 @@ class TestSessionAwareHybridSearch:
         fused = PipelineOutput(
             results=[
                 FusedResult(
-                    id="1",
-                    text="live chunk",
-                    source_file="d.pdf",
-                    score=0.9,
-                    fusion_score=0.03,
-                    metadata={"source_type": "live"},
-                ),
-                FusedResult(
                     id="2",
                     text="kb doc",
                     source_file="d.pdf",
@@ -953,7 +945,17 @@ class TestSessionAwareHybridSearch:
                     fusion_score=0.02,
                     metadata={},
                 ),
-            ]
+            ],
+            live_results=[
+                FusedResult(
+                    id="1",
+                    text="live chunk",
+                    source_file="d.pdf",
+                    score=0.9,
+                    fusion_score=0.03,
+                    metadata={},
+                ),
+            ],
         )
         mock_pipeline = AsyncMock(return_value=fused)
         mock_graph = AsyncMock(return_value=[{"fact": "X related Y"}])
@@ -976,17 +978,18 @@ class TestSessionAwareHybridSearch:
 
     @pytest.mark.asyncio
     async def test_hybrid_search_separates_live_results(self) -> None:
-        """Hybrid search separates live chunks from KB results."""
+        """Hybrid search separates live chunks from KB results.
+
+        The KB/live split is owned by the pipeline (dual retrieval via
+        PipelineOutput.results / .live_results — see retrieval/pipeline.py),
+        not derived by hybrid_search from result metadata. A prior version
+        of this fixture put both hits in `results` and tagged one with
+        `metadata={"source_type": "live"}`, which real Qdrant payloads never
+        carry (ingestion/live_ingest.py writes metadata={}) — that let the
+        session_id dual-retrieval bug ship undetected.
+        """
         fused = PipelineOutput(
             results=[
-                FusedResult(
-                    id="1",
-                    text="live chunk",
-                    source_file="d.pdf",
-                    score=0.9,
-                    fusion_score=0.03,
-                    metadata={"source_type": "live"},
-                ),
                 FusedResult(
                     id="2",
                     text="kb doc",
@@ -995,7 +998,17 @@ class TestSessionAwareHybridSearch:
                     fusion_score=0.02,
                     metadata={},
                 ),
-            ]
+            ],
+            live_results=[
+                FusedResult(
+                    id="1",
+                    text="live chunk",
+                    source_file="d.pdf",
+                    score=0.9,
+                    fusion_score=0.03,
+                    metadata={},
+                ),
+            ],
         )
         mock_pipeline = AsyncMock(return_value=fused)
         mock_graph = AsyncMock(return_value=[])

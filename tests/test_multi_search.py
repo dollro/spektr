@@ -12,7 +12,7 @@ from server.tools.hybrid_search import hybrid_search
 from server.tools.multi_search import multi_search
 
 
-def _fused(doc_id: str, source_type: str = "bulk") -> FusedResult:
+def _fused(doc_id: str) -> FusedResult:
     return FusedResult(
         id=doc_id,
         text=f"t-{doc_id}",
@@ -22,7 +22,7 @@ def _fused(doc_id: str, source_type: str = "bulk") -> FusedResult:
         score=0.9,
         fusion_score=0.03,
         channels=["dense"],
-        metadata={"source_type": source_type},
+        metadata={},
     )
 
 
@@ -113,8 +113,18 @@ async def test_graph_failure_degrades_not_raises() -> None:
 
 @pytest.mark.asyncio
 async def test_live_results_split_out_when_session_active() -> None:
-    """Live-session chunks are separated from KB results."""
-    out_pipeline = PipelineOutput(results=[_fused("a", "live"), _fused("b", "bulk")])
+    """Live-session chunks are separated from KB results.
+
+    The pipeline itself owns the KB/live split (dual retrieval — see
+    retrieval/pipeline.py); shape_response must trust PipelineOutput's
+    results/live_results fields rather than re-deriving the split from
+    result metadata. A prior version sniffed
+    `item.metadata.get("source_type") == "live"`, which production code
+    never sets on stored payloads (ingestion/live_ingest.py writes
+    metadata={}) — that fixture asserted data that can't occur for real,
+    which is how the session_id dual-retrieval bug shipped undetected.
+    """
+    out_pipeline = PipelineOutput(results=[_fused("b")], live_results=[_fused("a")])
     with (
         patch("server.tools.multi_search.fast_pipeline", AsyncMock(return_value=out_pipeline)),
         patch("server.tools.multi_search.graph_search", AsyncMock(return_value=[])),
@@ -123,6 +133,27 @@ async def test_live_results_split_out_when_session_active() -> None:
 
     assert [r["id"] for r in out["live_results"]] == ["a"]
     assert [r["id"] for r in out["results"]] == ["b"]
+
+
+@pytest.mark.asyncio
+async def test_session_id_does_not_exclude_kb_results() -> None:
+    """A session_id must not confine the whole query to that session.
+
+    Regression test for defect (b): the old build_filter treated session_id
+    as a narrowing `must` condition on the single query, so setting
+    session_id silently returned zero KB results. Simulates the pipeline
+    returning both a KB and a live hit (as dual retrieval now does) and
+    checks both survive into the response.
+    """
+    out_pipeline = PipelineOutput(results=[_fused("kb-1")], live_results=[_fused("live-1")])
+    with (
+        patch("server.tools.multi_search.fast_pipeline", AsyncMock(return_value=out_pipeline)),
+        patch("server.tools.multi_search.graph_search", AsyncMock(return_value=[])),
+    ):
+        out = await multi_search("q", limit=5, session_id="nonexistent-session")
+
+    assert [r["id"] for r in out["results"]] == ["kb-1"]
+    assert [r["id"] for r in out["live_results"]] == ["live-1"]
 
 
 @pytest.mark.asyncio

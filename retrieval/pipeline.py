@@ -18,7 +18,13 @@ from pydantic import BaseModel, Field
 from qdrant_client import models
 
 from config.settings import settings
-from retrieval.channels import build_filter, dense_channel, sparse_channel
+from retrieval.channels import (
+    build_filter,
+    build_kb_filter,
+    build_live_filter,
+    dense_channel,
+    sparse_channel,
+)
 from retrieval.decompose import decompose
 from retrieval.fusion import rrf
 from retrieval.gate import should_retry
@@ -32,9 +38,19 @@ class PipelineOutput(BaseModel):
     """Result of a retrieval pipeline run."""
 
     results: list[FusedResult] = Field(default_factory=list)
+    live_results: list[FusedResult] = Field(default_factory=list)
     degraded: list[str] = Field(default_factory=list)
     sub_queries: list[str] = Field(default_factory=list)
     retried: bool = False
+
+
+def _merge_degraded(kb: list[str], live: list[str]) -> list[str]:
+    """Union of two degraded-channel lists, order-preserving, deduped."""
+    merged = list(kb)
+    for name in live:
+        if name not in merged:
+            merged.append(name)
+    return merged
 
 
 async def _gather_channels(
@@ -102,6 +118,33 @@ async def _retrieve_and_rank(
     return ranked, degraded
 
 
+async def _run_channel_set(
+    queries: list[str],
+    rank_query: str,
+    limit: int,
+    query_filter: models.Filter | None,
+) -> tuple[list[FusedResult], list[str], bool]:
+    """Retrieve+rank with a relevance-gated single retry.
+
+    Used by smart_pipeline for the KB and live channel sets independently,
+    so a weak live-session result doesn't force a retry on the KB side (or
+    vice versa) and each retains its own `limit`-sized pool.
+    """
+    results, degraded = await _retrieve_and_rank(queries, rank_query, limit, query_filter)
+
+    retried = False
+    if settings.retry_enabled and should_retry(results, settings.rerank_score_floor):
+        widened = limit * settings.retry_limit_multiplier
+        logger.info("Relevance gate fired, widening pool to %d", widened)
+        results, degraded = await _retrieve_and_rank(
+            queries, rank_query, widened, query_filter
+        )
+        results = results[:limit]
+        retried = True
+
+    return results, degraded, retried
+
+
 async def fast_pipeline(
     query: str,
     limit: int = 10,
@@ -109,10 +152,34 @@ async def fast_pipeline(
     source_file: str | None = None,
     session_id: str | None = None,
 ) -> PipelineOutput:
-    """Deterministic retrieval: channels -> RRF -> rerank. No LLM calls."""
-    query_filter = build_filter(content_type, source_file, session_id)
-    results, degraded = await _retrieve_and_rank([query], query, limit, query_filter)
-    return PipelineOutput(results=results, degraded=degraded)
+    """Deterministic retrieval: channels -> RRF -> rerank. No LLM calls.
+
+    When session_id is set, the KB and live-session channel sets are run
+    TWICE — once scoped to bulk KB data, once scoped to the session — so
+    each gets a full `limit`-sized result set. A single query with
+    session_id as a narrowing filter would silently exclude the KB
+    entirely; see docs/server/search-tools.md and _dual_query's history
+    in server/tools/vector_search.py.
+    """
+    if session_id is None:
+        query_filter = build_filter(content_type, source_file)
+        results, degraded = await _retrieve_and_rank([query], query, limit, query_filter)
+        return PipelineOutput(results=results, degraded=degraded)
+
+    kb_task = asyncio.create_task(
+        _retrieve_and_rank([query], query, limit, build_kb_filter(content_type, source_file))
+    )
+    live_task = asyncio.create_task(
+        _retrieve_and_rank([query], query, limit, build_live_filter(session_id))
+    )
+    (kb_results, kb_degraded), (live_results, live_degraded) = await asyncio.gather(
+        kb_task, live_task
+    )
+    return PipelineOutput(
+        results=kb_results,
+        live_results=live_results,
+        degraded=_merge_degraded(kb_degraded, live_degraded),
+    )
 
 
 async def smart_pipeline(
@@ -122,28 +189,41 @@ async def smart_pipeline(
     source_file: str | None = None,
     session_id: str | None = None,
 ) -> PipelineOutput:
-    """LLM-augmented retrieval: decomposition plus a gated single retry."""
-    query_filter = build_filter(content_type, source_file, session_id)
+    """LLM-augmented retrieval: decomposition plus a gated single retry.
 
+    Decomposition runs once against the original query; the resulting
+    sub-queries drive both the KB and live channel sets when session_id is
+    set (see fast_pipeline's docstring for why dual retrieval is needed).
+    """
     try:
         sub_queries = await decompose(query)
     except Exception:
         logger.exception("Decomposition failed")
         sub_queries = [query]
 
-    results, degraded = await _retrieve_and_rank(sub_queries, query, limit, query_filter)
+    if session_id is None:
+        query_filter = build_filter(content_type, source_file)
+        results, degraded, retried = await _run_channel_set(
+            sub_queries, query, limit, query_filter
+        )
+        return PipelineOutput(
+            results=results, degraded=degraded, sub_queries=sub_queries, retried=retried
+        )
 
-    retried = False
-    if settings.retry_enabled and should_retry(results, settings.rerank_score_floor):
-        widened = limit * settings.retry_limit_multiplier
-        logger.info("Relevance gate fired, widening pool to %d", widened)
-        results, degraded = await _retrieve_and_rank(sub_queries, query, widened, query_filter)
-        results = results[:limit]
-        retried = True
-
+    kb_task = asyncio.create_task(
+        _run_channel_set(sub_queries, query, limit, build_kb_filter(content_type, source_file))
+    )
+    live_task = asyncio.create_task(
+        _run_channel_set(sub_queries, query, limit, build_live_filter(session_id))
+    )
+    (
+        (kb_results, kb_degraded, kb_retried),
+        (live_results, live_degraded, live_retried),
+    ) = await asyncio.gather(kb_task, live_task)
     return PipelineOutput(
-        results=results,
-        degraded=degraded,
+        results=kb_results,
+        live_results=live_results,
+        degraded=_merge_degraded(kb_degraded, live_degraded),
         sub_queries=sub_queries,
-        retried=retried,
+        retried=kb_retried or live_retried,
     )

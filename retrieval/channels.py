@@ -41,9 +41,8 @@ def _get_embedder() -> Embedder:
 def build_filter(
     content_type: str | None,
     source_file: str | None,
-    session_id: str | None,
 ) -> models.Filter | None:
-    """Assemble a Qdrant filter from optional constraints."""
+    """Assemble a plain must-filter for the no-session case."""
     conditions: list[models.FieldCondition] = []
     if content_type is not None:
         conditions.append(
@@ -57,23 +56,79 @@ def build_filter(
                 key="source_file", match=models.MatchValue(value=source_file)
             )
         )
-    if session_id is not None:
-        # session_id is written at the TOP LEVEL of the payload by
-        # ingestion/live_ingest.py, not nested under metadata. The existing
-        # _dual_query in server/tools/vector_search.py filters on the same key.
-        conditions.append(
-            models.FieldCondition(
-                key="session_id", match=models.MatchValue(value=session_id)
-            )
-        )
     return models.Filter(must=conditions) if conditions else None  # type: ignore[arg-type]
 
 
+def build_kb_filter(
+    content_type: str | None,
+    source_file: str | None,
+) -> models.Filter:
+    """Bulk knowledge-base filter: excludes live session data.
+
+    Uses `must_not: is_live == True` rather than the old _dual_query's
+    `is_live == False OR is_null(is_live)` should-clause
+    (server/tools/vector_search.py). That old shape does NOT work: Qdrant's
+    IsNullCondition matches an explicit JSON `null` value, not a missing
+    key, and bulk KB points (Path A) never write `is_live` at all — so its
+    null branch matches zero points. Verified empirically against a live
+    Qdrant 1.17 instance: the should-clause returned 0 of 68 real KB
+    points; `must_not` returns all 68. `must_not` naturally treats a
+    missing field as "not equal to True", which list_documents.py and
+    list_document_chunks.py already rely on elsewhere in this codebase —
+    this brings build_kb_filter in line with the pattern proven to work,
+    rather than reproducing a filter shape that was never actually
+    exercised against un-mocked Qdrant.
+
+    Unlike the old code, content_type/source_file apply uniformly here
+    (there's no should-branch for them to be scoped out of).
+    """
+    must: list[models.Condition] = []
+    if content_type is not None:
+        must.append(
+            models.FieldCondition(
+                key="content_type", match=models.MatchValue(value=content_type)
+            )
+        )
+    if source_file is not None:
+        must.append(
+            models.FieldCondition(
+                key="source_file", match=models.MatchValue(value=source_file)
+            )
+        )
+    return models.Filter(
+        must=must,
+        must_not=[models.FieldCondition(key="is_live", match=models.MatchValue(value=True))],
+    )
+
+
+def build_live_filter(session_id: str) -> models.Filter:
+    """Live-session filter: only points tagged with this session_id.
+
+    session_id is written at the TOP LEVEL of the payload by
+    ingestion/live_ingest.py, not nested under metadata.
+    """
+    return models.Filter(
+        must=[
+            models.FieldCondition(key="session_id", match=models.MatchValue(value=session_id)),
+        ],
+    )
+
+
 def _to_candidates(points: list, channel: str) -> list[Candidate]:  # type: ignore[type-arg]
-    """Convert Qdrant scored points into Candidates."""
+    """Convert Qdrant scored points into Candidates.
+
+    Live points (is_live=True, set by ingestion/live_ingest.py) get
+    source_type: "live" synthesised into their metadata at read time,
+    mirroring server/tools/vector_search.py's old _dual_query. Live points
+    never carry this in their stored payload metadata, so callers that need
+    to tell live from bulk KB hits (e.g. shape_response) rely on this.
+    """
     out: list[Candidate] = []
     for point in points:
         payload = point.payload or {}
+        metadata = payload.get("metadata", {})
+        if payload.get("is_live"):
+            metadata = {**metadata, "source_type": "live"}
         out.append(
             Candidate(
                 id=str(point.id),
@@ -83,7 +138,7 @@ def _to_candidates(points: list, channel: str) -> list[Candidate]:  # type: igno
                 chunk_index=payload.get("chunk_index", 0),
                 score=point.score,
                 channel=channel,
-                metadata=payload.get("metadata", {}),
+                metadata=metadata,
             )
         )
     return out

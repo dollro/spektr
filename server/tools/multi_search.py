@@ -39,17 +39,14 @@ def shape_response(
     """Build the shared response dict from a pipeline result.
 
     Shared by multi_search and hybrid_search so the two schemas cannot drift.
+    The KB/live split comes straight from the pipeline (which runs dual
+    retrieval when session_id is set) rather than from sniffing result
+    metadata — see retrieval/pipeline.py's fast_pipeline/smart_pipeline.
     """
-    live: list[dict] = []  # type: ignore[type-arg]
-    kb: list[dict] = []  # type: ignore[type-arg]
-    for item in output.results:
-        target = live if session_id and item.metadata.get("source_type") == "live" else kb
-        target.append(item.model_dump())
-
     response: dict = {  # type: ignore[type-arg]
-        "results": kb,
+        "results": [item.model_dump() for item in output.results],
         "graph_facts": graph_facts,
-        "live_results": live,
+        "live_results": [item.model_dump() for item in output.live_results],
         "query": query,
         "session_id": session_id,
     }
