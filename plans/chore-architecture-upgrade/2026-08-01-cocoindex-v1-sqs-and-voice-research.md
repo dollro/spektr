@@ -1,0 +1,295 @@
+# CocoIndex v1: SQS Gap (resolved) + Voice/Transcript Opportunity
+
+Date: 2026-08-01
+Status: research complete — decisions still open
+Follows: [`2026-08-01-cocoindex-v1-vs-v0.md`](./2026-08-01-cocoindex-v1-vs-v0.md) (resolves its Blocker #1)
+Method: upstream docs, GitHub repo/API inspection, issue & code search. Latest release: **cocoindex 1.0.18**, `requires_python >=3.11` (Spektr's 3.13 is fine).
+
+---
+
+## Part 1 — SQS: confirmed dropped in v1
+
+**Verdict: v1 has no SQS support, and no v1 replacement for S3 change-capture. This is a
+real regression against v0, not a documentation gap.**
+
+### First, scope it correctly — what is *not* lost
+
+Two separate things get conflated here:
+
+| Concern | Mechanism | v1 status |
+|-|-|-|
+| **Incremental reconciliation** — only changed files reprocessed; deleted files have their Qdrant points and graph nodes removed | Target-state ledger + memoization | **Fully intact.** Better than v0: memoization keys on function *code* as well as inputs |
+| **Change *discovery*** — how CocoIndex learns something changed | Catch-up scan (list + compare) *or* push event (SQS / file watcher / Kafka) | Push trigger for S3 is **gone**; scan still works |
+
+So "S3 changes → Qdrant and Neo4j update automatically" **still holds in v1**. What changes
+is *when it notices*: on the next scan rather than within seconds of the S3 event. And a
+scan is a `list_objects` metadata call — it does not re-embed or re-extract anything. Cost
+scales with object count per cycle, not change count.
+
+The regression is **latency and scan cost on the direct-S3 path only**, not correctness and
+not automation. Per Spektr's `DOCUMENT_SOURCE`:
+
+| Source | v1 trigger |
+|-|-|
+| `local` | `localfs.walk_dir(live=True)` — real filesystem watcher, true push |
+| `sharepoint` | Already syncs to a local mirror → same watcher, true push |
+| `s3` (direct) | Poll/scan only — **the sole regression** |
+
+The fix is therefore about restoring the *trigger*, not about relocating files — see
+Option E below.
+
+Five independent confirmations:
+
+1. **No connector module.** `python/cocoindex/connectors/` contains exactly 20 modules —
+   `amazon_s3, azure_blob, bigquery, doris, falkordb, google_drive, iggy, kafka, lancedb,
+   localfs, neo4j, oci_object_storage, postgres, qdrant, snowflake, sqlite, surrealdb,
+   turbopuffer, valkey, zvec`. There is no `sqs`.
+
+2. **The v1 `amazon_s3` API has no event hook.** Public surface is only:
+   ```
+   list_objects(client, bucket_name, *, prefix="", path_matcher=None, max_file_size=None)
+   get_object(client, bucket_name_or_uri, key=None)
+   read(client, uri, size=-1)
+   ```
+   No `sqs_queue_url`, no `live=` parameter (unlike `localfs.walk_dir(..., live=True)`).
+
+3. **The official v1 example says so outright.** `examples/amazon_s3_embedding/README.md`:
+   > "the `amazon_s3` source does not support live mode, so this is a one-shot catch-up
+   > run (scan the bucket, sync, exit)"
+
+4. **The v0 SQS example was deleted and redirected.** A repo-wide code search for `sqs`
+   returns one meaningful hit — `docs/src/data/redirects.ts`:
+   ```
+   '/examples/s3_sqs_pipeline': '/docs/examples/amazon-s3-embedding/'
+   ```
+   The v0 S3+SQS pipeline example now redirects to the v1 example that explicitly has no
+   live mode.
+
+5. **No v1 issue tracks restoring it.** The only related open issue is
+   [#601](https://github.com/cocoindex-io/cocoindex/issues/601) — "Support event
+   notification (e.g. for S3) by exposing a webhook", opened **June 2025** (v0 era), no
+   comments, no activity since. Its body reads "Currently S3 supports event notifications
+   by SQS", i.e. it was written *about v0*. The v0-era siblings —
+   [#477](https://github.com/cocoindex-io/cocoindex/issues/477) (change event push for S3),
+   [#600](https://github.com/cocoindex-io/cocoindex/issues/600) (Kafka queue for event
+   notification), [#599](https://github.com/cocoindex-io/cocoindex/issues/599) (Redis
+   queue) — are all closed.
+
+Also confirmed from the [V1 launch post](https://cocoindex.io/blogs/cocoindex-v1/): v1
+stores internal state in **LMDB**, a single local file (default 4 GiB virtual address
+space), holding "the target-state ledger, the memoization cache, and the component-path
+tree". This upgrades Blocker #2 of the previous doc from *likely* to *certain*: Postgres
+leaves the stack, and `doctor.py` / `backup.py` / `docker-compose*.yml` all change.
+
+### Four ways forward for Path A
+
+| Option | Shape | Cost |
+|-|-|-|
+**Hard constraint (2026-08-01): no solution may duplicate stored bytes.** Documents live in
+S3 / SharePoint / local disk and must not be copied to a second location that costs storage
+again. This rules out the mirror approach outright.
+
+| Option | Shape | Duplicates storage? | Cost |
+|-|-|-|-|
+| **A. Stay on v0** | Pin `<1.0` indefinitely | No | No work now; v0 is frozen and its docs are already relegated to `/docs-v0/`. Accrues debt. |
+| **B. v1 + timer** | Periodic `app.update()`; catch-up scan reprocesses only changed objects | No | Simplest thing that works. Latency = interval. |
+| **C. SQS → Kafka/Iggy bridge** | Consumer republishes S3 *event keys* to a topic; `kafka.topic_as_map()` live source; component fetches the body from S3 on demand | No | Event-driven latency, but adds a broker to the stack. |
+| **D. SQS → local mirror** | Download changed objects to a watched volume | **Yes — rejected** | Pays for the same bytes twice. |
+| **E. SQS as trigger** ⭐ **chosen** | Thin consumer long-polls SQS; on event(s), debounce then call `await app.update()`; plus a daily sweep and a startup run | No | Event-driven latency, no broker, no duplication. Smaller than today's daemon. |
+
+**DECIDED (2026-08-01): Option E, hybrid triggering.** SQS is used as a *trigger*, never as
+a transport — nothing is downloaded except objects that actually changed, and those are read
+straight from S3 by the pipeline as it already does. A periodic full sweep backs it up so a
+missed event is self-healing rather than permanent.
+
+Three triggers, all calling the same `await app.update()`:
+
+| Trigger | Purpose |
+|-|-|
+| SQS event (debounced) | Normal path — seconds of latency |
+| Interval timer (default **24h**) | Safety net for missed or expired events |
+| Daemon startup | Recovers changes made while the daemon was down — SQS retention is 4 days default, 14 max, so anything older is unrecoverable by event replay |
+
+```python
+last_full = 0.0
+while True:
+    msgs = sqs.receive_message(WaitTimeSeconds=20, ...)   # long poll, free while idle
+    due = (time.monotonic() - last_full) > FULL_SCAN_INTERVAL
+    if not msgs and not due:
+        continue
+    if msgs:
+        await asyncio.sleep(DEBOUNCE)     # coalesce a burst into one run
+        drain_more_messages()
+    await app.update()                    # LIST + reprocess only what changed
+    last_full = time.monotonic()
+    if msgs:
+        sqs.delete_message_batch(...)     # only after a successful update
+```
+
+Notes:
+- One loop ⇒ updates are naturally serialised; no overlapping scans to guard against.
+- Delete SQS messages **only after** `update()` succeeds, so a crash replays rather than drops.
+- New settings: `S3_SQS_DEBOUNCE_SECONDS`, `S3_FULL_SCAN_INTERVAL_HOURS` (default 24).
+- Interaction with the `PIPELINE_MAX_RETRIES` poison-pill contract needs re-checking: a
+  persistently failing `update()` must not wedge the loop or spin hot.
+
+`coco.App.update()` is a documented public API (`await app.update()` /
+`app.update_blocking()`), so this replaces
+`cocoindex.update_all_flows_async(FlowLiveUpdaterOptions(live_mode=True))` at
+`ingestion/pipeline.py:836` with a loop. `_use_s3_source()` branching and the S3 source
+config stay as they are.
+
+**Scan cost is negligible.** A triggered run does one `list_objects` sweep — metadata only,
+no object bodies. S3 LIST is ~$0.005 per 1,000 requests at 1,000 keys per request, so a
+10k-object bucket costs ~$0.00005 per scan. Scanning every minute around the clock is cents
+per month. Option B (drop SQS, just use a 1–5 minute timer) is defensible on the same
+arithmetic and is strictly simpler.
+
+**Trap — do not optimise the LIST away without verifying.** The tempting move is to skip
+the scan and mount a component only for the object key named in the SQS event. CocoIndex
+reconciles against the set of target states declared *during that run*; if a run declares
+one object, everything else may be treated as removed and deleted from Qdrant and Neo4j.
+Declaring the full set each run is what makes deletion handling work. Whether v1 offers an
+escape hatch (partial/scoped reconciliation) is **unverified** — check before relying on it.
+
+Note also [#2111](https://github.com/cocoindex-io/cocoindex/issues/2111) (closed): a
+crash-on-rerun deserialization bug in `FileLike.__coco_memo_state__` specific to the
+AmazonS3 source. The v1 S3 path has less production mileage than localfs.
+
+---
+
+## Part 2 — Voice & transcripts: what's actually there
+
+The homepage's "Voice · Transcripts" is backed by real shipped capability, not marketing.
+
+### Built-in speech-to-text
+
+`cocoindex.ops.litellm.LiteLLMTranscriber` — **in the library**, not example code
+(`python/cocoindex/ops/litellm.py`). Landed via
+[PR #1889](https://github.com/cocoindex-io/cocoindex/pull/1889), merged 2026-04-27.
+
+```python
+from cocoindex.ops.litellm import LiteLLMTranscriber
+
+transcriber = LiteLLMTranscriber("whisper-1", language="en")   # kwargs pass through to litellm.atranscription
+text: str = await transcriber.transcribe(file)                 # file: FileLike (e.g. localfs.File)
+```
+
+Requires `pip install cocoindex[litellm]`. Any LiteLLM-supported STT backend: OpenAI
+Whisper, ElevenLabs (`elevenlabs/scribe_v1`), Groq, self-hosted endpoints. Combined with
+`@coco.fn(memo=True)`, a file is transcribed once and never again unless it or the code
+changes.
+
+Still open: [#1828](https://github.com/cocoindex-io/cocoindex/issues/1828) asks for a
+broader configurable local+remote STT provider abstraction (opened April 2026). LiteLLM
+covers the remote case today; fully-local Whisper means bringing your own.
+
+### Relevant v1 examples
+
+| Example | What it does |
+|-|-|
+| `audio_to_text` | Walk a dir of `.mp3/.wav/.m4a/.flac/.ogg/.webm/.aac/.aiff` → `LiteLLMTranscriber` → one transcript row per file in Postgres |
+| **`entire_session_search`** | **Closest match to Spektr's live path.** Session checkpoint folders → `process_file` routes by filename → `full.jsonl` parsed into per-turn transcript chunks, `prompt.txt` embedded whole, `context.md` split with overlap, `metadata.json` → a second structured table. Fans out via `coco.map(process_chunk, ...)` into pgvector |
+| `conversation_to_knowledge` | YouTube → yt-dlp + AssemblyAI **diarized** transcription → two-step LLM extraction (speakers, statements, mentioned entities) → embedding-based entity resolution → SurrealDB graph |
+| `meeting_notes_graph_neo4j` | Google Drive notes → LLM extraction of organizers/attendees/tasks → Neo4j, kept in sync as notes change |
+| `kafka_to_lancedb` / `csv_to_kafka` | Live Kafka source/target; offsets committed only after the row is durably written, so a crash replays cleanly |
+| `slides_to_speech` | Vision LLM speaker notes → Pocket TTS locally on CPU → LanceDB |
+
+---
+
+## Part 3 — Can `live_ingest.py` be rewritten on v1?
+
+**Partly. The hard constraint: v1 has no HTTP/webhook source.** None of the 20 connectors
+accepts a push. Issue #601 asks for exactly this and has been dormant for over a year.
+So the FastAPI endpoint cannot be replaced by CocoIndex — it can only be demoted to a
+thin producer.
+
+### Realistic target shape
+
+```
+client ──HTTP──> FastAPI (keeps INGEST_API_KEY → ephemeral session-token auth)
+                     │  writes transcript chunk / audio blob
+                     ▼
+              Kafka/Iggy topic   OR   watched session dir on disk
+                     │
+                     ▼
+          CocoIndex v1 live app (`cocoindex update main.py -L`)
+                     │  @coco.fn(memo=True): transcribe? → chunk → embed → extract
+                     ▼
+          Qdrant (native connector, named vectors)  +  graph target
+```
+
+FastAPI keeps the two-layer auth (`INGEST_API_KEY` gates `/session/start`, which returns
+the ephemeral per-session token for `/ingest/transcript` and `/session/end`) — that logic
+has no CocoIndex analogue and shouldn't move.
+
+### What this buys
+
+- **Audio ingestion Spektr does not have today.** Path B currently accepts text only;
+  callers must transcribe upstream. `LiteLLMTranscriber` moves that inside the pipeline,
+  memoized.
+- **Incremental everything.** Re-processing a session re-embeds only changed turns.
+- **Deletes handled by reconciliation.** Declared target states mean removing a session
+  cleans up its Qdrant points — which is the entire reason `ingestion/target_connector.py`
+  exists.
+- **One engine for both paths.** Path A and Path B would share components, one state store,
+  one deployment story.
+
+### What it costs — the honest blocker
+
+**Graphiti's episodic model does not fit CocoIndex's target-state model.** Path B's value
+is temporal episodic memory: Graphiti *appends* episodes with validity intervals.
+CocoIndex reconciles *declared* state — it diffs what you say should exist against what
+does. Episodes appended by Graphiti aren't CocoIndex-managed state, so either:
+
+- graph writes stay outside CocoIndex (as today, via a side-effect in a `@coco.fn`), losing
+  reconciliation for the graph half; or
+- graph writes move to the native `neo4j` connector (`mount_table_target` /
+  `mount_relation_target` / `declare_relation`), which is **structural, not temporal** —
+  that's abandoning Graphiti for Path B, not porting it.
+
+This is a product decision about whether temporal episodic memory is load-bearing for
+Spektr, not an engineering detail. It should be settled before any Path B spike.
+
+Secondary: adding Kafka or Iggy adds an operational component. The watched-directory
+variant avoids that and reuses the same `localfs` live source as Option D above — worth
+prototyping first precisely because it converges the two tracks.
+
+---
+
+## Recommendation
+
+Split the work; do not couple the tracks.
+
+**Track 1 — Path A (bulk).** Unblocked. Take Option E: keep SQS purely as a trigger for
+`await app.update()`, duplicating no storage and adding no broker. Then the v1 migration is
+scoped by the previous doc's remaining items (LMDB state → rewrite `doctor.py`/`backup.py`,
+drop Postgres, re-derive the poison-pill semantics, replace `RagTarget` with the native
+Qdrant connector).
+
+**Track 2 — Path B (live).** Genuinely attractive — built-in STT plus memoized incremental
+processing is capability Spektr doesn't have. But it needs two decisions first:
+(a) ingress — broker vs. watched directory; (b) **Graphiti's future**, per above. Spike
+only after Track 1 proves the v1 fundamentals, and start from `entire_session_search`.
+
+**Do not** pin new work to v0. It is frozen and its docs are already segregated under
+`/docs-v0/`.
+
+---
+
+## Sources
+
+- [CocoIndex homepage](https://cocoindex.io/) — "Voice · Transcripts", "Message Queues", "Images · Video"
+- [CocoIndex V1 is Live!](https://cocoindex.io/blogs/cocoindex-v1/) — LMDB state, DSL removal, connector porting
+- [v1 Amazon S3 connector docs](https://cocoindex.io/docs/connectors/amazon_s3/) — no SQS
+- [v1 connectors index](https://cocoindex.io/docs/connectors/) — full 20-connector list
+- [v1 examples index](https://cocoindex.io/docs/examples/)
+- [`examples/amazon_s3_embedding`](https://github.com/cocoindex-io/cocoindex/tree/main/examples/amazon_s3_embedding) — "does not support live mode"
+- [`examples/entire_session_search`](https://github.com/cocoindex-io/cocoindex/tree/main/examples/entire_session_search)
+- [`examples/audio_to_text`](https://github.com/cocoindex-io/cocoindex/tree/main/examples/audio_to_text)
+- [`examples/conversation_to_knowledge`](https://github.com/cocoindex-io/cocoindex/tree/main/examples/conversation_to_knowledge)
+- [`examples/kafka_to_lancedb`](https://github.com/cocoindex-io/cocoindex/tree/main/examples/kafka_to_lancedb)
+- [litellm ops docs](https://cocoindex.io/docs/ops/litellm) — `LiteLLMTranscriber`
+- Issues: [#601](https://github.com/cocoindex-io/cocoindex/issues/601) (open, v0-era webhook request), [#1828](https://github.com/cocoindex-io/cocoindex/issues/1828) (open, STT providers), [#2111](https://github.com/cocoindex-io/cocoindex/issues/2111) (closed, S3 memo-state crash), [#477](https://github.com/cocoindex-io/cocoindex/issues/477) / [#599](https://github.com/cocoindex-io/cocoindex/issues/599) / [#600](https://github.com/cocoindex-io/cocoindex/issues/600) (closed, v0 event-notification requests)
+- PR [#1889](https://github.com/cocoindex-io/cocoindex/pull/1889) — STT support, merged 2026-04-27
+- [PyPI cocoindex](https://pypi.org/project/cocoindex/) — 1.0.18, `requires_python >=3.11`
