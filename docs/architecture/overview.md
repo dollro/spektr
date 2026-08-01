@@ -79,7 +79,7 @@ graph TB
 | **Qdrant** | Vector store | Two collections: `documents_dense` (single-vector NN search) and `documents_multivec` (ColBERT late interaction). Both paths write to `documents_dense`; live data tagged with `session_id` and `is_live` |
 | **Neo4j** | Knowledge graph | Dual-engine: GLiNER2 (Path A, schema-driven CPU extraction) writes flat entities; Graphiti (Path B, LLM-based) writes temporal episodes with fact evolution tracking. Both coexist in the same instance |
 | **PostgreSQL** | Pipeline state | CocoIndex stores flow state and ingestion logs |
-| **FastMCP** | MCP server | Registers six tools (four search + two listing/inventory); supports streamable-http (default), SSE (legacy), and stdio transports; optional Bearer auth middleware |
+| **FastMCP** | MCP server | Registers seven tools (five search + two listing/inventory); supports streamable-http (default), SSE (legacy), and stdio transports; optional Bearer auth middleware |
 | **Pydantic AI** | Agent framework | Connects to MCP server, binds tools, orchestrates multi-step retrieval |
 
 ## Technology rationale

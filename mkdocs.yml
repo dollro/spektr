@@ -67,6 +67,7 @@ nav:
     - Ingestion Failure Semantics: operations/atomicity.md
     - Observability: operations/observability.md
     - Backup & Restore: operations/backup-restore.md
+    - Re-indexing: operations/reindex.md
   - Evaluation:
     - Golden Set: eval/golden-set.md
   - Resources:

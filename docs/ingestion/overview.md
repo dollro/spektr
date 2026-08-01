@@ -123,7 +123,7 @@ Response (200): `{ "session_id": str, "status": "archived" \| "discarded" }`. 40
 
 ### Qdrant payload fields for live points
 
-Live session points are written into the same `documents_dense` collection used by Path A. The payload schema is:
+Live session points are written into the same `documents_dense` collection used by Path A, carrying the same named vectors: `dense` (the configured embedder) and `sparse` (miniCOIL, encoded synchronously via `asyncio.to_thread` since `fastembed` is blocking). See [Embeddings — Sparse Channel](embeddings.md#sparse-channel-minicoil). The payload schema is:
 
 |Field|Type|Notes|
 |-|-|-|
@@ -143,7 +143,7 @@ Search tools that need to filter live vs archived data use `is_live` and/or `ses
 ### Processing flow
 
 1. Text chunk arrives via HTTP POST with `session_id`, `text`, `timestamp`, and optional metadata fields.
-2. The configured embedder embeds the chunk and the live ingest upserts a single point to `documents_dense`. The response returns here (~200ms with Jina).
+2. The configured embedder produces the `dense` vector and miniCOIL produces the `sparse` vector; the live ingest upserts a single point carrying both named vectors to `documents_dense`. The response returns here (~200ms with Jina).
 3. A background `asyncio.create_task` sends the chunk to Graphiti as an episode with `group_id=session_id` and `reference_time=timestamp` (typically 2–5s).
 
 Vector search is available immediately after step 2. Graph search catches up when step 3 completes.

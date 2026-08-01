@@ -1,6 +1,6 @@
 # MCP Server Overview
 
-Spektr exposes its RAG search capabilities to LLM agents through a [FastMCP](https://github.com/jlowin/fastmcp) server. The server registers six tools (search + introspection) — five always on, plus `visual_search` when `MULTIVEC_ENABLED=true` — and optionally enforces Bearer token authentication.
+Spektr exposes its RAG search capabilities to LLM agents through a [FastMCP](https://github.com/jlowin/fastmcp) server. The server registers seven tools (search + introspection) — six always on, plus `visual_search` when `MULTIVEC_ENABLED=true` — and optionally enforces Bearer token authentication.
 
 ## Server Setup
 

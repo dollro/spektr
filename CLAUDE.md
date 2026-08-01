@@ -40,7 +40,7 @@ Before modifying or exploring ANY module, you MUST first read the corresponding 
 - **Ingestion (Path B — Live):** FastAPI HTTP endpoint (`live_ingest.py`, port 8001) for streaming text, configured embedding provider, Graphiti for temporal episodic memory
 - **Vector Store:** Qdrant (dense + optional ColBERT multi-vector, Jina-only). Both paths write to `documents_dense`; live data tagged with `session_id` and `is_live`
 - **Knowledge Graph:** Neo4j with two pluggable engines for Path A — **Graphiti is the default** (`GRAPH_ENGINE=graphiti`, LLM-based temporal episodes); **GLiNER2 is opt-in** (`GRAPH_ENGINE=gliner`, schema-driven CPU extraction). Path B always uses Graphiti directly, regardless of `GRAPH_ENGINE`. Both engines coexist in the same Neo4j instance.
-- **MCP Server:** FastMCP (streamable-http default, SSE legacy, stdio) exposing six tools: four search (`vector_search`, `visual_search`, `graph_search`, `hybrid_search`) and two listing (`list_documents`, `list_document_chunks`). Bearer auth via `MCP_API_KEY`.
+- **MCP Server:** FastMCP (streamable-http default, SSE legacy, stdio) exposing seven tools: five search (`vector_search`, `visual_search`, `graph_search`, `multi_search`, `hybrid_search`) and two listing (`list_documents`, `list_document_chunks`). `multi_search` and `hybrid_search` share a fused dense+sparse retrieval core (`retrieval/`); `hybrid_search` adds query decomposition and a relevance-gated retry. Bearer auth via `MCP_API_KEY`.
 - **Agent:** Pydantic AI agent with MCP tool access
 - **LLM:** Anthropic or OpenAI-compatible (configurable via `LLM_API_TYPE`)
 - **Config:** Pydantic Settings from `.env`
@@ -165,12 +165,30 @@ These are load-bearing invariants introduced by the `feat/prod-hardening` work. 
 - Failure counts live in `state/ingestion_failures.db` (sqlite, gitignored). Successful ingest resets the count.
 
 **Qdrant payload schema:**
-- Every dense point carries `embedder_model` (str) and `embedder_dim` (int). Never write points without them — `scripts/doctor.py` flags mixed values.
-- `source_file` is the logical key; `metadata.source_key` duplicates it for compatibility.
+- `documents_dense` uses **named vectors**: `dense` (embedding, cosine) and
+  `sparse` (miniCOIL, `Modifier.IDF`). Never write points with an unnamed
+  vector — the collection will reject them.
+- Every text-chunk point carries both vectors. Image and VLM-caption points
+  carry `dense` only. `scripts/doctor.py` flags text chunks missing `sparse`.
+- Every dense point carries `embedder_model` (str) and `embedder_dim` (int).
+- `source_file` is the logical key; `metadata.source_key` duplicates it.
 
 **Eval gate** (`tests/eval/`, `task eval`):
 - PRs that touch `ingestion/`, `server/tools/`, `config/`, or the agent must not drop any metric below `tests/eval/thresholds.yaml`.
 - Thresholds are raised over time, never silently lowered. A drop needs a reason in the commit message.
+- Retrieval changes must also pass `task eval-retrieval` (recall@10, nDCG@10,
+  MRR against `tests/eval/retrieval_set.yaml`). These metrics have no LLM in
+  the loop and are the primary gate for retrieval work; RAGAS remains the
+  gate for generation quality.
+
+**Retrieval pipeline** (`retrieval/`):
+- `retrieval/` must not import from `server/` or `fastmcp`. It is composed by
+  MCP adapters and knows nothing about transport.
+- `hybrid_search` must delegate its retrieval core to the same code path as
+  `multi_search`. If the two ever diverge, the "hybrid is multi plus two
+  stages" contract is broken and the ablation matrix stops being meaningful.
+- Every pipeline stage degrades rather than raising. A stage failure appends
+  its name to `degraded` and the tool still returns results.
 
 **Observability** (`config/observability.py`):
 - Every process entrypoint calls `setup_observability()` (idempotent). FastAPI apps additionally call `instrument_fastapi(app)`.
