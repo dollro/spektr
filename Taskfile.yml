@@ -101,6 +101,16 @@ tasks:
     cmds:
       - uv run pytest -m eval -v
 
+  eval-retrieval:
+    desc: Retrieval-only quality metrics (recall@10, nDCG@10, MRR)
+    cmds:
+      - uv run pytest tests/eval/test_retrieval_metrics.py -v -s -m integration
+
+  eval-ablation:
+    desc: Per-stage retrieval attribution table
+    cmds:
+      - uv run pytest tests/eval/test_retrieval_metrics.py::test_ablation_matrix -v -s -m integration
+
   lint:
     desc: Run ruff lint checks
     cmds:

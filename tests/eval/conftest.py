@@ -18,12 +18,19 @@ FIXTURES = EVAL_DIR / "fixtures"
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    """Eval tests don't run under `task test` — only `task eval`."""
+    """Eval tests don't run under `task test` — only `task eval`.
+
+    Checks the actual `eval` marker via `get_closest_marker`, not substring
+    containment on `item.keywords` — that mapping also matches node IDs, so
+    `"eval" in item.keywords` was true for any test under a path containing
+    the substring "retrieval" (e.g. test_retrieval_metrics.py), silently
+    skipping unrelated tests regardless of `-m`.
+    """
     if config.getoption("-m") and "eval" in config.getoption("-m"):
         return
     skip_eval = pytest.mark.skip(reason="Use `task eval` (pytest -m eval) to run.")
     for item in items:
-        if "eval" in item.keywords and "eval" not in str(config.getoption("-m", "")):
+        if item.get_closest_marker("eval") is not None:
             item.add_marker(skip_eval)
 
 
