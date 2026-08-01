@@ -199,6 +199,41 @@ async def test_fast_pipeline_dual_retrieval_with_session_id() -> None:
 
 
 @pytest.mark.asyncio
+async def test_live_channel_empty_results_does_not_retry_but_kb_does() -> None:
+    """An empty session-scoped result set must not trigger the gate.
+
+    A brand-new or empty live session legitimately matches nothing against
+    build_live_filter — that's not a weak result to widen and retry, it's a
+    small bounded pool that's already been fully searched. The KB channel
+    keeps its retry: an empty KB result set is exactly what the gate exists
+    to catch.
+    """
+
+    async def _dense_side_effect(query, limit, query_filter):  # type: ignore[no-untyped-def]
+        return []
+
+    dense = AsyncMock(side_effect=_dense_side_effect)
+    sparse = AsyncMock(return_value=[])
+    with (
+        patch("retrieval.pipeline.decompose", AsyncMock(return_value=["q"])),
+        patch("retrieval.pipeline.dense_channel", dense),
+        patch("retrieval.pipeline.sparse_channel", sparse),
+    ):
+        out = await smart_pipeline("q", limit=10, session_id="s1")
+
+    kb_calls = [
+        c for c in dense.await_args_list if c.kwargs["query_filter"].must_not is not None
+    ]
+    live_calls = [
+        c for c in dense.await_args_list if c.kwargs["query_filter"].must_not is None
+    ]
+
+    assert len(kb_calls) == 2  # initial pass + gated retry
+    assert len(live_calls) == 1  # no retry: an empty session isn't a weak result
+    assert out.retried is True
+
+
+@pytest.mark.asyncio
 async def test_gate_triggers_exactly_one_retry() -> None:
     """A weak result set widens the pool once, never twice."""
     dense = AsyncMock(return_value=[_cand("a", "dense")])

@@ -123,17 +123,22 @@ async def _run_channel_set(
     rank_query: str,
     limit: int,
     query_filter: models.Filter | None,
+    *,
+    gate: bool = True,
 ) -> tuple[list[FusedResult], list[str], bool]:
-    """Retrieve+rank with a relevance-gated single retry.
+    """Retrieve+rank with an optional relevance-gated single retry.
 
     Used by smart_pipeline for the KB and live channel sets independently,
-    so a weak live-session result doesn't force a retry on the KB side (or
-    vice versa) and each retains its own `limit`-sized pool.
+    so each retains its own `limit`-sized pool. gate=False skips the retry
+    entirely — used for the live channel set, where an empty or weak result
+    just means the session is small, not that the pool needs widening: a
+    session's chunk set is fully retrievable at the original limit, so
+    retrying gains nothing and only costs an extra round trip.
     """
     results, degraded = await _retrieve_and_rank(queries, rank_query, limit, query_filter)
 
     retried = False
-    if settings.retry_enabled and should_retry(results, settings.rerank_score_floor):
+    if gate and settings.retry_enabled and should_retry(results, settings.rerank_score_floor):
         widened = limit * settings.retry_limit_multiplier
         logger.info("Relevance gate fired, widening pool to %d", widened)
         results, degraded = await _retrieve_and_rank(
@@ -214,7 +219,9 @@ async def smart_pipeline(
         _run_channel_set(sub_queries, query, limit, build_kb_filter(content_type, source_file))
     )
     live_task = asyncio.create_task(
-        _run_channel_set(sub_queries, query, limit, build_live_filter(session_id))
+        _run_channel_set(
+            sub_queries, query, limit, build_live_filter(session_id), gate=False
+        )
     )
     (
         (kb_results, kb_degraded, kb_retried),
