@@ -75,8 +75,14 @@ async def graph_search(query: str, search_type: str = "entity", limit: int = 10)
 # entity: [{"entity": str, "type": str, "description": str, "connections": list, "source_documents": list}]
 # path: [{"path": list, "relationships": list, "hop_count": int}]
 
-async def hybrid_search(query: str, limit: int = 10) -> dict
-# {"vector_results": list, "graph_results": list, "query": str, "strategy": "parallel"}
+async def multi_search(query: str, limit: int = 10, content_type: str | None = None, source_file: str | None = None, session_id: str | None = None) -> dict
+# Deterministic fused search (no LLM calls): channels -> RRF -> rerank.
+# {"results": list[FusedSearchResult], "graph_facts": list, "live_results": list, "query": str, "session_id": str | None, "degraded": list[str] | None}
+
+async def hybrid_search(query: str, limit: int = 10, content_type: str | None = None, source_file: str | None = None, session_id: str | None = None) -> dict
+# LLM-augmented fused search: decomposition + gated retry on top of the same core as multi_search.
+# Identical schema to multi_search, plus sub_queries and retried:
+# {"results": list[FusedSearchResult], "graph_facts": list, "live_results": list, "query": str, "session_id": str | None, "sub_queries": list[str] | None, "retried": bool | None, "degraded": list[str] | None}
 ```
 
 ### Contract A: Agent Module (produced by agent-dev)
@@ -144,8 +150,10 @@ Tools return structured errors instead of raising:
 # Error case — tool returns dict with "error" key
 {"error": "Search failed: connection timeout", "query": "...", "partial_results": []}
 
-# hybrid_search partial failure:
-{"vector_results": [...], "graph_results": [], "query": "...", "strategy": "parallel", "errors": ["graph_search: connection refused"]}
+# hybrid_search / multi_search partial failure — degraded lists which channels failed;
+# error is set only when both dense and sparse are down (all-channels-unavailable is
+# louder than a channel-specific degradation):
+{"results": [], "graph_facts": [], "query": "...", "degraded": ["dense", "sparse"], "error": "All retrieval channels unavailable"}
 ```
 
 ### File Ownership Matrix

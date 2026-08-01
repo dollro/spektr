@@ -159,11 +159,38 @@ class TestAgentWithSeededData:
         assert len(results) >= 1
         assert "Python" in results[0]["fact"]
 
-    async def test_hybrid_search_query(self, qdrant_client, mock_embedder):
-        """Hybrid search returns both vector and graph results."""
+    async def test_hybrid_search_query(self, qdrant_client):
+        """Hybrid search returns both fused results and graph facts.
+
+        hybrid_search no longer calls vector_search directly — it wraps
+        retrieval.pipeline.smart_pipeline, which composes decomposition (LLM),
+        dense/sparse channels, and reranking. Exercising the real pipeline
+        end-to-end would require a real LLM call for decomposition plus the
+        fastembed sparse model, which is out of scope for this e2e test's
+        purpose (verifying hybrid_search's own fusion of pipeline output +
+        graph facts). So smart_pipeline is mocked with a PipelineOutput built
+        from the same seeded document, matching the pattern already used in
+        tests/test_tools.py for the post-rewrite hybrid_search.
+        """
+        from retrieval.models import FusedResult
+        from retrieval.pipeline import PipelineOutput
         from server.models import GraphFact
 
         _seed_qdrant(qdrant_client)
+
+        mock_pipeline_output = PipelineOutput(
+            results=[
+                FusedResult(
+                    id="1",
+                    text="Python is a programming language",
+                    source_file="test_doc.pdf",
+                    page_number=1,
+                    score=0.9,
+                    fusion_score=0.03,
+                    channels=["dense"],
+                ),
+            ]
+        )
 
         mock_engine = AsyncMock()
         mock_engine.search = AsyncMock(
@@ -178,12 +205,8 @@ class TestAgentWithSeededData:
 
         with (
             patch(
-                "server.tools.vector_search._qdrant_client",
-                qdrant_client,
-            ),
-            patch(
-                "server.tools.vector_search._embedder",
-                mock_embedder,
+                "server.tools.hybrid_search.smart_pipeline",
+                AsyncMock(return_value=mock_pipeline_output),
             ),
             patch(
                 "server.tools.graph_search.get_graph_engine",
@@ -194,9 +217,8 @@ class TestAgentWithSeededData:
 
             result = await hybrid_search("Python")
 
-        assert len(result["vector_results"]) >= 1
-        assert len(result["graph_results"]) >= 1
-        assert result["strategy"] == "parallel"
+        assert len(result["results"]) >= 1
+        assert len(result["graph_facts"]) >= 1
 
     async def test_visual_search_query(self, qdrant_client, mock_embedder):
         """Visual search returns multivec results."""
