@@ -329,7 +329,26 @@ Recommendation: leave Path B's architecture alone. Adopt STT if audio ingestion 
 - **One engine for both paths.** Path A and Path B would share components, one state store,
   one deployment story.
 
-### What it costs — the honest blocker
+### DECIDED 2026-08-01: Graphiti stays. Temporal episodic memory is wanted.
+
+Consequences, both paths:
+
+- **Path B** — unchanged in every respect. Already staying off CocoIndex for latency
+  reasons; Graphiti stays with it.
+- **Path A** — the native `neo4j` connector is **not** adopted. It is structural
+  (nodes/edges reconciled as declared state), not temporal, so it only ever fitted the
+  GLiNER2 path, and `GRAPH_ENGINE=graphiti` is the default.
+- Graphiti writes therefore remain **side effects inside `ingest_file`**, not declared
+  target states. Two consequences follow, neither a regression — both are true today:
+  - v1's two-phase "no partial writes" guarantee does **not** extend to graph writes. A
+    mid-file failure can still leave episodes in Neo4j.
+  - Episode cleanup on source-file deletion still needs explicit handling: either a custom
+    `TargetHandler` (v1 supports this — see sibling doc, Blocker 4) or a side-channel hook
+    equivalent to today's `RagTarget`.
+- Net: the Qdrant half of `RagTarget` is replaced by the native connector; the Graphiti half
+  still needs code. That is the one piece of `target_connector.py` that survives migration.
+
+### What it would have cost (retained for context)
 
 **Graphiti's episodic model does not fit CocoIndex's target-state model.** Path B's value
 is temporal episodic memory: Graphiti *appends* episodes with validity intervals.
