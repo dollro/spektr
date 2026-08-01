@@ -10,7 +10,7 @@
 - **Multimodal embeddings** -- pluggable provider (Jina v4 / Voyage / OpenRouter) produces dense vectors for text and images, plus optional ColBERT 128-d multi-vectors (Jina only) for layout-aware visual search
 - **Dynamic schema induction** -- per-document LLM call proposes domain-specific entity types for GLiNER2, improving extraction quality across diverse document types
 - **Automatic sync** -- CocoIndex pipeline watches S3 via SQS event notifications; new, updated, and deleted files are processed incrementally
-- **Six MCP tools** -- search: `vector_search`, `visual_search`, `graph_search`, `hybrid_search`; listing: `list_documents`, `list_document_chunks`
+- **Seven MCP tools** -- search: `vector_search`, `visual_search`, `graph_search`, `multi_search`, `hybrid_search`; listing: `list_documents`, `list_document_chunks`
 - **Bearer auth middleware** -- optional token-based protection on `tools/call` requests
 - **Pluggable graph engine** -- choose Graphiti (LLM-based, temporal awareness) or GLiNER2 (local CPU, zero API cost) via `GRAPH_ENGINE` setting
 
