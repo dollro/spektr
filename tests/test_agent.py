@@ -92,6 +92,7 @@ class TestCreateRagAgent:
             mock_settings.llm_model = "claude-sonnet-4-20250514"
             mock_settings.llm_base_url = ""
             mock_settings.mcp_transport = "http"
+            mock_settings.mcp_server_url = ""
             mock_settings.mcp_port = 9999
             mock_settings.mcp_path = "/custom-path"
             mock_settings.mcp_api_key = ""
