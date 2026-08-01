@@ -218,11 +218,47 @@ If Path A moves to `qdrant.mount_collection_target()` + `declare_point`, CocoInd
 collection as *declared state* and reconciles it. Points it never declared — every live
 session point — may be deleted as orphans on each Path A run, silently wiping live data.
 
-**UNVERIFIED and must be tested first in any v1 spike:** does `mount_collection_target`
-reconcile over the whole collection, or only over declared keys? If exclusive, mitigations
-are (a) a separate collection for Path B, with `server/tools/` querying both, or (b) keep
-Path A's Qdrant writes as an undeclared side effect — which forfeits the deletion handling
-that motivated replacing `RagTarget` in the first place.
+**VERIFIED 2026-08-01** against `python/cocoindex/connectors/qdrant/_target.py` @ main.
+The concern above is **disproved at the point level**, but a different destructive path is
+real at the collection level.
+
+**Point reconciliation is per-key — safe.** `_PointHandler.reconcile` (L286) receives one
+`key` at a time and emits a delete only when the desired state is non-existence *and*
+CocoIndex already tracked that key (`prev_possible_records` / `prev_may_be_missing`);
+otherwise it returns `None`. `_apply_actions` deletes via
+`PointIdsList(points=[explicit ids])` (L277) — never a filter, never a scroll. **It never
+enumerates the collection; there is no orphan sweep.** Points CocoIndex did not declare are
+invisible to it. Path B's session points would not be deleted by Path A's reconciliation.
+
+**Collection replacement IS destructive — the actual hazard.**
+`_CollectionHandler._apply_actions` (L385):
+
+```python
+if action.main_action in ("replace", "delete"):
+    await asyncio.to_thread(client.delete_collection, collection_name=key.collection_name)
+```
+
+L492 states it outright: `# Collection replacement destroys all points.` The tracking record
+carries `vectors=desired_state.schema.vectors` (L479), so **any change to the declared
+vector schema yields `replace` → drop and recreate the whole collection**, taking every
+Path B point with it. Removing the target does the same via `delete`. Given `d735689` just
+reshaped `documents_dense` to named dense + sparse, schema evolution here is a live concern.
+
+**Mitigation — supported, one keyword.** All three entry points (`collection_target`,
+`declare_collection_target`, `mount_collection_target`) accept
+`managed_by: target.ManagedBy = target.ManagedBy.SYSTEM`. `ManagedBy` is `SYSTEM | USER`,
+documented as: *"`SYSTEM` (default): CocoIndex creates and drops the index automatically.
+`USER`: assumes the index already exists and never drops it."*
+
+**Decision: pass `managed_by=ManagedBy.USER`.** `ensure_collections()` stays the
+provisioning authority, CocoIndex never drops `documents_dense`, and per-key point
+reconciliation still works — so `RagTarget` can still be retired. This also removes coupling
+#2 below: Path B stops depending on a Path A run having created the collection.
+
+*Scope of verification:* the Python connector, where action decisions are made. The ledger
+semantics behind `prev_possible_records` / `statediff.resolve_system_transition` are
+engine-side and unread; the action set is unambiguous regardless — point deletes are
+explicit IDs only.
 
 **2. Provisioning ordering.** `ensure_collections()` is called only from `run_pipeline()`
 (`pipeline.py:811`); Path B assumes the collection already exists. Under v1, schema creation
@@ -330,9 +366,10 @@ way. Adopt `LiteLLMTranscriber` directly if audio ingestion is wanted — no res
 needed. The Graphiti-vs-target-state tension (3b) therefore stays theoretical unless Path B
 is ever reconsidered on other grounds.
 
-**Cross-cutting, blocking Track 1:** verify the shared-collection reconciliation scope in
-3a.1 *before* replacing `RagTarget` with the native Qdrant connector. If CocoIndex reconciles
-the whole collection, Path A migration would delete Path B's live points.
+**Cross-cutting — resolved, no longer blocking.** The shared-collection question in 3a.1 is
+verified: point reconciliation is per-key and never sweeps orphans, so `RagTarget` can be
+retired safely. The one hazard is collection *replacement* on schema change, which drops all
+points; pass `managed_by=ManagedBy.USER` and keep `ensure_collections()` authoritative.
 
 **Do not** pin new work to v0. It is frozen and its docs are already segregated under
 `/docs-v0/`.
