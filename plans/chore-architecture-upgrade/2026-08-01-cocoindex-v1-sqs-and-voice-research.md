@@ -197,7 +197,44 @@ covers the remote case today; fully-local Whisper means bringing your own.
 
 ---
 
-## Part 3 — Can `live_ingest.py` be rewritten on v1?
+## Part 3 — Path B and the v1 upgrade
+
+### 3a. What a CocoIndex upgrade actually changes for Path B
+
+**Directly: nothing.** `ingestion/live_ingest.py` imports no CocoIndex at all — verified.
+Per `docs/ingestion/overview.md:80`, Path B embeds synchronously, upserts to Qdrant, returns,
+and runs Graphiti as a background task. CocoIndex is Path A only
+(`docs/ingestion/overview.md:183-186`).
+
+Three indirect couplings, in order of risk:
+
+**1. Shared Qdrant collection — the serious one.** Both paths write `DENSE_COLLECTION`.
+Today Path A's cleanup is *scoped*: `RagTarget` deletes only points whose `source_file`
+matches the removed file key, and Path B's points carry
+`source_file = "session:<id>"` (`live_ingest.py:142`), so they are structurally invisible
+to it.
+
+If Path A moves to `qdrant.mount_collection_target()` + `declare_point`, CocoIndex owns the
+collection as *declared state* and reconciles it. Points it never declared — every live
+session point — may be deleted as orphans on each Path A run, silently wiping live data.
+
+**UNVERIFIED and must be tested first in any v1 spike:** does `mount_collection_target`
+reconcile over the whole collection, or only over declared keys? If exclusive, mitigations
+are (a) a separate collection for Path B, with `server/tools/` querying both, or (b) keep
+Path A's Qdrant writes as an undeclared side effect — which forfeits the deletion handling
+that motivated replacing `RagTarget` in the first place.
+
+**2. Provisioning ordering.** `ensure_collections()` is called only from `run_pipeline()`
+(`pipeline.py:811`); Path B assumes the collection already exists. Under v1, schema creation
+moves inside `mount_collection_target(schema=...)`, making provisioning a side effect of a
+Path A run. New failure modes: Path B starting on a fresh deploy before Path A has ever run,
+and the two disagreeing on named-vector layout.
+
+**3. Shared venv.** One dependency tree for both processes. cocoindex 1.x resolves
+differently from 0.3.x; a conflict with `qdrant-client` / `graphiti` / `fastapi` reaches
+Path B even though it imports no CocoIndex. Low risk, non-zero.
+
+### 3b. Should `live_ingest.py` be rewritten on v1? — Probably not
 
 **Partly. The hard constraint: v1 has no HTTP/webhook source.** None of the 20 connectors
 accepts a push. Issue #601 asks for exactly this and has been dormant for over a year.
@@ -223,7 +260,26 @@ FastAPI keeps the two-layer auth (`INGEST_API_KEY` gates `/session/start`, which
 the ephemeral per-session token for `/ingest/transcript` and `/session/end`) — that logic
 has no CocoIndex analogue and shouldn't move.
 
-### What this buys
+### Correction: latency is the requirement, and CocoIndex works against it
+
+An earlier draft called this rewrite "genuinely attractive". Re-reading
+`docs/ingestion/overview.md`, that was badly weighted: **the stated aim of Path B is a
+low-latency path to make text searchable within seconds.** CocoIndex is a reconciliation
+engine — scan, mount, declare, diff. Path B's synchronous embed → upsert → return is already
+the minimum-latency shape.
+
+Routing it through CocoIndex would add a broker hop (there is no HTTP source) plus component
+scheduling — strictly more latency — in exchange for incremental reprocessing that a
+never-replayed live stream gains nothing from. Memoization has no value when every chunk is
+seen exactly once.
+
+**The one v1 feature genuinely worth taking is `LiteLLMTranscriber` for audio input, and it
+needs no restructuring at all** — it is a plain class Path B can call directly, entirely
+independent of whether the pipeline runs on CocoIndex.
+
+Recommendation: leave Path B's architecture alone. Adopt STT if audio ingestion is wanted.
+
+### What a rewrite would buy (for the record)
 
 - **Audio ingestion Spektr does not have today.** Path B currently accepts text only;
   callers must transcribe upstream. `LiteLLMTranscriber` moves that inside the pipeline,
@@ -267,10 +323,16 @@ scoped by the previous doc's remaining items (LMDB state → rewrite `doctor.py`
 drop Postgres, re-derive the poison-pill semantics, replace `RagTarget` with the native
 Qdrant connector).
 
-**Track 2 — Path B (live).** Genuinely attractive — built-in STT plus memoized incremental
-processing is capability Spektr doesn't have. But it needs two decisions first:
-(a) ingress — broker vs. watched directory; (b) **Graphiti's future**, per above. Spike
-only after Track 1 proves the v1 fundamentals, and start from `entire_session_search`.
+**Track 2 — Path B (live).** **Leave the architecture as it is.** Path B's requirement is
+low latency; CocoIndex's reconciliation model adds latency and offers incrementality a
+single-pass live stream cannot use. It imports no CocoIndex today and should keep it that
+way. Adopt `LiteLLMTranscriber` directly if audio ingestion is wanted — no restructuring
+needed. The Graphiti-vs-target-state tension (3b) therefore stays theoretical unless Path B
+is ever reconsidered on other grounds.
+
+**Cross-cutting, blocking Track 1:** verify the shared-collection reconciliation scope in
+3a.1 *before* replacing `RagTarget` with the native Qdrant connector. If CocoIndex reconciles
+the whole collection, Path A migration would delete Path B's live points.
 
 **Do not** pin new work to v0. It is frozen and its docs are already segregated under
 `/docs-v0/`.
