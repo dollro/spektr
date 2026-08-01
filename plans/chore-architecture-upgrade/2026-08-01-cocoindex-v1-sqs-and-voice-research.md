@@ -1,7 +1,10 @@
 # CocoIndex v1: SQS Gap (resolved) + Voice/Transcript Opportunity
 
 Date: 2026-08-01
-Status: research complete — decisions still open
+Status: research complete — decisions still open.
+**Re-evaluated 2026-08-01 against the finished `chore/architecture-upgrade` branch — see
+[Part 4](#part-4--re-evaluation-against-the-retrieval-upgrade-branch). Parts 1–3 were written
+against `develop` and are amended there, not rewritten in place.**
 Follows: [`2026-08-01-cocoindex-v1-vs-v0.md`](./2026-08-01-cocoindex-v1-vs-v0.md) (resolves its Blocker #1)
 Method: upstream docs, GitHub repo/API inspection, issue & code search. Latest release: **cocoindex 1.0.18**, `requires_python >=3.11` (Spektr's 3.13 is fine).
 
@@ -397,8 +400,144 @@ points; pass `managed_by=ManagedBy.USER` and keep `ensure_collections()` authori
 
 ---
 
+## Part 4 — Re-evaluation against the retrieval-upgrade branch
+
+Parts 1–3 were researched while `chore/architecture-upgrade` was still at `develop`. The
+branch has since landed 44 commits that reshape exactly the surface a v1 migration touches.
+This part records what that invalidates, what it confirms, and what it adds.
+
+**Verification method changed too.** Parts 1–3 leaned on the vendored project skill
+(`.claude/skills/cocoindex/`). That skill is **incomplete**: its `references/connectors.md`
+documents only dense named vectors and never mentions sparse vectors or `managed_by`. Part 4
+is verified against a local upstream clone at **`/home/rodo/Coding/cocoindex`** @ `5aa593f4`,
+reading `python/cocoindex/connectors/qdrant/_target.py` and
+`python/cocoindex/connectorkits/statediff.py` directly. Prefer the clone over the skill for
+anything load-bearing.
+
+### 4a. The new blocker that isn't one: sparse vectors are natively supported
+
+`d735689` made `documents_dense` depend on a **sparse named vector with the IDF modifier**
+(`ingestion/qdrant_setup.py:40-42`). Parts 1–3 never asked whether the v1 native Qdrant
+connector can express that — the skill's dense-only examples made it look like it could not.
+It can, verified at source:
+
+```python
+class QdrantSparseVectorDef(NamedTuple):        # _target.py:72
+    modifier: Literal["idf"] | None = None
+```
+
+- `CollectionSchema.create(vectors=...)` accepts
+  `dict[str, QdrantVectorDef | QdrantSparseVectorDef]` — dense and sparse share one namespace
+  in the same dict (`_target.py:182-215`), and the connector splits them into Qdrant's
+  `vectors_config` / `sparse_vectors_config` on create (`_target.py:429-455`).
+- Sparse defs must be named; passing one bare raises with an explicit message
+  (`_target.py:199-202`).
+- `PointStruct.vector` accepts a `qdrant_models.SparseVector` alongside dense lists — the same
+  shape `_build_chunk_point` already builds (`ingestion/pipeline.py:221-225`).
+
+**Verdict: the branch's schema is fully expressible in v1's native connector.** This was the
+one change with the potential to make the migration a non-starter, and it comes back green.
+
+### 4b. New work item: embedders must implement `__coco_vector_schema__`
+
+`QdrantVectorDef.schema` does **not** take a dimension int. It takes a
+`VectorSchemaProvider` — a protocol requiring
+`async def __coco_vector_schema__(self) -> VectorSchema`, where `VectorSchema` carries
+`dtype: np.dtype` and `size: int` (`resources/schema.py:17-29`).
+
+Spektr's embedders are custom classes (`ingestion/embedders/{jina,voyage,openrouter}.py`) that
+today expose plain `.dim` / `.model_name` attributes. Each needs that one async method added,
+or a small adapter, before `mount_collection_target` can be called. Not hard — but it is real
+work that appears nowhere in Parts 1–3. The sparse side needs nothing:
+`QdrantSparseVectorDef` carries no schema at all.
+
+### 4c. `managed_by=USER` is promoted from prudent to mandatory — and is now source-verified
+
+Part 3a called this "supported, one keyword" on the strength of docstrings. It is now
+verified through the full chain:
+
+| Step | Location | Behaviour with `managed_by="user"` |
+|-|-|-|
+| Tracking record built | `_target.py:474-482` | `MutualTrackingRecord(..., managed_by=...)` |
+| Transition resolved | `statediff.py:128-129` | **returns `None`** for a user-managed desired state |
+| Action computed | `statediff.py:169-170` | `diff(None)` → **`None`**, no action |
+| Drop executed | `_target.py:385-392` | only on `"replace"` / `"delete"` — never reached |
+
+So `managed_by=ManagedBy.USER` provably prevents CocoIndex from ever calling
+`delete_collection`, while per-key point reconciliation (explicit point IDs only, no orphan
+sweep) keeps working.
+
+**Why it is now mandatory rather than advisable.** The branch demonstrated that schema
+evolution on this collection is a *live event*, not a hypothetical: `d735689` reshaped
+`documents_dense` and required a full re-ingest from source. Under the `SYSTEM` default, the
+next such change emits `replace` → drop and recreate — and `99a4368` put **Path B's live
+session points in that same collection with the same named-vector layout**. A single future
+schema tweak would silently wipe live session data along with the corpus. Part 3a's hazard
+became materially more likely and more costly during this branch.
+
+Corollary: `ensure_collections()` (`ingestion/qdrant_setup.py`) must stay the provisioning
+authority. This also cancels coupling #2 in Part 3a — Path B stops depending on a Path A run
+having created the collection.
+
+### 4d. The migration now has a correctness gate it did not have before
+
+The strongest new fact. When Parts 1–3 were written, "did the migration break retrieval?" was
+a judgment call. The branch added a measurement:
+
+- `tests/eval/retrieval_set.yaml` — 7 labeled queries
+- `tests/eval/test_retrieval_metrics.py` — recall@10, nDCG@10, MRR, **no LLM in the loop**
+- an ablation matrix over the channel/stage combinations
+- recorded baselines on the 68-point corpus: dense-only `0.714 / 0.504 / 0.449` → all stages
+  `0.929 / 0.743 / 0.719`
+
+A v1 migration is a rewrite of the write path. Re-running these metrics against a v1-ingested
+corpus turns "the rewrite preserved retrieval behaviour" from an assertion into a number.
+**This materially de-risks Track 1 and is the best argument for doing the migration now rather
+than deferring it** — the gate exists today and will not get cheaper to build later.
+
+Caveat, recorded honestly: 68 points and 7 queries is a thin corpus. The metrics are sensitive
+at that size and will catch gross regressions, not subtle ones.
+
+### 4e. Amendments to specific Part 1–3 claims
+
+| Claim | Status after the branch |
+|-|-|
+| Part 1, Option E (SQS as trigger) | **Unchanged.** Nothing on the branch touches SQS, the daemon, or `_use_s3_source()`. Still the recommendation. |
+| Part 2 (`LiteLLMTranscriber`) | **Unchanged.** Still present upstream at `python/cocoindex/ops/litellm.py`. Still an independent adopt needing no restructuring. |
+| Part 3b (leave Path B alone) | **Unchanged and reinforced.** The branch touched Path B's vector shape only; its latency argument is untouched. |
+| Part 3a.1 (collection replacement hazard) | **Escalated** — see 4c. |
+| "Only the Graphiti half of `RagTarget` survives" | **Incomplete.** `ingestion/target_connector.py` has *two* graph cleanup paths — `_remove_graphiti_episodes` (L66) and `_remove_gliner_entities` (L89). Both survive the Qdrant half going native. |
+| `scripts/doctor.py` "needs rewriting" | **Overstated.** It grew Qdrant-side checks that are source-agnostic and survive v1 untouched: missing-sparse detection (L99-128) and embedder-model drift. Only the Postgres tracking-table half (L30-75) is replaced by LMDB. The rewrite is partial. |
+| "Do not pin new work to v0" | **Consistent with `434d6fa`.** That commit pinned `cocoindex>=0.3.39,<1.0` as a *resolver guard* against an accidental jump to the 1.x rewrite mid-branch — not as a commitment to stay on v0. Removing the ceiling is step one of the migration. |
+
+### 4f. One bonus the migration now picks up
+
+`_build_chunk_point` calls `encode_documents([text])[0]` — one unbatched miniCOIL encode per
+chunk, already on the branch's follow-up list. Under v1 this sits inside a `@coco.fn(memo=True)`
+boundary, so the migration is the natural place to batch it and get memoization across runs for
+free. Minor, but it closes a recorded follow-up rather than deferring it again.
+
+### 4g. Net recommendation
+
+**Unchanged in shape, stronger in confidence.** Track 1 (Path A → v1 with SQS-as-trigger)
+remains the work; Track 2 (Path B) remains untouched. The branch did not introduce a blocker —
+the one candidate (sparse + IDF) is natively supported. It added one small task (4b), escalated
+one mitigation from advisable to mandatory (4c), shrank one estimate (`doctor.py`), and — most
+importantly — built the measurement that makes the rewrite verifiable (4d).
+
+Remaining unknowns, unchanged from Parts 1–3: LMDB state handling in `backup.py`, the
+`num_errored` check in the trigger loop, and whether the S3 source's thinner production mileage
+(issue #2111) bites.
+
+---
+
 ## Sources
 
+- **Local upstream clone: `/home/rodo/Coding/cocoindex` @ `5aa593f4`** — authoritative for
+  Part 4. Key files: `python/cocoindex/connectors/qdrant/_target.py`,
+  `python/cocoindex/connectorkits/statediff.py`, `python/cocoindex/resources/schema.py`,
+  `python/cocoindex/ops/litellm.py`. Prefer this over `.claude/skills/cocoindex/`, whose
+  `references/connectors.md` omits sparse vectors and `managed_by` entirely.
 - [CocoIndex homepage](https://cocoindex.io/) — "Voice · Transcripts", "Message Queues", "Images · Video"
 - [CocoIndex V1 is Live!](https://cocoindex.io/blogs/cocoindex-v1/) — LMDB state, DSL removal, connector porting
 - [v1 Amazon S3 connector docs](https://cocoindex.io/docs/connectors/amazon_s3/) — no SQS
