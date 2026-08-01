@@ -20,7 +20,7 @@ If you've ever wanted "give the agent access to my company knowledge" without bu
               └────────────────┬──────────────────┘
                                ▼
                        FastMCP server
-                  (6 session-aware tools)
+                    (7 tools, 4 session-aware)
                                ▼
                           Your LLM agent
 ```
@@ -49,7 +49,7 @@ If you've ever wanted "give the agent access to my company knowledge" without bu
 
 1. **Ingests** documents (PDF, images, text) from local storage, S3, or SharePoint, plus real-time text streams over HTTP.
 2. **Indexes** that content as dense vectors (Qdrant) **and** as a temporal knowledge graph (Neo4j + Graphiti).
-3. **Serves** the index to any LLM agent through an MCP server with six search/listing tools — including session-scoped search that lets agents combine live session data with the bulk knowledge base.
+3. **Serves** the index to any LLM agent through an MCP server with seven search/listing tools — including session-scoped search that lets agents combine live session data with the bulk knowledge base.
 
 **Spektr is not** a chatbot UI, an end-user product, or a multi-tenant SaaS. It is a single-tenant infrastructure component you run alongside your agent.
 
@@ -74,7 +74,8 @@ If you've ever wanted "give the agent access to my company knowledge" without bu
 ### Serving (MCP)
 
 - **FastMCP** server with three transports: `streamable-http` (default), `sse` (legacy), `stdio`.
-- **Six tools** exposed to agents: `vector_search`, `visual_search`, `graph_search`, `hybrid_search`, `list_documents`, `list_document_chunks`.
+- **Seven tools** exposed to agents: `vector_search`, `visual_search`, `graph_search`, `multi_search`, `hybrid_search`, `list_documents`, `list_document_chunks`.
+- **Hybrid retrieval** — dense (Qdrant named vector) + sparse (miniCOIL, local CPU, no API cost) fused with Reciprocal Rank Fusion (RRF, `k=60`), then reranked with `jina-reranker-v3.5` (listwise). `multi_search` is the deterministic version of this pipeline (no LLM calls, the default general-purpose tool); `hybrid_search` wraps the same core with query decomposition and a relevance-gated retry.
 - **Session-aware filtering** — combine bulk KB + a live session in one query.
 - **Bearer auth** via `MCP_API_KEY` (when set).
 - **Two-layer auth** for live ingestion (`INGEST_API_KEY` → ephemeral per-session token).
@@ -101,7 +102,7 @@ So you know what you're getting:
 |Chatbot UI / web frontend|Spektr is the backend. Plug your own UI or use Claude Desktop / Cursor / etc. as the MCP client.|
 |Multi-tenant SaaS|Single-instance design. Run one Spektr per tenant if you need isolation.|
 |File ingestion via Path B|Path B is text-only. Files go through Path A.|
-|Local embeddings|All embedding providers are remote APIs. (GLiNER2 entity extraction does run on CPU.)|
+|Local dense embeddings|All dense embedding providers are remote APIs. (GLiNER2 entity extraction and miniCOIL sparse retrieval run on local CPU.)|
 |Model fine-tuning / training|Spektr indexes; it does not train.|
 |Real-time file streaming|Path A is event-driven (S3/SQS, filesystem watch), not millisecond-latency streaming.|
 |Built-in crawler / browser|Bring your own document acquisition; Spektr ingests what you give it.|
@@ -137,8 +138,9 @@ embeddings  graph engine  Qdrant            embeddings    Graphiti
                         FastMCP server :8080
               ┌───────────────┼───────────────┐
               │               │               │
-       vector_search    graph_search    hybrid_search
-       visual_search    list_documents  list_document_chunks
+       vector_search    graph_search    multi_search
+       visual_search    list_documents  hybrid_search
+                         list_document_chunks
                               │
                               ▼
                           LLM agent
@@ -270,7 +272,8 @@ Full env reference: [docs/configuration/environment.md](docs/configuration/envir
 |`vector_search`|Qdrant dense|Yes|Semantic similarity search|
 |`visual_search`|Qdrant ColBERT|No|Layout-aware search for charts, tables, diagrams (requires `MULTIVEC_ENABLED`)|
 |`graph_search`|Neo4j|Yes|Entity and relationship lookup|
-|`hybrid_search`|Both (parallel)|Yes|Combined vector + graph results, deduped|
+|`multi_search`|Qdrant dense + sparse|Yes|Fused dense + sparse retrieval (RRF), reranked. No LLM calls — the default general-purpose tool|
+|`hybrid_search`|Qdrant dense + sparse|Yes|Same fused core as `multi_search`, plus query decomposition and a relevance-gated retry|
 |`list_documents`|Qdrant|—|Enumerate ingested documents (chunks, pages, content types)|
 |`list_document_chunks`|Qdrant|—|Per-chunk listing for a single document|
 

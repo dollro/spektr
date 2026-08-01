@@ -15,6 +15,7 @@ sequenceDiagram
     participant Coco as CocoIndex Pipeline
     participant FP as File Processor
     participant Jina as Jina v4 API
+    participant Sparse as miniCOIL<br/>(local CPU, fastembed)
     participant QD as Qdrant
     participant GE as Graph Engine<br/>(Graphiti or GLiNER2)
     participant PG as PostgreSQL
@@ -42,7 +43,9 @@ sequenceDiagram
         loop Each chunk
             Coco->>Jina: embed_text(chunk)
             Jina-->>Coco: dense vector (512-d)
-            Coco->>QD: Upsert to documents_dense
+            Coco->>Sparse: encode_documents(chunk)
+            Sparse-->>Coco: sparse vector (miniCOIL)
+            Coco->>QD: Upsert to documents_dense<br/>(named vectors: dense + sparse)
         end
 
         Coco->>GE: engine.ingest(chunks, source_key)
@@ -77,7 +80,7 @@ sequenceDiagram
 ### Key design decisions in the bulk ingest path
 
 - **Deterministic IDs** -- chunk and point IDs are derived from `{source_file}::p{page}::c{chunk_idx}` via UUID5, making upserts idempotent.
-- **Dual embedding for visual content** -- images get both a dense single-vector (for standard NN search) and ColBERT multi-vectors (for layout-aware retrieval). Text chunks get only dense vectors.
+- **Dual embedding for visual content** -- images get both a dense single-vector (for standard NN search) and ColBERT multi-vectors (for layout-aware retrieval). Text chunks get a dense vector plus a miniCOIL sparse vector (local CPU, no API cost) on the same `documents_dense` point, for the lexical retrieval channel used by `multi_search`/`hybrid_search`.
 - **Dynamic schema induction** -- when enabled, a single LLM call per document proposes domain-specific entity/relationship types for GLiNER2. Results are cached by content hash. See [Knowledge Graph](../ingestion/knowledge-graph.md).
 - **Pluggable graph engine** -- text chunks are passed to `engine.ingest()`. Graphiti submits them as LLM-processed episodes; GLiNER2 extracts entities and relations locally and writes directly to Neo4j. See [Knowledge Graph](../ingestion/knowledge-graph.md).
 
@@ -92,6 +95,7 @@ sequenceDiagram
     participant Src as External Source
     participant API as Live Ingest API<br/>(FastAPI, port 8001)
     participant Jina as Jina v4 API
+    participant Sparse as miniCOIL<br/>(local CPU, fastembed)
     participant QD as Qdrant
     participant Graphiti as Graphiti
     participant Neo4j as Neo4j
@@ -103,7 +107,9 @@ sequenceDiagram
         Src->>API: POST /ingest/chunk {session_id, text, timestamp}
         API->>Jina: embed_text(text)
         Jina-->>API: dense vector (512-d)
-        API->>QD: Upsert to documents_dense<br/>(is_live=true, session_id, timestamp)
+        API->>Sparse: encode_documents(text) (offloaded to a thread)
+        Sparse-->>API: sparse vector (miniCOIL)
+        API->>QD: Upsert to documents_dense<br/>(dense + sparse; is_live=true, session_id, timestamp)
         API-->>Src: {status: "accepted", vector_indexed: true, graph_status: "processing"}
 
         Note over API,Graphiti: Background task (does not block response)
@@ -133,7 +139,9 @@ sequenceDiagram
 
 ## Query path
 
-An LLM agent calls one of the six MCP tools. The four search tools (`vector_search`, `visual_search`, `graph_search`, `hybrid_search`) embed the query and search the relevant store. The two listing/inventory tools (`list_documents`, `list_document_chunks`) enumerate what's in the corpus without running a similarity query — useful for agents that need to ground a question against an exhaustive view of the available material before searching. The sequence diagram below covers the search tools; listing tools follow a simpler path (Auth → Tool → Qdrant scroll → results).
+An LLM agent calls one of the seven MCP tools. The five search tools (`vector_search`, `visual_search`, `graph_search`, `multi_search`, `hybrid_search`) embed the query and search the relevant store. The two listing/inventory tools (`list_documents`, `list_document_chunks`) enumerate what's in the corpus without running a similarity query — useful for agents that need to ground a question against an exhaustive view of the available material before searching. The sequence diagram below covers the search tools; listing tools follow a simpler path (Auth → Tool → Qdrant scroll → results).
+
+`multi_search` and `hybrid_search` share the same fused retrieval core — dense + sparse channels merged with Reciprocal Rank Fusion (RRF), then reranked — and return an identical response schema. `hybrid_search` wraps that core in two extra LLM-touching stages: query decomposition before retrieval, and a relevance-gated single retry after reranking. `multi_search` makes no LLM calls at all and is the default general-purpose tool.
 
 ```mermaid
 sequenceDiagram
@@ -141,8 +149,10 @@ sequenceDiagram
     participant MCP as FastMCP Server
     participant Auth as Bearer Auth Middleware
     participant Tool as Search Tool
-    participant Jina as Jina v4 API
+    participant Emb as Dense Embedder<br/>(Jina v4 API)
+    participant Sparse as miniCOIL<br/>(local CPU, fastembed)
     participant QD as Qdrant
+    participant RR as jina-reranker-v3.5
     participant GE as Graph Engine (Neo4j)
 
     Agent->>MCP: tools/call (MCP protocol)
@@ -154,13 +164,13 @@ sequenceDiagram
     Auth->>Tool: Dispatch to tool function
 
     alt vector_search
-        Tool->>Jina: embed_text_query(query)
-        Jina-->>Tool: query vector (512-d)
-        Tool->>QD: query_points(documents_dense, vector, filters)
+        Tool->>Emb: embed_text_query(query)
+        Emb-->>Tool: query vector (512-d)
+        Tool->>QD: query_points(documents_dense, using="dense", filters)
         QD-->>Tool: scored results
     else visual_search
-        Tool->>Jina: embed_query_multi_vector(query)
-        Jina-->>Tool: query multi-vectors (N × 128-d)
+        Tool->>Emb: embed_query_multi_vector(query)
+        Emb-->>Tool: query multi-vectors (N × 128-d)
         Tool->>QD: query_points(documents_multivec, "colbert")
         QD-->>Tool: scored results
         opt VLM generation enabled
@@ -169,18 +179,34 @@ sequenceDiagram
     else graph_search
         Tool->>GE: engine.search(query)
         GE-->>Tool: GraphFact results
-    else hybrid_search
-        par Parallel execution
-            Tool->>QD: vector_search(query)
+    else multi_search or hybrid_search
+        opt hybrid_search only, DECOMPOSE_ENABLED=true
+            Tool->>Tool: decompose(query) -> sub_queries<br/>(one LLM call; falls back to [query] on failure)
+        end
+        par Per sub-query: dense + sparse channels, plus graph
+            Tool->>Emb: embed_text_query(sub_query)
+            Emb-->>Tool: dense vector
+            Tool->>QD: query_points(documents_dense, using="dense")
         and
-            Tool->>GE: graph_search(query)
+            Tool->>Sparse: encode(sub_query)
+            Sparse-->>Tool: sparse vector
+            Tool->>QD: query_points(documents_dense, using="sparse")
+        and
+            Tool->>GE: engine.search(query)
         end
-        QD-->>Tool: vector results
-        GE-->>Tool: graph results
-        opt Reranking enabled
-            Tool->>Tool: rerank(query, vector_results)
+        QD-->>Tool: dense + sparse candidates
+        GE-->>Tool: graph facts (kept separate, not fused into ranking)
+        Tool->>Tool: Reciprocal Rank Fusion (k=RRF_K, default 60)
+        opt RERANK_ENABLED=true
+            Tool->>RR: rerank(query, top RERANK_CANDIDATES)
+            RR-->>Tool: reranked results
         end
-        Tool->>Tool: Merge into combined response
+        opt hybrid_search only, RETRY_ENABLED=true
+            Tool->>Tool: check top score vs RERANK_SCORE_FLOOR
+            opt gate fires
+                Tool->>Tool: widen pool (limit × RETRY_LIMIT_MULTIPLIER),<br/>repeat retrieve + fuse + rerank once
+            end
+        end
     end
 
     Tool-->>Agent: Search results (JSON)
@@ -190,22 +216,27 @@ sequenceDiagram
 
 | Tool | Backend | Embedding | Best for |
 |-|-|-|-|
-| `vector_search` | Qdrant `documents_dense` | Dense (provider-dependent) | General semantic search over text and images |
+| `vector_search` | Qdrant `documents_dense` (`dense` vector) | Dense (provider-dependent) | General semantic search over text and images |
 | `visual_search` | Qdrant `documents_multivec` | ColBERT 128-d | Charts, diagrams, tables, formatted content |
 | `graph_search` | Neo4j via GraphEngine | Graphiti semantic or Neo4j full-text | Entity lookup, facts, relationships |
-| `hybrid_search` | Both (parallel) | Dense (provider-dependent) | Comprehensive retrieval combining both stores |
+| `multi_search` | Qdrant `documents_dense` (`dense` + `sparse` vectors) | Dense (provider-dependent) + miniCOIL sparse (local CPU) | Fast, deterministic general-purpose retrieval. No LLM calls |
+| `hybrid_search` | Same as `multi_search` | Same as `multi_search` | Multi-part questions needing decomposition and a relevance-gated retry |
 | `list_documents` | Qdrant scroll | None | Enumerating distinct source files in the corpus |
 | `list_document_chunks` | Qdrant scroll | None | Exhaustive paginated listing of chunks for a given document |
 
 ### Filtering and reranking
 
-- **`vector_search`** supports optional `content_type` and `source_file` payload filters passed to Qdrant.
-- **Reranking** -- when `RERANK_ENABLED=true`, `vector_search` and `hybrid_search` pass results through a reranker before returning.
+- **`vector_search`, `multi_search`, and `hybrid_search`** support optional `content_type` and `source_file` payload filters passed to Qdrant.
+- **Fusion** -- `multi_search` and `hybrid_search` merge the `dense` and `sparse` channels with Reciprocal Rank Fusion (`RRF_K`, default `60`) rather than comparing raw scores, since cosine similarity and miniCOIL scores are not on the same scale.
+- **Reranking** -- when `RERANK_ENABLED=true`, `vector_search` reranks its own results, and `multi_search`/`hybrid_search` rerank their fused candidates with `jina-reranker-v3.5` (listwise).
+- **Relevance-gated retry** -- `hybrid_search` only. When `RETRY_ENABLED=true` and the top reranked score is below `RERANK_SCORE_FLOOR`, the candidate pool is widened by `RETRY_LIMIT_MULTIPLIER` and retrieval runs once more.
 - **VLM generation** -- when `VLM_GENERATION_ENABLED=true`, `visual_search` generates a natural-language answer from the top visual results and prepends it.
 
 ### Error handling
 
-All tools catch exceptions and return a structured error object (`{"error": "...", "query": "..."}`) instead of raising, so agents always get a usable response. `hybrid_search` runs both backends in parallel and reports partial failures in an `errors` list while still returning results from the successful backend.
+`vector_search`, `visual_search`, and `graph_search` catch exceptions internally and return a structured error object (`{"error": "...", "query": "...", "partial_results": []}`) instead of raising, so agents always get a usable response.
+
+`multi_search` and `hybrid_search` use a different, more granular scheme: a failed channel (`dense`, `sparse`, `rerank`, or `graph`) is recorded by name in a `degraded` list rather than aborting the whole call, and the tool still returns whatever channels succeeded. `degraded` is omitted entirely on a healthy run. A top-level `error` key appears only when both `dense` and `sparse` fail — distinguishing total retrieval outage from a query that simply matched nothing. Neither tool has a `partial_results` field.
 
 ---
 

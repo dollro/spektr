@@ -1,6 +1,6 @@
 # Architecture Overview
 
-Spektr is a hybrid GraphRAG + multimodal vector search system exposed as an MCP server. It supports two ingestion paths: a **bulk pipeline** (CocoIndex with a pluggable graph engine — Graphiti by default, GLiNER2 opt-in) for batch document processing from local filesystem, S3, or SharePoint, and a **live ingestion** endpoint for streaming text data with temporal tracking via Graphiti. Both paths write to shared Qdrant and Neo4j stores, and are made searchable by LLM agents through six session-aware MCP tools.
+Spektr is a hybrid GraphRAG + multimodal vector search system exposed as an MCP server. It supports two ingestion paths: a **bulk pipeline** (CocoIndex with a pluggable graph engine — Graphiti by default, GLiNER2 opt-in) for batch document processing from local filesystem, S3, or SharePoint, and a **live ingestion** endpoint for streaming text data with temporal tracking via Graphiti. Both paths write to shared Qdrant and Neo4j stores, and are made searchable by LLM agents through seven MCP tools, four of them session-aware.
 
 ## System diagram
 
@@ -124,13 +124,14 @@ FastMCP is a lightweight MCP server framework that supports streamable-http (the
 
 ### MCP tools
 
-Six tools are registered. Four are search; two are listing/inventory helpers used by agents to enumerate what's in the corpus before querying.
+Seven tools are registered. Five are search; two are listing/inventory helpers used by agents to enumerate what's in the corpus before querying.
 
 | Tool | Category |
 |-|-|
 | `vector_search` | Search |
 | `visual_search` | Search |
 | `graph_search` | Search |
+| `multi_search` | Search |
 | `hybrid_search` | Search |
 | `list_documents` | Listing/Inventory |
 | `list_document_chunks` | Listing/Inventory |
