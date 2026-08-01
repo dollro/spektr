@@ -14,6 +14,7 @@ from server.tools.graph_search import graph_search
 from server.tools.hybrid_search import hybrid_search
 from server.tools.list_document_chunks import list_document_chunks
 from server.tools.list_documents import list_documents
+from server.tools.multi_search import multi_search
 from server.tools.vector_search import vector_search
 from server.tools.visual_search import visual_search
 
@@ -50,6 +51,7 @@ mcp = FastMCP(
 mcp.tool()(vector_search)
 mcp.tool()(graph_search)
 mcp.tool()(hybrid_search)
+mcp.tool()(multi_search)
 mcp.tool()(list_documents)
 mcp.tool()(list_document_chunks)
 
@@ -57,6 +59,7 @@ _REGISTERED_TOOLS = [
     "vector_search",
     "graph_search",
     "hybrid_search",
+    "multi_search",
     "list_documents",
     "list_document_chunks",
 ]

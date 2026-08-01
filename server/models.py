@@ -41,16 +41,31 @@ class GraphFact(BaseModel):
     confidence: float | None = None
 
 
-class HybridSearchResponse(BaseModel):
-    """Combined vector + graph search response."""
+class FusedSearchResult(BaseModel):
+    """One reranked, rank-fused retrieval hit."""
 
-    vector_results: list[SearchResult] = []
-    graph_results: list[GraphFact] = []
-    live_results: list[SearchResult] = []
+    id: str
+    text: str
+    source_file: str
+    page_number: int = 0
+    chunk_index: int = 0
+    score: float
+    fusion_score: float
+    channels: list[str] = []
+    metadata: dict = {}  # type: ignore[type-arg]
+
+
+class FusedSearchResponse(BaseModel):
+    """Shared response shape for multi_search and hybrid_search."""
+
+    results: list[FusedSearchResult] = []
+    graph_facts: list[GraphFact] = []
+    live_results: list[FusedSearchResult] = []
     query: str
     session_id: str | None = None
-    strategy: str = "parallel"
-    errors: list[str] | None = None
+    sub_queries: list[str] | None = None
+    retried: bool | None = None
+    degraded: list[str] | None = None
 
 
 class LiveChunk(BaseModel):

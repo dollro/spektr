@@ -16,6 +16,8 @@ from config.constants import (
     MULTIVEC_COLLECTION,
     MULTIVEC_DIM,
 )
+from retrieval.models import FusedResult
+from retrieval.pipeline import PipelineOutput
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -326,14 +328,26 @@ class TestHybridSearch:
     """Tests for the hybrid_search tool."""
 
     async def test_returns_both_results(self):
-        """Returns both vector_results and graph_results."""
-        mock_vector = AsyncMock(return_value=[{"score": 0.9, "text": "result"}])
+        """Returns both a fused results list and graph_facts."""
+        fused = PipelineOutput(
+            results=[
+                FusedResult(
+                    id="1",
+                    text="result",
+                    source_file="d.pdf",
+                    score=0.9,
+                    fusion_score=0.03,
+                    channels=["dense"],
+                )
+            ]
+        )
+        mock_pipeline = AsyncMock(return_value=fused)
         mock_graph = AsyncMock(return_value=[{"entity": "X", "type": "CONCEPT"}])
 
         with (
             patch(
-                "server.tools.hybrid_search.vector_search",
-                mock_vector,
+                "server.tools.hybrid_search.smart_pipeline",
+                mock_pipeline,
             ),
             patch(
                 "server.tools.hybrid_search.graph_search",
@@ -344,42 +358,31 @@ class TestHybridSearch:
 
             result = await hybrid_search("test query")
 
-        assert len(result["vector_results"]) == 1
-        assert len(result["graph_results"]) == 1
+        assert len(result["results"]) == 1
+        assert len(result["graph_facts"]) == 1
         assert result["query"] == "test query"
-        assert result["strategy"] == "parallel"
-
-    async def test_partial_failure_vector(self):
-        """If vector search fails, graph results still returned."""
-        mock_vector = AsyncMock(side_effect=RuntimeError("Qdrant down"))
-        mock_graph = AsyncMock(return_value=[{"entity": "X"}])
-
-        with (
-            patch(
-                "server.tools.hybrid_search.vector_search",
-                mock_vector,
-            ),
-            patch(
-                "server.tools.hybrid_search.graph_search",
-                mock_graph,
-            ),
-        ):
-            from server.tools.hybrid_search import hybrid_search
-
-            result = await hybrid_search("test")
-
-        assert result["vector_results"][0]["error"]
-        assert len(result["graph_results"]) == 1
 
     async def test_partial_failure_graph(self):
-        """If graph search fails, vector results still returned."""
-        mock_vector = AsyncMock(return_value=[{"score": 0.9}])
+        """If graph search fails, fused results still returned and graph is degraded."""
+        fused = PipelineOutput(
+            results=[
+                FusedResult(
+                    id="1",
+                    text="result",
+                    source_file="d.pdf",
+                    score=0.9,
+                    fusion_score=0.03,
+                    channels=["dense"],
+                )
+            ]
+        )
+        mock_pipeline = AsyncMock(return_value=fused)
         mock_graph = AsyncMock(side_effect=RuntimeError("Neo4j down"))
 
         with (
             patch(
-                "server.tools.hybrid_search.vector_search",
-                mock_vector,
+                "server.tools.hybrid_search.smart_pipeline",
+                mock_pipeline,
             ),
             patch(
                 "server.tools.hybrid_search.graph_search",
@@ -390,8 +393,9 @@ class TestHybridSearch:
 
             result = await hybrid_search("test")
 
-        assert len(result["vector_results"]) == 1
-        assert result["graph_results"][0]["error"]
+        assert len(result["results"]) == 1
+        assert result["graph_facts"] == []
+        assert "graph" in result["degraded"]
 
 
 # ---------------------------------------------------------------------------
@@ -412,6 +416,7 @@ class TestMCPServer:
             "vector_search",
             "graph_search",
             "hybrid_search",
+            "multi_search",
             "list_documents",
             "list_document_chunks",
         } <= tool_names
@@ -595,8 +600,8 @@ class TestInputValidation:
         from server.tools.hybrid_search import hybrid_search
 
         result = await hybrid_search("")
-        assert result["vector_results"] == []
-        assert result["graph_results"] == []
+        assert result["results"] == []
+        assert result["graph_facts"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -763,11 +768,11 @@ class TestLiveIngestModels:
         )
         assert resp.status == "accepted"
 
-    def test_hybrid_search_response_with_session(self) -> None:
-        """HybridSearchResponse supports session_id and live_results."""
-        from server.models import HybridSearchResponse
+    def test_fused_search_response_with_session(self) -> None:
+        """FusedSearchResponse supports session_id and live_results."""
+        from server.models import FusedSearchResponse
 
-        resp = HybridSearchResponse(
+        resp = FusedSearchResponse(
             query="test",
             session_id="session-1",
             live_results=[],
@@ -928,30 +933,41 @@ class TestSessionAwareGraphSearch:
 class TestSessionAwareHybridSearch:
     @pytest.mark.asyncio
     async def test_hybrid_search_with_session_id(self) -> None:
-        """Hybrid search passes session_id to both sub-searches."""
-        mock_vector = AsyncMock(
-            return_value=[
-                {
-                    "score": 0.9,
-                    "text": "live chunk",
-                    "metadata": {"source_type": "live"},
-                },
-                {"score": 0.8, "text": "kb doc", "metadata": {}},
+        """Hybrid search passes session_id to both smart_pipeline and graph_search."""
+        fused = PipelineOutput(
+            results=[
+                FusedResult(
+                    id="1",
+                    text="live chunk",
+                    source_file="d.pdf",
+                    score=0.9,
+                    fusion_score=0.03,
+                    metadata={"source_type": "live"},
+                ),
+                FusedResult(
+                    id="2",
+                    text="kb doc",
+                    source_file="d.pdf",
+                    score=0.8,
+                    fusion_score=0.02,
+                    metadata={},
+                ),
             ]
         )
+        mock_pipeline = AsyncMock(return_value=fused)
         mock_graph = AsyncMock(return_value=[{"fact": "X related Y"}])
 
         with (
-            patch("server.tools.hybrid_search.vector_search", mock_vector),
+            patch("server.tools.hybrid_search.smart_pipeline", mock_pipeline),
             patch("server.tools.hybrid_search.graph_search", mock_graph),
         ):
             from server.tools.hybrid_search import hybrid_search
 
             result = await hybrid_search("test", session_id="session-1")
 
-        # vector_search should receive session_id
-        mock_vector.assert_called_once()
-        assert mock_vector.call_args.kwargs.get("session_id") == "session-1"
+        # smart_pipeline should receive session_id
+        mock_pipeline.assert_called_once()
+        assert mock_pipeline.call_args.kwargs.get("session_id") == "session-1"
         # graph_search should receive session_id
         mock_graph.assert_called_once()
         assert mock_graph.call_args.kwargs.get("session_id") == "session-1"
@@ -960,20 +976,31 @@ class TestSessionAwareHybridSearch:
     @pytest.mark.asyncio
     async def test_hybrid_search_separates_live_results(self) -> None:
         """Hybrid search separates live chunks from KB results."""
-        mock_vector = AsyncMock(
-            return_value=[
-                {
-                    "score": 0.9,
-                    "text": "live chunk",
-                    "metadata": {"source_type": "live"},
-                },
-                {"score": 0.8, "text": "kb doc", "metadata": {}},
+        fused = PipelineOutput(
+            results=[
+                FusedResult(
+                    id="1",
+                    text="live chunk",
+                    source_file="d.pdf",
+                    score=0.9,
+                    fusion_score=0.03,
+                    metadata={"source_type": "live"},
+                ),
+                FusedResult(
+                    id="2",
+                    text="kb doc",
+                    source_file="d.pdf",
+                    score=0.8,
+                    fusion_score=0.02,
+                    metadata={},
+                ),
             ]
         )
+        mock_pipeline = AsyncMock(return_value=fused)
         mock_graph = AsyncMock(return_value=[])
 
         with (
-            patch("server.tools.hybrid_search.vector_search", mock_vector),
+            patch("server.tools.hybrid_search.smart_pipeline", mock_pipeline),
             patch("server.tools.hybrid_search.graph_search", mock_graph),
         ):
             from server.tools.hybrid_search import hybrid_search
@@ -981,4 +1008,4 @@ class TestSessionAwareHybridSearch:
             result = await hybrid_search("test", session_id="session-1")
 
         assert len(result["live_results"]) == 1
-        assert len(result["vector_results"]) == 1
+        assert len(result["results"]) == 1
