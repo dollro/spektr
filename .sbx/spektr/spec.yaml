@@ -1,0 +1,35 @@
+schemaVersion: "1"
+kind: mixin
+name: spektr-stack
+displayName: Spektr dev stack
+description: uv/uvx toolchain plus network allowlist for the project MCP servers.
+
+commands:
+  install:
+    - user: "1000"
+      description: Install uv
+      command: |
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+    - user: "1000"
+      description: Pre-warm the Serena venv
+      command: |
+        export PATH="$HOME/.local/bin:$PATH"
+        uvx --from git+https://github.com/oraios/serena serena --help || true
+    - user: "1000"
+      description: Install go-task
+      command: |
+        sudo npm install -g @go-task/cli
+
+network:
+  allowedDomains:
+    - "astral.sh:443"
+    - "pypi.org:443"
+    - "files.pythonhosted.org:443"
+    - "github.com:443"
+    - "codeload.github.com:443"
+    - "objects.githubusercontent.com:443"
+    - "registry.npmjs.org:443"
+    - "mcp.context7.com:443"
+    - "mcp.grep.app:443"
+    - "git.dolltons.com:443"
+    - "localhost:8090"
