@@ -161,6 +161,13 @@ tasks:
     cmds:
       - docker compose -f docker-compose.prod.yml --env-file .env.prod down
 
+  prod:migrate-env:
+    desc: "Migrate a pre-CocoIndex-v1 .env.prod to the current schema. Pass -- --write to apply"
+    cmds:
+      # Plain python3, not `uv run`: this is meant to work on a VM that has
+      # Docker but no project virtualenv. The script is stdlib-only.
+      - python3 scripts/migrate_env.py .env.prod {{.CLI_ARGS}}
+
   prod:nuke:
     desc: "DESTROYS ALL PROD DATA (Qdrant + Neo4j + pipeline state). Pass -- --yes-i-know-this-wipes-things"
     cmds:
