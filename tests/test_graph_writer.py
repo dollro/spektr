@@ -8,11 +8,13 @@ from ingestion.entity_extractor import (
     Relationship,
 )
 from ingestion.graph_writer import GraphWriter
+from tests.conftest import assert_ephemeral_neo4j
 
 
 @pytest.fixture
 async def writer():
-    """Create a GraphWriter connected to local Neo4j."""
+    """Create a GraphWriter connected to the ephemeral test Neo4j."""
+    assert_ephemeral_neo4j("the graph_writer fixture")
     gw = GraphWriter()
     yield gw
     # Clean up test data

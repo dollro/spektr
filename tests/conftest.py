@@ -287,6 +287,27 @@ def _use_ephemeral_neo4j(request):  # type: ignore[no-untyped-def]
     yield
 
 
+def assert_ephemeral_neo4j(fixture: str) -> None:
+    """Refuse to run a wiping fixture against anything but the test container.
+
+    Last line of defence, mirroring the one in ``qdrant_client``. Every fixture
+    that issues a bulk DELETE must call this: a Neo4j test that forgets
+    ``@pytest.mark.integration`` never triggers ``_use_ephemeral_neo4j``, so the
+    wipe would land on the developer's real graph.
+
+    Shared rather than inlined because ``tests/test_graph_writer.py`` builds its
+    own ``GraphWriter`` and needs the identical check — reading the module
+    global here means both callers see the live value, not an import-time copy.
+    """
+    from config.settings import settings
+
+    assert _EPHEMERAL_NEO4J_URI is not None and settings.neo4j_uri == _EPHEMERAL_NEO4J_URI, (
+        f"Refusing to run: {fixture} wipes {settings.neo4j_uri!r}, which is "
+        "not the ephemeral test container. Neo4j tests must be marked "
+        "@pytest.mark.integration so _use_ephemeral_neo4j starts it."
+    )
+
+
 @pytest.fixture
 async def neo4j_driver():  # type: ignore[no-untyped-def]
     """Real Neo4j driver for integration tests.
@@ -298,15 +319,7 @@ async def neo4j_driver():  # type: ignore[no-untyped-def]
     from config.settings import settings
     from ingestion.neo4j_setup import create_neo4j_schema
 
-    # Last line of defence, mirroring the qdrant_client fixture: this one wipes
-    # whatever it connects to, so it must only ever see the ephemeral container.
-    # A Neo4j test missing @pytest.mark.integration would otherwise skip the
-    # container and destroy the developer's graph.
-    assert _EPHEMERAL_NEO4J_URI is not None and settings.neo4j_uri == _EPHEMERAL_NEO4J_URI, (
-        f"Refusing to run: this fixture wipes {settings.neo4j_uri!r}, which is "
-        "not the ephemeral test container. Neo4j tests must be marked "
-        "@pytest.mark.integration so _use_ephemeral_neo4j starts it."
-    )
+    assert_ephemeral_neo4j("the neo4j_driver fixture")
 
     driver = AsyncGraphDatabase.driver(
         settings.neo4j_uri,
