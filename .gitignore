@@ -13,4 +13,14 @@ site/
 state/
 eval-reports/
 backups/
+
+# Editor scratch files.
+*.swp
+*.swo
+*~
+
+# Local tooling state — per-developer, never shared.
+# .claude/settings.json IS tracked; only the .local. override is personal.
 .mcp.json
+.claude/settings.local.json
+.serena/

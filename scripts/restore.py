@@ -1,8 +1,8 @@
-"""Restore Qdrant + Neo4j + Postgres from a ./backups/<timestamp>/.
+"""Restore Qdrant + Neo4j + CocoIndex state from a ./backups/<timestamp>/.
 
 Dangerous: Qdrant restore deletes the target collection, Neo4j load
-replaces the database, pg_restore --clean drops existing rows. Refuses
-to run without --yes-i-know-this-wipes-things.
+replaces the database, and the CocoIndex restore replaces the LMDB state
+directory outright. Refuses to run without --yes-i-know-this-wipes-things.
 
 Usage:
     python -m scripts.restore --from backups/20260419-153000 \
@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -26,7 +27,8 @@ def _read_manifest(src: Path) -> dict:  # type: ignore[type-arg]
     m = src / "manifest.json"
     if not m.exists():
         raise FileNotFoundError(f"No manifest at {m}")
-    return json.loads(m.read_text())
+    data: dict = json.loads(m.read_text())  # type: ignore[type-arg]
+    return data
 
 
 def _compose_cmd(compose_file: str | None, *args: str) -> list[str]:
@@ -161,37 +163,37 @@ def restore_neo4j(
 
 
 # ---------------------------------------------------------------------------
-# Postgres
+# CocoIndex state (LMDB)
 # ---------------------------------------------------------------------------
 
 
-def restore_postgres(
+def restore_cocoindex(
     src: Path,
     manifest: dict,  # type: ignore[type-arg]
-    compose_file: str | None = None,
+    state_path: str | None = None,
 ) -> None:
-    """pg_restore --clean to drop + recreate objects before loading data."""
-    pg_entry = manifest.get("entries", {}).get("postgres", {})
-    file_name = pg_entry.get("file", "cocoindex.dump")
-    dump = src / "postgres" / file_name
-    if not dump.exists():
-        print(f"  no dump at {dump}; skipping")
+    """Replace the LMDB state directory with the archived one.
+
+    The ingest process must not be running: LMDB keeps a lock file and open
+    readers, and swapping the directory underneath a live writer corrupts it.
+    """
+    entry = manifest.get("entries", {}).get("cocoindex", {})
+    if entry.get("skipped"):
+        print("  backup recorded no CocoIndex state; skipping")
+        return
+    file_name = entry.get("file", "cocoindex-state.tar.gz")
+    archive = src / "cocoindex" / file_name
+    if not archive.exists():
+        print(f"  no archive at {archive}; skipping")
         return
 
-    print(f"  pg_restore {dump.name} …")
-    with dump.open("rb") as fh:
-        r = subprocess.run(
-            _compose_cmd(
-                compose_file, "exec", "-T", "postgres",
-                "pg_restore", "-U", "cocoindex", "-d", "cocoindex",
-                "--clean", "--if-exists",
-            ),
-            stdin=fh, capture_output=True, check=False,
-        )
-    if r.returncode != 0:
-        msg = f"pg_restore failed: {r.stderr.decode(errors='replace')}"
-        raise RuntimeError(msg)
-    print("    → postgres restored")
+    dest = Path(state_path or settings.cocoindex_db_path)
+    print(f"  restoring CocoIndex state to {dest} …")
+    if dest.exists():
+        shutil.rmtree(dest)
+    dest.mkdir(parents=True, exist_ok=True)
+    shutil.unpack_archive(str(archive), str(dest))
+    print("    → cocoindex state restored")
 
 
 # ---------------------------------------------------------------------------
@@ -204,7 +206,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--from", dest="src", required=True,
                         help="Path to a backups/<timestamp>/ directory.")
     parser.add_argument("--target",
-                        choices=["qdrant", "neo4j", "postgres", "all"],
+                        choices=["qdrant", "neo4j", "cocoindex", "all"],
                         default="all")
     parser.add_argument("--yes-i-know-this-wipes-things",
                         action="store_true",
@@ -232,7 +234,7 @@ def main(argv: list[str] | None = None) -> int:
         print(
             "Refusing to run without --yes-i-know-this-wipes-things. "
             "Restore wipes current Qdrant collections, the Neo4j DB, "
-            "and CocoIndex Postgres state.",
+            "and the CocoIndex LMDB state directory.",
             file=sys.stderr,
         )
         return 3
@@ -240,8 +242,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.target in ("qdrant", "all"):
             restore_qdrant(src, manifest)
-        if args.target in ("postgres", "all"):
-            restore_postgres(src, manifest, args.compose_file)
+        if args.target in ("cocoindex", "all"):
+            restore_cocoindex(src, manifest)
         if args.target in ("neo4j", "all"):
             restore_neo4j(src, manifest, args.compose_file)
     except Exception as exc:

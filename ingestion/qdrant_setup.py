@@ -6,8 +6,10 @@ from qdrant_client import QdrantClient, models
 
 from config.constants import (
     DENSE_COLLECTION,
+    DENSE_VECTOR_NAME,
     MULTIVEC_COLLECTION,
     MULTIVEC_DIM,
+    SPARSE_VECTOR_NAME,
 )
 from config.settings import settings
 
@@ -17,7 +19,8 @@ logger = logging.getLogger(__name__)
 def create_dense_collection(client: QdrantClient) -> None:
     """Create documents_dense collection.
 
-    Vector dimensions are read from settings (provider-dependent).
+    Named vectors: "dense" (dimensions from settings, provider-dependent,
+    COSINE) and "sparse" (miniCOIL, IDF modifier).
     Payload indexes: source_file (KEYWORD), content_type (KEYWORD).
     Idempotent — skips if collection already exists.
     """
@@ -28,10 +31,17 @@ def create_dense_collection(client: QdrantClient) -> None:
     dim = settings.dense_dimensions
     client.create_collection(
         collection_name=DENSE_COLLECTION,
-        vectors_config=models.VectorParams(
-            size=dim,
-            distance=models.Distance.COSINE,
-        ),
+        vectors_config={
+            DENSE_VECTOR_NAME: models.VectorParams(
+                size=dim,
+                distance=models.Distance.COSINE,
+            ),
+        },
+        sparse_vectors_config={
+            SPARSE_VECTOR_NAME: models.SparseVectorParams(
+                modifier=models.Modifier.IDF,
+            ),
+        },
     )
     client.create_payload_index(
         collection_name=DENSE_COLLECTION,

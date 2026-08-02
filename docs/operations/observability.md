@@ -36,7 +36,7 @@ Restart your processes. Traces land in the dashboard within seconds.
 | FastAPI | live-ingest endpoints + agent `/query` endpoint (request + response + status) |
 
 Instrumentation is wired in these entrypoints:
-- `ingestion/pipeline.py::run_pipeline`
+- `ingestion/runner.py::run_pipeline`
 - `ingestion/live_ingest.py` (module-level)
 - `server/mcp_server.py`
 - `agent/api.py::lifespan`

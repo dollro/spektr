@@ -9,3 +9,15 @@
 faithfulness: 0.80          # every claim in the answer must be grounded in retrieved context
 context_precision: 0.50     # retrieved chunks should be relevant to the question
 answer_relevancy: 0.75      # the answer should actually address the question
+
+# Retrieval-only metrics (task eval-retrieval). No LLM in the loop, so these
+# are far less noisy than the RAGAS bars above.
+#
+# NON-GATING until the retrieval set grows past smoke level — see
+# tests/eval/retrieval_set.yaml. Uncomment and set from a measured baseline
+# once the corpus supports 40+ queries. Raise over time, never silently
+# lower, and record the measuring commit in the commit message.
+#
+# recall_at_10: 0.00
+# ndcg_at_10: 0.00
+# mrr: 0.00

@@ -90,34 +90,78 @@ GLiNER example:
 }
 ```
 
-## HybridSearchResponse
+## FusedSearchResult
 
-Returned by the hybrid search tool, which executes vector and graph searches in parallel and fuses the results. When `session_id` is provided, live session data is separated into `live_results`.
+One rank-fused, optionally reranked hit. Returned inside `results` and `live_results` by both `multi_search` and `hybrid_search`.
 
 | Field | Type | Default | Description |
 |-|-|-|-|
-| `vector_results` | `list[SearchResult]` | `[]` | Dense vector search results (bulk KB) |
-| `graph_results` | `list[GraphFact]` | `[]` | Knowledge graph facts |
-| `live_results` | `list[SearchResult]` | `[]` | Live session results, sorted chronologically (only populated with `session_id`) |
-| `query` | `str` | — | The original search query |
-| `session_id` | `str \| None` | `None` | Session ID if session-aware search was used |
-| `strategy` | `str` | `"parallel"` | Fusion strategy used |
-| `errors` | `list[str] \| None` | `None` | Present only if one or both backends failed |
+| `id` | `str` | — | Qdrant point ID |
+| `text` | `str` | — | Matched text chunk |
+| `source_file` | `str` | — | Original filename |
+| `page_number` | `int` | `0` | Page number within source file |
+| `chunk_index` | `int` | `0` | Chunk position within the page |
+| `score` | `float` | — | Rerank score when reranking is enabled, otherwise equal to `fusion_score` |
+| `fusion_score` | `float` | — | Reciprocal Rank Fusion score across retrieval channels |
+| `channels` | `list[str]` | `[]` | Which channel(s) surfaced this hit — `dense`, `sparse`, or both |
+| `metadata` | `dict` | `{}` | Additional metadata from the document |
 
 ```json
 {
-  "vector_results": [
+  "id": "3f1c9e2a-...",
+  "text": "The transformer architecture uses self-attention mechanisms...",
+  "source_file": "attention-paper.pdf",
+  "page_number": 3,
+  "chunk_index": 5,
+  "score": 0.312,
+  "fusion_score": 0.0323,
+  "channels": ["dense", "sparse"],
+  "metadata": {}
+}
+```
+
+## FusedSearchResponse
+
+BREAKING CHANGE: this replaces the old `HybridSearchResponse` shape
+(`vector_results`/`graph_results`/`strategy`/`errors`). See
+[Search Tools — Breaking change](../server/search-tools.md) for the
+before/after migration table.
+
+Returned by both `multi_search` (deterministic, no LLM) and `hybrid_search`
+(adds query decomposition and a relevance-gated retry) — the two tools share
+this exact schema. When `session_id` is provided, live session data is
+separated into `live_results`.
+
+| Field | Type | Default | Description |
+|-|-|-|-|
+| `results` | `list[FusedSearchResult]` | `[]` | Fused, reranked KB results, best first |
+| `graph_facts` | `list[GraphFact]` | `[]` | Knowledge graph facts, queried in parallel and not fused into the ranking |
+| `live_results` | `list[FusedSearchResult]` | `[]` | Live session hits (only populated with `session_id`) |
+| `query` | `str` | — | The original search query |
+| `session_id` | `str \| None` | `None` | Session ID if session-aware search was used |
+| `sub_queries` | `list[str] \| None` | `None` | `hybrid_search` only — the decomposed sub-queries actually used |
+| `retried` | `bool \| None` | `None` | `hybrid_search` only — `true` if the relevance gate fired a retry |
+| `degraded` | `list[str] \| None` | `None` | **Omitted when healthy.** Present only on partial failure — the channel names that failed (`dense`, `sparse`, `rerank`, `graph`) |
+
+Not part of the `FusedSearchResponse` model, but present on the raw dict a tool returns: an `error: str` key appears only when **both** `dense` and `sparse` failed, signalling total retrieval outage rather than a query that matched nothing (see `server/tools/multi_search.py::shape_response`).
+
+```json
+{
+  "results": [
     {
-      "score": 0.892,
+      "id": "3f1c9e2a-...",
       "text": "The transformer architecture uses self-attention mechanisms...",
       "source_file": "attention-paper.pdf",
       "page_number": 3,
-      "content_type": "application/pdf",
+      "chunk_index": 5,
+      "score": 0.312,
+      "fusion_score": 0.0323,
+      "channels": ["dense", "sparse"],
       "metadata": {}
     }
   ],
   "live_results": [],
-  "graph_results": [
+  "graph_facts": [
     {
       "fact": "Transformers replaced recurrent architectures for NLP tasks",
       "source": "attention-paper.pdf",
@@ -126,8 +170,7 @@ Returned by the hybrid search tool, which executes vector and graph searches in 
     }
   ],
   "query": "transformer architecture attention mechanism",
-  "session_id": null,
-  "strategy": "parallel"
+  "session_id": null
 }
 ```
 

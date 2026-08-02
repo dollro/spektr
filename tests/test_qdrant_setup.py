@@ -5,7 +5,14 @@ from unittest.mock import MagicMock, patch
 import pytest
 from qdrant_client import models
 
-from config.constants import DENSE_COLLECTION, DENSE_DIM, MULTIVEC_COLLECTION, MULTIVEC_DIM
+from config.constants import (
+    DENSE_COLLECTION,
+    DENSE_DIM,
+    DENSE_VECTOR_NAME,
+    MULTIVEC_COLLECTION,
+    MULTIVEC_DIM,
+    SPARSE_VECTOR_NAME,
+)
 from config.settings import settings
 from ingestion.qdrant_setup import (
     create_dense_collection,
@@ -28,10 +35,23 @@ class TestCreateDenseCollection:
         mock_client.create_collection.assert_called_once()
         call_kwargs = mock_client.create_collection.call_args
         assert call_kwargs.kwargs["collection_name"] == DENSE_COLLECTION
-        vec_config = call_kwargs.kwargs["vectors_config"]
+        vec_config = call_kwargs.kwargs["vectors_config"][DENSE_VECTOR_NAME]
         assert isinstance(vec_config, models.VectorParams)
         assert vec_config.size == settings.dense_dimensions
         assert vec_config.distance == models.Distance.COSINE
+
+    def test_dense_collection_uses_named_vectors(self) -> None:
+        """Dense and sparse vectors are both named, sparse uses IDF."""
+        client = MagicMock()
+        client.collection_exists.return_value = False
+        create_dense_collection(client)
+
+        kwargs = client.create_collection.call_args.kwargs
+        assert kwargs["collection_name"] == DENSE_COLLECTION
+        assert DENSE_VECTOR_NAME in kwargs["vectors_config"]
+        assert SPARSE_VECTOR_NAME in kwargs["sparse_vectors_config"]
+        sparse_cfg = kwargs["sparse_vectors_config"][SPARSE_VECTOR_NAME]
+        assert sparse_cfg.modifier == models.Modifier.IDF
 
     def test_creates_payload_indexes(self, mock_client: MagicMock) -> None:
         create_dense_collection(mock_client)
@@ -108,7 +128,9 @@ class TestQdrantSetupIntegration:
     def qdrant_client(self) -> MagicMock:
         from qdrant_client import QdrantClient
 
-        return QdrantClient(url="http://localhost:6333")
+        from config.settings import settings
+
+        return QdrantClient(url=settings.qdrant_url)
 
     def test_create_and_verify_dense(self, qdrant_client: MagicMock) -> None:
         # Cleanup if exists
@@ -119,7 +141,9 @@ class TestQdrantSetupIntegration:
         assert qdrant_client.collection_exists(DENSE_COLLECTION)
 
         info = qdrant_client.get_collection(DENSE_COLLECTION)
-        assert info.config.params.vectors.size == DENSE_DIM  # type: ignore[union-attr]
+        dense = info.config.params.vectors[DENSE_VECTOR_NAME]  # type: ignore[index]
+        assert dense.size == DENSE_DIM
+        assert SPARSE_VECTOR_NAME in info.config.params.sparse_vectors  # type: ignore[operator]
 
         # Idempotency
         create_dense_collection(qdrant_client)

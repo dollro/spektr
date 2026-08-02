@@ -19,18 +19,10 @@ services:
     volumes:
       - neo4j_data:/data
 
-  postgres:
-    image: postgres:17.2
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB:-cocoindex}
-      POSTGRES_USER: ${POSTGRES_USER:-cocoindex}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cocoindex}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
+# CocoIndex v1 keeps its pipeline state in a local LMDB directory
+# (COCOINDEX_DB_PATH, default state/cocoindex.db), so no PostgreSQL service
+# is needed here any more.
 
 volumes:
   qdrant_data:
   neo4j_data:
-  postgres_data:

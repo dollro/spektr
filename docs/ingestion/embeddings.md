@@ -150,17 +150,17 @@ Text and image embedding tasks use different concurrency strategies to stay with
 
 This split prevents TPM exhaustion while still maximising throughput for text-heavy workloads.
 
-## CocoIndex Ops Wrapper
+## Standalone Embedding Helpers
 
-`ingestion/cocoindex_ops.py` exposes the embedder as synchronous CocoIndex operations using `from ingestion._utils import run_async`.
+`ingestion/cocoindex_ops.py` exposes the embedder as plain synchronous functions using `from ingestion._utils import run_async`.
 
-|CocoIndex Op|Wraps|Description|
+|Helper|Wraps|Description|
 |-|-|-|
 |`op_embed_text(text)`|`embed_text([text])`|Text -> dense vector|
 |`op_embed_image(image_bytes)`|`embed_image(image_bytes)`|Image -> dense vector|
 |`op_embed_image_multivec(image_bytes)`|`embed_multi_vector(image_bytes)`|Image -> ColBERT token vectors|
 
-The embedder instance is lazily initialized via `create_embedder()` on first use.
+The embedder instance is lazily initialized via `create_embedder()` on first use. None of these are wired into the ingestion app — the bulk pipeline embeds through `ingestion/page_processor.py` — they exist for callers that want a one-shot embedding without an event loop.
 
 ## Graphiti Integration
 
@@ -169,6 +169,38 @@ When Graphiti is used for the knowledge graph, it requires its own embedder inte
 - Graph embeddings share the same rate limiters as document ingestion
 - No duplicate HTTP clients or separate API quota consumption
 - `graphiti_client.py` sets `EMBEDDING_DIM=512` in `os.environ` at import time so Graphiti's vector index sizing matches its internal expectations
+
+## Sparse Channel (miniCOIL)
+
+Retrieval also has a lexical channel, independent of the dense embedding provider above. It exists to catch exact-match queries — part numbers, error codes, proper nouns — that a semantic embedding can miss.
+
+**Model:** `Qdrant/minicoil-v1` (`SPARSE_MODEL`), via [fastembed](https://github.com/qdrant/fastembed). miniCOIL behaves like BM25 that understands word sense — it keeps exact keyword matching while disambiguating by context. It runs locally on CPU; there is no API call and no per-token cost. The first encode call pays a one-time model load penalty.
+
+**Source:** `ingestion/sparse_embedder.py`, consumed by `retrieval/channels.py::sparse_channel`.
+
+Toggle with `SPARSE_ENABLED` (default `true`). When disabled, `multi_search`/`hybrid_search` retrieve on the dense channel only.
+
+### Document vs. query encoding
+
+`encode_documents()` (indexing) and `encode_query()` (search) are asymmetric:
+
+- **Indexing** — `SparseTextEmbedding.embed()` applies BM25-style length normalisation, controlled by `avg_len` (`MINICOIL_AVG_LEN = 80` in `config/constants.py`).
+- **Querying** — `SparseTextEmbedding.query_embed()` applies **no** length normalisation.
+
+This is not a design choice made per call — fastembed's API doesn't expose `avg_len` as a per-call keyword on `embed()`/`query_embed()` at all. It's a **constructor** argument of `SparseTextEmbedding`, so it's fixed once at model load time and fastembed itself decides internally, based on which method is called, whether to apply it. Passing `avg_len` anywhere else (e.g. as a per-call `embed(options=...)` kwarg) is silently ignored and does nothing — there's no error, the value just doesn't take effect. If sparse search results look off after touching this code, check that the normalisation is still happening at `SparseTextEmbedding(...)` construction in `ingestion/sparse_embedder.py::_load_model`, not somewhere per-call.
+
+### Named vectors on `documents_dense`
+
+The dense and sparse channels don't live in separate collections — they're two **named vectors** on the same `documents_dense` point, set up by `ingestion/qdrant_setup.py::create_dense_collection`:
+
+- `dense` — the active provider's dense embedding, `COSINE` distance
+- `sparse` — miniCOIL, with `Modifier.IDF` (Qdrant applies IDF weighting server-side at query time)
+
+Every text-chunk point written by both ingestion paths carries both vectors (`ingestion/pipeline.py` for Path A, `ingestion/live_ingest.py` for Path B). Image and VLM-caption points carry `dense` only — there's no text to run through miniCOIL. `scripts/doctor.py` flags text-chunk points missing a `sparse` vector.
+
+**Named and unnamed vectors cannot coexist in the same Qdrant collection.** Before this channel existed, `documents_dense` used a single unnamed vector; adding `sparse` required switching `dense` to a named vector too, which is a breaking schema change requiring a full re-index. See [Re-indexing Runbook](../operations/reindex.md).
+
+Retrieval reads these named vectors directly with `query_points(..., using="dense")` / `using="sparse"` — see `retrieval/channels.py`.
 
 ## Adding a New Provider
 

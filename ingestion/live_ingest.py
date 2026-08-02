@@ -17,10 +17,11 @@ from datetime import UTC, datetime
 from fastapi import Depends, FastAPI, HTTPException, Request
 from qdrant_client import QdrantClient, models
 
-from config.constants import DENSE_COLLECTION
+from config.constants import DENSE_COLLECTION, DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
 from config.settings import settings
 from ingestion.embedder import Embedder, create_embedder
 from ingestion.graphiti_client import get_graphiti
+from ingestion.sparse_embedder import encode_documents
 from server.models import (
     IngestResponse,
     LiveChunk,
@@ -130,6 +131,11 @@ async def ingest_chunk(chunk: LiveChunk) -> IngestResponse:
     # 1. Embed and upsert to Qdrant (immediate)
     embedder = _get_embedder()
     vectors = await embedder.embed_text([chunk.text])
+    # miniCOIL sparse encoding runs on local CPU (fastembed) and is blocking;
+    # offload to a thread so it doesn't stall the event loop. Sparse is
+    # included so live-session points remain reachable via sparse_channel,
+    # matching Path A's schema on the same collection.
+    sparse_vectors = await asyncio.to_thread(encode_documents, [chunk.text])
     point_key = f"{chunk.session_id}::{chunk.timestamp.isoformat()}"
 
     _get_qdrant_client().upsert(
@@ -137,7 +143,10 @@ async def ingest_chunk(chunk: LiveChunk) -> IngestResponse:
         points=[
             models.PointStruct(
                 id=_make_point_id(point_key),
-                vector=vectors[0],
+                vector={
+                    DENSE_VECTOR_NAME: vectors[0],
+                    SPARSE_VECTOR_NAME: sparse_vectors[0],
+                },
                 payload={
                     "source_file": f"session:{chunk.session_id}",
                     "content_type": "live",

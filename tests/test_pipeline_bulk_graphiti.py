@@ -1,10 +1,23 @@
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from qdrant_client import models
 
 from ingestion.file_processor import TextChunk
+
+
+@pytest.fixture(autouse=True)
+def stub_sparse_encoder():
+    """Keep unit tests off the real miniCOIL encoder (it downloads a model)."""
+    with patch(
+        "ingestion.page_processor.encode_documents",
+        side_effect=lambda texts: [
+            models.SparseVector(indices=[1], values=[0.5]) for _ in texts
+        ],
+    ):
+        yield
 
 
 class TestPipelineBulkGraphiti:
@@ -42,12 +55,12 @@ class TestPipelineBulkGraphiti:
     @pytest.mark.asyncio
     async def test_process_text_page_collects_chunks(self) -> None:
         """_process_text_page appends to chunk_collector instead of calling graph."""
-        from ingestion.pipeline import _process_text_page
+        from ingestion.page_processor import _process_text_page
 
         mock_engine = AsyncMock()
         mock_embedder = AsyncMock()
         mock_embedder.embed_text = AsyncMock(return_value=[[0.1] * 2048])
-        mock_qdrant = MagicMock()
+        mock_dense = MagicMock()
 
         collected: list[TextChunk] = []
 
@@ -57,7 +70,7 @@ class TestPipelineBulkGraphiti:
             page_number=1,
             mime="application/pdf",
             now="2026-03-05T00:00:00",
-            qdrant=mock_qdrant,
+            dense=mock_dense,
             embedder=mock_embedder,
             graph_engine=mock_engine,
             chunk_collector=collected,

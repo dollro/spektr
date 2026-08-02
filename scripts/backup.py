@@ -1,10 +1,10 @@
-"""Snapshot Qdrant + Neo4j + Postgres to ./backups/<timestamp>/.
+"""Snapshot Qdrant + Neo4j + CocoIndex state to ./backups/<timestamp>/.
 
 Subcommands:
-    qdrant    — snapshot every Qdrant collection via the native snapshot API
-    neo4j     — neo4j-admin database backup + docker cp out
-    postgres  — pg_dump of the CocoIndex DB in custom (-Fc) format
-    all       — run every subcommand sequentially
+    qdrant     — snapshot every Qdrant collection via the native snapshot API
+    neo4j      — neo4j-admin database backup + docker cp out
+    cocoindex  — tar the LMDB state directory (ledger + memoization cache)
+    all        — run every subcommand sequentially
 
 The top-level manifest.json records service versions, collection names,
 and per-artifact sizes so `restore.py` can validate before wiping state.
@@ -166,31 +166,34 @@ def backup_neo4j(dest: Path, compose_file: str | None = None) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Postgres
+# CocoIndex state (LMDB)
 # ---------------------------------------------------------------------------
 
 
-def backup_postgres(dest: Path, compose_file: str | None = None) -> dict[str, Any]:
-    """pg_dump the CocoIndex DB in custom (-Fc) format."""
-    out = dest / "postgres"
+def backup_cocoindex(dest: Path, state_path: str | None = None) -> dict[str, Any]:
+    """Archive CocoIndex's LMDB state directory.
+
+    LMDB offers no safe hot-copy: copying ``data.mdb`` while a writer is
+    mid-transaction can capture a torn page. Stop the ingest process (or run
+    between scheduled ingests) before taking this backup.
+
+    Losing this state is recoverable but expensive — it costs a full reprocess,
+    not data loss, because Qdrant point ids are deterministic (uuid5).
+    """
+    out = dest / "cocoindex"
     out.mkdir(exist_ok=True)
-    target = out / "cocoindex.dump"
+    src = Path(state_path or settings.cocoindex_db_path)
 
-    print("  running pg_dump …")
-    cmd = _compose_cmd(
-        compose_file,
-        "exec", "-T", "postgres",
-        "pg_dump", "-U", "cocoindex", "-Fc", "cocoindex",
-    )
-    with target.open("wb") as fh:
-        r = subprocess.run(cmd, stdout=fh, stderr=subprocess.PIPE, check=False)
-    if r.returncode != 0:
-        msg = f"pg_dump failed: {r.stderr.decode(errors='replace')}"
-        raise RuntimeError(msg)
+    if not src.exists():
+        print(f"  no CocoIndex state at {src} — skipping")
+        return {"skipped": True, "reason": f"{src} does not exist"}
 
+    print(f"  archiving CocoIndex state from {src} …")
+    archive = shutil.make_archive(str(out / "cocoindex-state"), "gztar", root_dir=str(src))
+    target = Path(archive)
     size = target.stat().st_size
     print(f"    → {target.name} ({size/1e6:.1f} MB)")
-    return {"file": target.name, "bytes": size}
+    return {"file": target.name, "source": str(src), "bytes": size}
 
 
 # ---------------------------------------------------------------------------
@@ -238,7 +241,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "target",
-        choices=["qdrant", "neo4j", "postgres", "all"],
+        choices=["qdrant", "neo4j", "cocoindex", "all"],
         nargs="?",
         default="all",
         help="What to back up (default: all).",
@@ -275,8 +278,8 @@ def main(argv: list[str] | None = None) -> int:
             entries["qdrant"] = backup_qdrant(dest)
         if args.target in ("neo4j", "all"):
             entries["neo4j"] = backup_neo4j(dest, args.compose_file)
-        if args.target in ("postgres", "all"):
-            entries["postgres"] = backup_postgres(dest, args.compose_file)
+        if args.target in ("cocoindex", "all"):
+            entries["cocoindex"] = backup_cocoindex(dest)
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
