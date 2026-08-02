@@ -6,6 +6,20 @@ All configuration is loaded from a `.env` file (or real environment variables) v
 cp .env.example .env
 ```
 
+!!! warning "Empty values must not carry an inline comment"
+    Docker Compose's `env_file:` parser only strips an inline comment when a value precedes it. `FOO=  # note` therefore sets `FOO` to the literal string `# note` inside the container — not to empty. Put the comment on the line *above* any variable you intend to leave empty:
+
+    ```ini
+    # optional key prefix to restrict the scan
+    S3_PREFIX=
+    ```
+
+    Inline comments are fine on lines that do have a value. This only affects the containerised path; local runs read `.env` through python-dotenv, which strips them correctly either way. A garbage `S3_PREFIX` makes the bucket scan match nothing and ingest zero documents with no error, so the distinction matters.
+
+## Migrating an older `.env`
+
+`scripts/migrate_env.py` upgrades an env file written for the pre-CocoIndex-v1 stack (the one with PostgreSQL) to the current schema. See [Production Deployment](../deployment/production.md#migrating-an-existing-envprod).
+
 ## Embedding Provider
 
 | Variable | Default | Required | Description |

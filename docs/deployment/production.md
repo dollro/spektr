@@ -137,6 +137,34 @@ task prod:build
 task prod:up                 # recreates containers with the new image
 ```
 
+If the pull crosses the CocoIndex v0→v1 boundary (the release that removed PostgreSQL), migrate `.env.prod` first — see below — and expect to rebuild the corpus: the `documents_dense` vector config changed and cannot be migrated in place. [Re-indexing](../operations/reindex.md) covers the collection rebuild; [First Ingest](../operations/first-ingest.md) covers a clean slate.
+
+### Migrating an existing `.env.prod`
+
+An env file written for the old stack carries variables nothing reads any more and is missing ones the new pipeline expects. Neither is reported at boot — the pipeline just runs on defaults. `scripts/migrate_env.py` reconciles it:
+
+```bash
+python3 scripts/migrate_env.py .env.prod          # report only, changes nothing
+python3 scripts/migrate_env.py .env.prod --write  # rewrite in place, keeps .env.prod.bak
+task prod:migrate-env -- --write                  # same, via go-task
+```
+
+Unlike the rest of `scripts/`, this one is stdlib-only and runs under plain `python3` — a deploy VM has Docker but usually no project virtualenv. Your comments, ordering and untouched lines are preserved; the output is written mode 600. Values are never printed, only variable names, so the report is safe to paste into a ticket.
+
+What it does:
+
+| Action | Detail |
+|-|-|
+| Drops | `DATABASE_URL`, `POSTGRES_USER/PASSWORD/DB/PORT/HOST` — dead since the LMDB ledger replaced PostgreSQL |
+| Adds | `COCOINDEX_DB_PATH`, `PIPELINE_MAX_CONCURRENT_FILES`, `S3_PREFIX`, `S3_SQS_DEBOUNCE_SECONDS`, `S3_FULL_SCAN_INTERVAL_HOURS`, at their documented defaults |
+| Retunes | `JINA_DENSE_DIMENSIONS` 512 → 2048 and `LLM_MODEL` → `claude-sonnet-5`, but *only* where the file holds exactly the stale value, so a deliberate override survives |
+| Flags | `QDRANT_DENSE_COLLECTION` / `QDRANT_MULTIVEC_COLLECTION` — test-suite overrides that point production at throwaway collections |
+| Validates | required variables, the embedding key matching `EMBEDDING_PROVIDER`, and `S3_BUCKET_NAME` when `DOCUMENT_SOURCE=s3` |
+
+It exits 1 when the migrated file would still be invalid, so a deploy script can gate on it. Re-running against an already-migrated file is a no-op, which makes it safe in automation.
+
+The migration does not invent secrets. Anything the new schema needs but the old file never had — `MCP_API_KEY` on a stack that ran unauthenticated, for instance — is reported as a problem for you to fill in.
+
 ### SharePoint sync
 
 `sharepoint-sync` is behind the `sharepoint` profile, so `task prod:up` skips it. It refuses to start unless `DOCUMENT_SOURCE=sharepoint` (exit 2), which combined with `restart: unless-stopped` would crash-loop on a local or S3 deployment. When you do want it:
