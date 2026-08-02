@@ -137,7 +137,7 @@ task prod:build
 task prod:up                 # recreates containers with the new image
 ```
 
-If the pull crosses the CocoIndex v0→v1 boundary (the release that removed PostgreSQL), migrate `.env.prod` first — see below — and expect to rebuild the corpus: the `documents_dense` vector config changed and cannot be migrated in place. [Re-indexing](../operations/reindex.md) covers the collection rebuild; [First Ingest](../operations/first-ingest.md) covers a clean slate.
+If the pull crosses the CocoIndex v0→v1 boundary (the release that removed PostgreSQL), this is not enough — the pipeline state and the vector collection both have to be rebuilt. Follow [Upgrading a Deployment](../operations/upgrading.md) instead, which sequences the teardown, the env migration below and the re-ingest.
 
 ### Migrating an existing `.env.prod`
 

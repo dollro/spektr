@@ -15,6 +15,8 @@ Not needed for provider-internal changes that don't touch dimensionality or vect
 
 If you are standing up a new environment rather than rebuilding an existing corpus — or you want to verify ingestion end to end from nothing — see [First Ingest](first-ingest.md), which also wipes Neo4j and the failure-tracker DB and walks through per-layer verification.
 
+If you are upgrading a deployment across the CocoIndex v0→v1 boundary, this runbook is only one step of several — see [Upgrading a Deployment](upgrading.md), which also covers the PostgreSQL teardown and the env migration.
+
 ## Procedure
 
 **1. Back up first.** A re-index is destructive to the collection you're about to drop — if the migration goes wrong partway through, you want a way back.
