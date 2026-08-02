@@ -128,7 +128,9 @@ class TestQdrantSetupIntegration:
     def qdrant_client(self) -> MagicMock:
         from qdrant_client import QdrantClient
 
-        return QdrantClient(url="http://localhost:6333")
+        from config.settings import settings
+
+        return QdrantClient(url=settings.qdrant_url)
 
     def test_create_and_verify_dense(self, qdrant_client: MagicMock) -> None:
         # Cleanup if exists

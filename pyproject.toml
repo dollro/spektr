@@ -47,6 +47,7 @@ dev = [
     "mkdocs>=1.6,<2",
     "mkdocs-material>=9.5,<9.7",
     "respx>=0.21,<1",
+    "testcontainers[neo4j]>=4.8",
 ]
 
 [tool.ruff]

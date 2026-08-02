@@ -23,10 +23,16 @@ cd spektr
 ### 2. Install Python dependencies
 
 ```bash
-uv sync
+uv sync --extra gliner
 ```
 
-This installs all base, dev, and test dependencies from `pyproject.toml`.
+This installs all base, dev, and test dependencies from `pyproject.toml`, plus
+`gliner2`, which `GRAPH_ENGINE=gliner` needs. `task setup` runs the same command.
+
+Keep the `--extra gliner`. `uv sync` is exact by default, so a bare sync
+*uninstalls* `gliner2` — and because the import is lazy, nothing complains until
+the graph engine is first built, at which point ingestion and `graph_search`
+fail with `No module named 'gliner2'`.
 
 ### 3. Start infrastructure services
 
@@ -103,6 +109,19 @@ Run integration tests (requires running Docker services):
 uv run pytest -m integration
 ```
 
+Integration tests never touch your dev data:
+
+- **Qdrant** — the suite is redirected to `test_documents_dense` /
+  `test_documents_multivec`, which it drops and recreates per test.
+- **Neo4j** — the suite starts its own **ephemeral `neo4j:5.26-community`
+  container** (Testcontainers) and points `settings.neo4j_uri` at it for the
+  session. Community Edition has a single database, so the per-test
+  `MATCH (n) DETACH DELETE n` would otherwise wipe your knowledge graph. The
+  container is created and destroyed by the test run — nothing to start
+  beforehand, nothing left behind. It needs Docker and the `neo4j:5.26-community`
+  image; unit runs (`uv run pytest`) collect no integration tests and start no
+  container.
+
 Run a specific test file:
 
 ```bash
@@ -146,8 +165,11 @@ Only relevant when `DOCUMENT_SOURCE=s3`. Ensure `S3_BUCKET_NAME` is configured (
 Ensure dependencies are installed:
 
 ```bash
-uv sync
+uv sync --extra gliner
 ```
+
+`No module named 'gliner2'` specifically means a bare `uv sync` pruned the
+optional extra — see [step 2](#2-install-python-dependencies).
 
 ### Port conflicts
 

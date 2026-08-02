@@ -6,10 +6,13 @@ version: '3'
 
 tasks:
   setup:
-    desc: Install uv and project dependencies
+    desc: Install uv and project dependencies (includes the gliner extra)
     cmds:
       - command -v uv >/dev/null 2>&1 || { echo "Installing uv..."; curl -LsSf https://astral.sh/uv/install.sh | sh; }
-      - uv sync
+      # --extra gliner: GRAPH_ENGINE=gliner needs gliner2, which is an optional
+      # dependency. `uv sync` is exact by default, so a bare sync would remove
+      # it and silently break graph search.
+      - uv sync --extra gliner
 
   up:
     desc: Start Qdrant + Neo4j via docker compose

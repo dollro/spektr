@@ -1,5 +1,12 @@
-DENSE_COLLECTION = "documents_dense"
-MULTIVEC_COLLECTION = "documents_multivec"
+import os
+
+# Collection names. Overridable via env so the integration suite can point at
+# throwaway collections — its fixtures drop and recreate wholesale, which
+# against the real names would destroy the ingested corpus and Path B's
+# live-session points. Production leaves these unset and gets the defaults.
+# `config.settings` derives its own fields from these; keep this the source.
+DENSE_COLLECTION = os.getenv("QDRANT_DENSE_COLLECTION", "documents_dense")
+MULTIVEC_COLLECTION = os.getenv("QDRANT_MULTIVEC_COLLECTION", "documents_multivec")
 DENSE_DIM = 512
 MULTIVEC_DIM = 128
 

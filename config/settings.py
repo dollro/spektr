@@ -5,6 +5,8 @@ from typing import Literal, Self
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from config.constants import DENSE_COLLECTION, MULTIVEC_COLLECTION
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -48,8 +50,10 @@ class Settings(BaseSettings):
 
     # Qdrant
     qdrant_url: str = "http://localhost:6333"
-    qdrant_dense_collection: str = "documents_dense"
-    qdrant_multivec_collection: str = "documents_multivec"
+    # Defaults come from config.constants so the two never drift; both resolve
+    # the same QDRANT_*_COLLECTION env vars.
+    qdrant_dense_collection: str = DENSE_COLLECTION
+    qdrant_multivec_collection: str = MULTIVEC_COLLECTION
 
     # Neo4j
     neo4j_uri: str = "bolt://localhost:7687"

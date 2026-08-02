@@ -10,6 +10,7 @@ import pytest
 
 import scripts.backup as backup
 import scripts.restore as restore
+from config.constants import DENSE_COLLECTION
 
 
 @pytest.fixture
@@ -52,15 +53,15 @@ class TestBackupQdrant:
 
         with (
             patch("scripts.backup.httpx.Client", return_value=fake_client),
-            patch.object(backup, "_qdrant_collections", return_value=["documents_dense"]),
+            patch.object(backup, "_qdrant_collections", return_value=[DENSE_COLLECTION]),
         ):
             result = backup.backup_qdrant(dest)
 
         assert result["status"] == "ok"
         assert len(result["collections"]) == 1
-        assert result["collections"][0]["collection"] == "documents_dense"
+        assert result["collections"][0]["collection"] == DENSE_COLLECTION
         # Snapshot file was written
-        snap_path = dest / "qdrant" / "documents_dense_snap-1.snapshot"
+        snap_path = dest / "qdrant" / f"{DENSE_COLLECTION}_snap-1.snapshot"
         assert snap_path.exists()
         assert snap_path.read_bytes() == b"snapshot-bytes"
 

@@ -132,6 +132,16 @@ task docs-serve          # Serve MkDocs locally
 task docs-build          # Build docs
 ```
 
+**Test isolation — integration tests never touch dev data.** Qdrant is
+redirected to `test_documents_dense` / `test_documents_multivec`
+(`tests/conftest.py`, before `config` is imported). Neo4j Community has no
+equivalent namespace, so the suite starts an **ephemeral
+`neo4j:5.26-community` container** (Testcontainers) and repoints
+`settings.neo4j_uri` at it for the session — that is what makes the per-test
+`MATCH (n) DETACH DELETE n` safe. The container is autouse and only starts when
+integration tests were collected, so `task test` needs no Docker. Do not point
+the Neo4j fixtures back at the dev instance: it destroys the knowledge graph.
+
 **Daily drivers:**
 
 ```bash
