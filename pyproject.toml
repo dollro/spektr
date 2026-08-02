@@ -5,7 +5,7 @@ description = "RAG-as-MCP-Server: S3 document sync to Qdrant + Neo4j with MCP se
 requires-python = ">=3.13"
 dependencies = [
     "anthropic",
-    "cocoindex>=0.3.39,<1.0",
+    "cocoindex[amazon-s3,qdrant]>=1.0.18,<2.0",
     "graphiti-core",
     "qdrant-client",
     "neo4j",

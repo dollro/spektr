@@ -1,17 +1,19 @@
-"""Tests for ingest_file failure tracking and poison-pill behaviour.
+"""Tests for process_file_impl failure tracking and poison-pill behaviour.
 
-Covers the contract:
-- A single failure re-raises so CocoIndex retries.
+Covers the contract, unchanged in effect across the CocoIndex v0 -> v1 move:
+- A single failure re-raises. Under v1 a raising call writes no memoization
+  entry, so the file is re-processed on the next run (v0: the tracking row was
+  left unwritten).
 - Repeated failures increment a persistent counter.
-- At max_retries, the exception is swallowed + logged CRITICAL so
-  the rest of the batch proceeds (CocoIndex marks file processed).
+- At max_retries, the exception is swallowed + logged CRITICAL so the file is
+  memoized and not retried, and the rest of the batch proceeds.
 - A successful ingest resets the counter.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -68,9 +70,15 @@ class TestIngestFileAtomicity:
         with patch("ingestion.pipeline.get_tracker", return_value=t):
             yield t
 
-    def _run_ingest_with_failure(self, exc: Exception) -> Exception | str:
-        """Call ingest_file with a file guaranteed to fail at the run_async step."""
-        from ingestion.pipeline import ingest_file
+    async def _run_ingest_with_failure(self, exc: Exception) -> Exception | str | None:
+        """Call process_file_impl with a file guaranteed to fail while paging.
+
+        Under CocoIndex v1 a raise writes no memoization entry, so the file is
+        re-processed next run — the same effect v0 got from leaving the
+        tracking row unwritten. Returning normally memoizes the call, so the
+        poisoned file is not retried.
+        """
+        from ingestion.pipeline import process_file_impl
 
         mock_settings = MagicMock()
         mock_settings.pipeline_timeout = 30
@@ -80,40 +88,67 @@ class TestIngestFileAtomicity:
 
         with (
             patch("ingestion.pipeline.settings", mock_settings),
-            patch("ingestion.pipeline.run_async", side_effect=exc),
-            patch("ingestion.pipeline._get_qdrant_client", return_value=MagicMock()),
-            patch("ingestion.pipeline.create_embedder", return_value=MagicMock()),
+            patch("ingestion.pipeline._process_pages", side_effect=exc),
         ):
             try:
-                return ingest_file(b"hello world", "poison.txt")
+                return await process_file_impl(
+                    b"hello world",
+                    "poison.txt",
+                    dense=MagicMock(),
+                    embedder=MagicMock(),
+                )
             except Exception as raised:  # noqa: BLE001
                 return raised
 
-    def test_re_raises_under_threshold(
+    async def test_re_raises_under_threshold(
         self, isolated_tracker: FailureTracker
     ) -> None:
         for _ in range(2):
-            result = self._run_ingest_with_failure(RuntimeError("boom"))
+            result = await self._run_ingest_with_failure(RuntimeError("boom"))
             assert isinstance(result, RuntimeError)
         assert isolated_tracker.fail_count("poison.txt") == 2
 
-    def test_swallows_at_threshold(
+    async def test_swallows_at_threshold(
         self, isolated_tracker: FailureTracker, caplog: pytest.LogCaptureFixture
     ) -> None:
         import logging
 
         caplog.set_level(logging.CRITICAL, logger="ingestion.pipeline")
         for _ in range(2):
-            self._run_ingest_with_failure(RuntimeError("boom"))
+            await self._run_ingest_with_failure(RuntimeError("boom"))
 
-        result = self._run_ingest_with_failure(RuntimeError("final boom"))
-        assert result == "poison.txt"
+        result = await self._run_ingest_with_failure(RuntimeError("final boom"))
+        assert not isinstance(result, Exception)
         assert isolated_tracker.fail_count("poison.txt") == 3
         assert any("POISON PILL" in rec.message for rec in caplog.records)
 
-    def test_timeout_is_tracked_same_as_exception(
+    async def test_timeout_is_tracked_same_as_exception(
         self, isolated_tracker: FailureTracker
     ) -> None:
-        result = self._run_ingest_with_failure(TimeoutError("slow"))
+        result = await self._run_ingest_with_failure(TimeoutError("slow"))
         assert isinstance(result, TimeoutError)
         assert isolated_tracker.fail_count("poison.txt") == 1
+
+    async def test_success_resets_the_counter(
+        self, isolated_tracker: FailureTracker
+    ) -> None:
+        await self._run_ingest_with_failure(RuntimeError("boom"))
+        assert isolated_tracker.fail_count("poison.txt") == 1
+
+        mock_settings = MagicMock()
+        mock_settings.pipeline_timeout = 30
+        mock_settings.pipeline_max_retries = 3
+        mock_settings.graph_enabled = False
+        with (
+            patch("ingestion.pipeline.settings", mock_settings),
+            patch("ingestion.pipeline._process_pages", new=AsyncMock()),
+        ):
+            from ingestion.pipeline import process_file_impl
+
+            await process_file_impl(
+                b"hello world",
+                "poison.txt",
+                dense=MagicMock(),
+                embedder=MagicMock(),
+            )
+        assert isolated_tracker.fail_count("poison.txt") == 0

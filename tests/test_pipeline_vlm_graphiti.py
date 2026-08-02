@@ -9,16 +9,16 @@ class TestVlmGraphEngineIngestion:
     @pytest.mark.asyncio
     async def test_visual_page_caption_sent_to_graph(self) -> None:
         """When VLM is enabled, visual page captions are ingested via graph engine."""
-        from ingestion.pipeline import _caption_and_ingest_visual
+        from ingestion.vlm_caption import caption_and_ingest_visual
 
         mock_engine = AsyncMock()
         mock_vlm_caption = AsyncMock(return_value="Chart showing Q3 revenue of $5M")
 
         with patch(
-            "ingestion.pipeline._caption_visual_page",
+            "ingestion.vlm_caption.caption_visual_page",
             mock_vlm_caption,
         ):
-            await _caption_and_ingest_visual(
+            await caption_and_ingest_visual(
                 source_file="report.pdf",
                 image_bytes=b"fake-png",
                 page_number=3,
@@ -36,16 +36,16 @@ class TestVlmGraphEngineIngestion:
     @pytest.mark.asyncio
     async def test_skipped_when_caption_is_empty(self) -> None:
         """No graph ingestion when VLM returns empty caption."""
-        from ingestion.pipeline import _caption_and_ingest_visual
+        from ingestion.vlm_caption import caption_and_ingest_visual
 
         mock_engine = AsyncMock()
         mock_vlm_caption = AsyncMock(return_value="")
 
         with patch(
-            "ingestion.pipeline._caption_visual_page",
+            "ingestion.vlm_caption.caption_visual_page",
             mock_vlm_caption,
         ):
-            await _caption_and_ingest_visual(
+            await caption_and_ingest_visual(
                 source_file="report.pdf",
                 image_bytes=b"fake-png",
                 page_number=3,
@@ -57,16 +57,16 @@ class TestVlmGraphEngineIngestion:
     @pytest.mark.asyncio
     async def test_skipped_when_vlm_fails(self) -> None:
         """Graceful fallback when VLM captioning fails."""
-        from ingestion.pipeline import _caption_and_ingest_visual
+        from ingestion.vlm_caption import caption_and_ingest_visual
 
         mock_engine = AsyncMock()
         mock_vlm_caption = AsyncMock(side_effect=Exception("VLM timeout"))
 
         with patch(
-            "ingestion.pipeline._caption_visual_page",
+            "ingestion.vlm_caption.caption_visual_page",
             mock_vlm_caption,
         ):
-            await _caption_and_ingest_visual(
+            await caption_and_ingest_visual(
                 source_file="report.pdf",
                 image_bytes=b"fake-png",
                 page_number=3,

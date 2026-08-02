@@ -12,7 +12,7 @@ tasks:
       - uv sync
 
   up:
-    desc: Start Qdrant, Neo4j, PostgreSQL via docker compose
+    desc: Start Qdrant + Neo4j via docker compose
     cmds:
       - docker compose up -d
 
@@ -67,17 +67,17 @@ tasks:
       - uv run python -m scripts.list_kb {{.CLI_ARGS}}
 
   doctor:
-    desc: "Diff CocoIndex tracking against Qdrant contents; flag ingestion drift"
+    desc: "Diff CocoIndex's LMDB ledger against Qdrant contents; flag ingestion drift"
     cmds:
       - uv run python -m scripts.doctor
 
   doctor-fix:
-    desc: "Repair drift: delete orphan CocoIndex tracking rows so next ingest retries"
+    desc: "Repair drift: delete Qdrant points that no CocoIndex run declared"
     cmds:
       - uv run python -m scripts.doctor --fix --yes
 
   backup:
-    desc: "Snapshot Qdrant + Neo4j + Postgres to ./backups/<timestamp>/"
+    desc: "Snapshot Qdrant + Neo4j + CocoIndex state to ./backups/<timestamp>/"
     cmds:
       - uv run python -m scripts.backup {{.CLI_ARGS}}
 
@@ -184,7 +184,7 @@ tasks:
       - docker compose -f docker-compose.prod.yml --env-file .env.prod exec -T mcp python -m scripts.ask {{.CLI_ARGS}}
 
   prod:backup:
-    desc: "Snapshot the production stack (Qdrant+Neo4j+Postgres) to ./backups/<ts>/"
+    desc: "Snapshot the production stack (Qdrant+Neo4j+CocoIndex state) to ./backups/<ts>/"
     cmds:
       - QDRANT_URL=http://127.0.0.1:6333 uv run python -m scripts.backup --compose-file docker-compose.prod.yml {{.CLI_ARGS}}
 

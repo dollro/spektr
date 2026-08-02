@@ -56,8 +56,10 @@ class Settings(BaseSettings):
     neo4j_user: str = "neo4j"
     neo4j_password: str
 
-    # PostgreSQL
-    database_url: str = "postgresql://cocoindex:cocoindex@localhost:5432/cocoindex"
+    # CocoIndex internal state (v1 stores the target-state ledger, memoization
+    # cache and component tree in a local LMDB directory — no PostgreSQL).
+    # Lives under state/ so the existing `ingest_state` volume covers it.
+    cocoindex_db_path: str = "state/cocoindex.db"
 
     # Document Source — exactly one of: local, s3, sharepoint
     document_source: Literal["local", "s3", "sharepoint"] = "local"
@@ -69,7 +71,13 @@ class Settings(BaseSettings):
     aws_region: str = "us-east-1"
     aws_endpoint_url: str = ""
     s3_bucket_name: str = ""
+    s3_prefix: str = ""
+    # Optional. CocoIndex v1 dropped the built-in S3 push trigger, so SQS is
+    # used purely as a trigger for a catch-up run. Without a queue URL, live
+    # mode falls back to interval-only sweeps.
     s3_sqs_queue_url: str = ""
+    s3_sqs_debounce_seconds: float = 5.0  # coalesce an event burst into one run
+    s3_full_scan_interval_hours: float = 24.0  # safety net for missed events
 
     # SharePoint (only used when all sharepoint_* required fields are set)
     sharepoint_tenant_id: str = ""
@@ -105,6 +113,9 @@ class Settings(BaseSettings):
     # Resilience
     pipeline_timeout: int = 3600  # per-file timeout in seconds (default 1h)
     pipeline_max_retries: int = 3  # failures per file before poison-pill swallow
+    # CocoIndex v1 defaults max_inflight_components to 1024, which would fan out
+    # far past the embedding providers' rate limits. Bound files-in-flight here.
+    pipeline_max_concurrent_files: int = 4
     graphiti_concurrency: int = 3  # max concurrent Graphiti episode ingestions
     jina_max_concurrent: int = 5
     extraction_timeout: int = 30
@@ -186,13 +197,11 @@ class Settings(BaseSettings):
                 "Set multivec_enabled=False or use embedding_provider=jina."
             )
             raise ValueError(msg)
-        if self.document_source == "s3" and not (
-            self.s3_bucket_name and self.s3_sqs_queue_url
-        ):
-            msg = (
-                "DOCUMENT_SOURCE=s3 requires both S3_BUCKET_NAME and "
-                "S3_SQS_QUEUE_URL to be set."
-            )
+        if self.document_source == "s3" and not self.s3_bucket_name:
+            # S3_SQS_QUEUE_URL is optional since the CocoIndex v1 migration:
+            # SQS is now only a trigger for a catch-up run, and live mode
+            # degrades to interval-only sweeps without it.
+            msg = "DOCUMENT_SOURCE=s3 requires S3_BUCKET_NAME to be set."
             raise ValueError(msg)
         if self.document_source == "sharepoint" and not self.sharepoint_enabled:
             msg = (

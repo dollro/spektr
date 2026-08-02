@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -66,23 +65,46 @@ class TestBackupQdrant:
         assert snap_path.read_bytes() == b"snapshot-bytes"
 
 
-class TestBackupPostgres:
-    def test_runs_pg_dump_and_records_size(self, tmp_backup_root: Path) -> None:
+class TestBackupCocoindex:
+    """CocoIndex v1 state is an LMDB directory, not a Postgres database."""
+
+    def test_archives_the_state_directory(self, tmp_backup_root: Path, tmp_path: Path) -> None:
+        dest = backup._make_dest(tmp_backup_root, timestamp="ts")
+        state = tmp_path / "cocoindex.db"
+        state.mkdir()
+        (state / "data.mdb").write_bytes(b"lmdb-fake-bytes")
+
+        result = backup.backup_cocoindex(dest, state_path=str(state))
+
+        assert result["file"] == "cocoindex-state.tar.gz"
+        assert result["bytes"] > 0
+        assert (dest / "cocoindex" / "cocoindex-state.tar.gz").exists()
+
+    def test_missing_state_is_recorded_not_fatal(
+        self, tmp_backup_root: Path, tmp_path: Path
+    ) -> None:
+        """A never-run pipeline has no state dir; that must not fail the backup."""
         dest = backup._make_dest(tmp_backup_root, timestamp="ts")
 
-        def fake_run(cmd: list[str], stdout=None, stderr=None, check=False):  # type: ignore[no-untyped-def]
-            # Simulate pg_dump writing to stdout
-            if stdout is not None and hasattr(stdout, "write"):
-                stdout.write(b"PGDMP-fake-bytes")
-            return MagicMock(returncode=0, stderr=b"")
+        result = backup.backup_cocoindex(dest, state_path=str(tmp_path / "absent"))
 
-        with patch.object(subprocess, "run", side_effect=fake_run):
-            result = backup.backup_postgres(dest)
+        assert result["skipped"] is True
 
-        assert result["file"] == "cocoindex.dump"
-        assert result["bytes"] > 0
-        dump = dest / "postgres" / "cocoindex.dump"
-        assert dump.read_bytes().startswith(b"PGDMP")
+    def test_roundtrip_through_restore(self, tmp_backup_root: Path, tmp_path: Path) -> None:
+        import scripts.restore as restore
+
+        dest = backup._make_dest(tmp_backup_root, timestamp="ts")
+        state = tmp_path / "cocoindex.db"
+        state.mkdir()
+        (state / "data.mdb").write_bytes(b"lmdb-fake-bytes")
+        entry = backup.backup_cocoindex(dest, state_path=str(state))
+
+        target = tmp_path / "restored.db"
+        restore.restore_cocoindex(
+            dest, {"entries": {"cocoindex": entry}}, state_path=str(target)
+        )
+
+        assert (target / "data.mdb").read_bytes() == b"lmdb-fake-bytes"
 
 
 class TestManifest:
