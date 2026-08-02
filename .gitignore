@@ -13,4 +13,9 @@ site/
 state/
 eval-reports/
 backups/
+
+# Local tooling state — per-developer, never shared.
+# .claude/settings.json IS tracked; only the .local. override is personal.
 .mcp.json
+.claude/settings.local.json
+.serena/
