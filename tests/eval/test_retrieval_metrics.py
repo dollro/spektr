@@ -129,8 +129,13 @@ def _relevant_keys(entry: dict) -> set[str]:  # type: ignore[type-arg]
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_retrieval_quality_meets_thresholds() -> None:
-    """Score the full labelled set against multi_search and gate on it."""
+async def test_retrieval_quality_meets_thresholds(frozen_corpus: int) -> None:
+    """Score the full labelled set against multi_search and gate on it.
+
+    `frozen_corpus` loads the committed snapshot into the throwaway collection
+    first — without it these metrics score an empty collection and report a
+    vacuous 0.0 for everything.
+    """
     from server.tools.multi_search import multi_search
 
     data = yaml.safe_load(SET_PATH.read_text())
@@ -165,7 +170,7 @@ async def test_retrieval_quality_meets_thresholds() -> None:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_ablation_matrix() -> None:
+async def test_ablation_matrix(frozen_corpus: int) -> None:
     """Score each stage combination so wins can be attributed.
 
     Not a gate — it prints a table. Run when deciding whether a stage earns

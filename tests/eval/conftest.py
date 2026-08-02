@@ -63,6 +63,76 @@ def ingested_sources() -> set[str]:
 
 
 @pytest.fixture(scope="session")
+def frozen_corpus() -> int:
+    """Load the committed corpus snapshot into the throwaway test collection.
+
+    `tests/conftest.py` repoints QDRANT_DENSE_COLLECTION at
+    `test_documents_dense` for every pytest run, and nothing else writes to it,
+    so retrieval metrics would otherwise score an empty collection and report a
+    vacuous 0.0 for every metric. This restores a fixed corpus — the same 32
+    points on every machine, with no embedding API calls, so the gate is
+    reproducible on a fresh checkout.
+
+    Regenerate with `uv run python -m scripts.make_eval_fixture`.
+    """
+    import gzip
+    import json
+
+    from qdrant_client import QdrantClient, models
+
+    from config.constants import DENSE_COLLECTION
+    from config.settings import settings
+    from ingestion.qdrant_setup import ensure_collections
+
+    snapshot = FIXTURES / "retrieval_corpus.json.gz"
+    if not snapshot.exists():
+        pytest.skip(f"{snapshot} missing — run `uv run python -m scripts.make_eval_fixture`")
+
+    with gzip.open(snapshot, "rt", encoding="utf-8") as fh:
+        blob = json.load(fh)
+
+    # Belt and braces: this fixture deletes a collection, so refuse to run
+    # unless the name is the throwaway one conftest redirects to.
+    assert DENSE_COLLECTION.startswith("test_"), (
+        f"Refusing to load fixtures into {DENSE_COLLECTION!r} — expected the "
+        "test_-prefixed collection set by tests/conftest.py"
+    )
+
+    points = [
+        models.PointStruct(
+            id=record["id"],
+            payload=record["payload"],
+            vector=_rebuild_vectors(record["vector"], models),
+        )
+        for record in blob["points"]
+    ]
+
+    client = QdrantClient(url=settings.qdrant_url)
+    try:
+        client.delete_collection(DENSE_COLLECTION)
+        ensure_collections(client)
+        client.upsert(DENSE_COLLECTION, points=points, wait=True)
+        loaded = client.count(DENSE_COLLECTION).count
+    finally:
+        client.close()
+
+    assert loaded == len(points), f"loaded {loaded} of {len(points)} fixture points"
+    return loaded
+
+
+def _rebuild_vectors(vector: dict[str, Any], models: Any) -> dict[str, Any]:
+    """Turn the flat JSON vector record back into Qdrant's named-vector form."""
+    out: dict[str, Any] = {"dense": vector["dense"]}
+    sparse = vector.get("sparse")
+    if sparse is not None:
+        out["sparse"] = models.SparseVector(
+            indices=sparse["indices"],
+            values=sparse["values"],
+        )
+    return out
+
+
+@pytest.fixture(scope="session")
 def eval_reports_dir() -> Iterator[Path]:
     """Gitignored dir for dated JSON run artifacts."""
     reports = Path("eval-reports")
