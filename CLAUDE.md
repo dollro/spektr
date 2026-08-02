@@ -17,9 +17,9 @@ Before modifying or exploring ANY module, you MUST first read the corresponding 
 |---|---|---|
 | Ingestion (bulk, Path A) | `docs/ingestion/` | `ingestion/app.py`, `runner.py`, `pipeline.py`, `page_processor.py`, `file_processor.py`, `embedder.py`, `graph_engine.py` |
 | Ingestion (live, Path B) | `docs/ingestion/` | `ingestion/live_ingest.py`, `graphiti_client.py` |
-| MCP server & tools | `docs/mcp-server/` | `server/mcp_server.py`, `server/tools/` |
-| Vector store (Qdrant) | `docs/infrastructure/` | `ingestion/qdrant_setup.py`, `ingestion/qdrant_target.py`, `ingestion/embedders/` |
-| Knowledge graph (Neo4j) | `docs/infrastructure/` | `ingestion/neo4j_setup.py`, `ingestion/graph_writer.py` |
+| MCP server & tools | `docs/server/` | `server/mcp_server.py`, `server/tools/` |
+| Vector store (Qdrant) | `docs/configuration/infrastructure.md`, `docs/ingestion/embeddings.md` | `ingestion/qdrant_setup.py`, `ingestion/qdrant_target.py`, `ingestion/embedders/` |
+| Knowledge graph (Neo4j) | `docs/configuration/infrastructure.md`, `docs/ingestion/knowledge-graph.md` | `ingestion/neo4j_setup.py`, `ingestion/graph_writer.py` |
 | Entity extraction & schema | `docs/ingestion/` | `ingestion/entity_extractor.py`, `schema_inducer.py` |
 | Agent | `docs/agent/` | `agent/` |
 | Configuration | `docs/configuration/` | `config/settings.py`, `config/constants.py` |
