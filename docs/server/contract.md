@@ -36,7 +36,7 @@ reverse-proxy routes keep working as-is.
 | Transports | `http` (streamable-http, default), `sse` (legacy), `stdio` — selected by `MCP_TRANSPORT` |
 | Endpoint | `{scheme}://{MCP_HOST}:{MCP_PORT}{MCP_PATH}` — default `http://localhost:8080/mcp` |
 | Auth | Optional Bearer token. `Authorization: Bearer <MCP_API_KEY>`; empty `MCP_API_KEY` disables auth |
-| Auth scope | Only `tools/call` is intercepted. `tools/list`, `ping` and other methods pass through unauthenticated |
+| Auth scope | `tools/call` and `tools/list` are intercepted. `initialize`, `ping` and other methods pass through unauthenticated |
 | Failure mode | `PermissionError` → MCP error response ("Authentication required" / "Invalid token") |
 
 See [Authentication](authentication.md) and [Client Setup](client-setup.md) for the full detail.
@@ -241,17 +241,21 @@ CocoIndex v1 keeps its ledger in a local LMDB directory (`COCOINDEX_DB_PATH`, de
 ## 9. Client upgrade checklist
 
 1. **Operator:** back up, re-index `documents_dense`, re-ingest, verify with `task doctor`.
-2. **Client:** no connection change needed — same URL, transport and Bearer token.
-3. **Client:** if you call `hybrid_search`, apply the §4 rename (`vector_results` → `results`,
+2. **Client:** no endpoint change needed — same URL, transport and Bearer token.
+3. **Client:** send the Bearer token on `tools/list`, not just `tools/call`. `tools/list` is now
+   gated when `MCP_API_KEY` is set, so a client that discovered tools unauthenticated will fail
+   at startup with "Authentication required". Standard MCP clients that authenticate the whole
+   session are unaffected.
+4. **Client:** if you call `hybrid_search`, apply the §4 rename (`vector_results` → `results`,
    `graph_results` → `graph_facts`, `errors` → `degraded`) and drop `content_type` /
    `original_score` reads.
-4. **Client:** remove client-side re-sorting of search results.
-5. **Client:** recalibrate or remove any score threshold — the reranker scale changed.
-6. **Client:** treat a missing `degraded` key as healthy; treat `error` as a retrieval outage.
-7. **Client (optional):** refresh the tool list to pick up `multi_search`, and make it the
+5. **Client:** remove client-side re-sorting of search results.
+6. **Client:** recalibrate or remove any score threshold — the reranker scale changed.
+7. **Client:** treat a missing `degraded` key as healthy; treat `error` as a retrieval outage.
+8. **Client (optional):** refresh the tool list to pick up `multi_search`, and make it the
    default general-purpose tool — it is faster and cheaper than `hybrid_search` and returns the
    same schema.
-8. **Client (optional):** if you relied on chronologically ordered `live_results`, sort them
+9. **Client (optional):** if you relied on chronologically ordered `live_results`, sort them
    yourself.
 
 ---

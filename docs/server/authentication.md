@@ -8,7 +8,7 @@ The MCP server uses a Bearer token middleware to protect tool calls. Authenticat
 |-|-|-|
 | `MCP_API_KEY` | `""` (empty) | Bearer token for tool call authentication |
 
-- **Key set**: All `tools/call` requests must include a valid `Authorization` header.
+- **Key set**: All `tools/call` **and `tools/list`** requests must include a valid `Authorization` header.
 - **Key empty**: Authentication is disabled; all requests are allowed through.
 
 ## BearerAuthMiddleware
@@ -16,9 +16,12 @@ The MCP server uses a Bearer token middleware to protect tool calls. Authenticat
 The middleware is implemented as a FastMCP `Middleware` subclass in `server/mcp_server.py`:
 
 ```python
+_PROTECTED_METHODS = frozenset({"tools/call", "tools/list"})
+
+
 class BearerAuthMiddleware(Middleware):
     async def __call__(self, context: MiddlewareContext, call_next):
-        if settings.mcp_api_key and context.method == "tools/call":
+        if settings.mcp_api_key and context.method in _PROTECTED_METHODS:
             auth = context.fastmcp_context.request_context.request.headers.get(
                 "Authorization",
             )
@@ -32,7 +35,7 @@ class BearerAuthMiddleware(Middleware):
 ### Behavior
 
 1. Checks if `MCP_API_KEY` is configured (non-empty).
-2. Only intercepts requests where `context.method == "tools/call"`. Other MCP methods (e.g. `tools/list`, `ping`) pass through unauthenticated.
+2. Only intercepts requests whose `context.method` is in `_PROTECTED_METHODS` — `tools/call` and `tools/list`. `tools/list` is gated because it returns every tool name, description and input schema, so leaving it open lets an unauthenticated caller enumerate the whole surface. Other MCP methods (e.g. `initialize`, `ping`) pass through unauthenticated: a client must complete the handshake before it can be told anything, and the response carries none of your data.
 3. Extracts the `Authorization` header from the incoming HTTP request.
 4. Validates the header starts with `Bearer ` and the token matches `MCP_API_KEY`.
 5. Raises `PermissionError` on failure, which FastMCP translates into an MCP error response.
