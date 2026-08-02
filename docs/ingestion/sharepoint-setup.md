@@ -191,6 +191,12 @@ Drop a PDF into the SharePoint folder. Within `SHAREPOINT_SYNC_INTERVAL_SECONDS`
 
 In production, both processes run as the `sharepoint-sync` and `ingest-live` services in `docker-compose.prod.yml`; they share the `sharepoint_documents` named volume.
 
+`sharepoint-sync` sits behind the `sharepoint` compose profile, so a plain `task prod:up` does not start it — otherwise its `DOCUMENT_SOURCE` guard (exit 2) would crash-loop against `restart: unless-stopped` on every local/S3 deployment. Start it explicitly:
+
+```bash
+docker compose -f docker-compose.prod.yml --env-file .env.prod --profile sharepoint up -d
+```
+
 ---
 
 ## Operational notes

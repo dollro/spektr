@@ -22,7 +22,7 @@ Internet
      │ spektr-net
      ├──► agent-api       (python -m agent.api,                :8001)
      ├──► ingest-live     (python -m ingestion.pipeline --live)
-     ├──► sharepoint-sync (python -m services.sharepoint_sync, optional)
+     ├──► sharepoint-sync (python -m services.sharepoint_sync, profile: sharepoint)
      │
      ├──► qdrant    (:6333, internal only; 127.0.0.1 publish for backup scripts)
      └──► neo4j     (:7687, internal only)
@@ -137,11 +137,42 @@ task prod:build
 task prod:up                 # recreates containers with the new image
 ```
 
+### SharePoint sync
+
+`sharepoint-sync` is behind the `sharepoint` profile, so `task prod:up` skips it. It refuses to start unless `DOCUMENT_SOURCE=sharepoint` (exit 2), which combined with `restart: unless-stopped` would crash-loop on a local or S3 deployment. When you do want it:
+
+```bash
+docker compose -f docker-compose.prod.yml --env-file .env.prod --profile sharepoint up -d
+```
+
+### Health check
+
+```bash
+task prod:doctor             # diffs the CocoIndex ledger against Qdrant, inside the stack
+```
+
+Unlike `task doctor`, this runs in a container, so the VM needs no `uv` or Python environment. It flags drift, mixed `embedder_model`/`embedder_dim`, and text chunks missing their `sparse` vector.
+
 ### Stopping
 
 ```bash
 task prod:down               # keeps volumes (qdrant_data, neo4j_data, ingest_state)
 ```
+
+### Wiping everything
+
+For a clean slate — a schema change that cannot be migrated in place, or standing the instance back up from nothing:
+
+```bash
+task prod:nuke -- --yes-i-know-this-wipes-things
+```
+
+!!! danger "This deletes all data"
+    Every vector, the whole graph, and all pipeline state. Run `task prod:backup` first unless you genuinely intend to lose it. The task refuses to run without the flag.
+
+It brings the stack down with `-v --remove-orphans` across all profiles, then removes `spektr_postgres_data` explicitly — a leftover from the pre-CocoIndex-v1 stack that this compose file no longer declares and therefore cannot clean up on its own.
+
+Afterwards, follow [First Ingest](../operations/first-ingest.md) from step 2: the collections and Neo4j constraints are recreated by the next ingestion run, since `ingestion/runner.py::_provision()` is the only code that provisions them. Nothing is searchable until that run succeeds.
 
 ### Backups
 

@@ -161,6 +161,25 @@ tasks:
     cmds:
       - docker compose -f docker-compose.prod.yml --env-file .env.prod down
 
+  prod:nuke:
+    desc: "DESTROYS ALL PROD DATA (Qdrant + Neo4j + pipeline state). Pass -- --yes-i-know-this-wipes-things"
+    cmds:
+      - |
+        case "{{.CLI_ARGS}}" in
+          *--yes-i-know-this-wipes-things*) ;;
+          *) echo "Refusing: pass -- --yes-i-know-this-wipes-things"; exit 1 ;;
+        esac
+      - docker compose -f docker-compose.prod.yml --env-file .env.prod --profile oneshot --profile sharepoint down -v --remove-orphans
+      # Orphan from the pre-CocoIndex-v1 stack: this compose file no longer
+      # declares postgres_data, so `down -v` cannot remove it.
+      - docker volume rm -f spektr_postgres_data
+      - docker volume ls | grep spektr || echo "all spektr volumes removed"
+
+  prod:doctor:
+    desc: "Diff the CocoIndex ledger against Qdrant inside the prod stack"
+    cmds:
+      - docker compose -f docker-compose.prod.yml --env-file .env.prod --profile oneshot run --rm ingest python -m scripts.doctor
+
   prod:logs:
     desc: "Tail logs from the production stack. Pass service: task prod:logs -- mcp"
     cmds:

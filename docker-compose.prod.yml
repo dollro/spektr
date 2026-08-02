@@ -70,6 +70,12 @@ services:
     depends_on:
       - qdrant
       - neo4j
+    volumes:
+      # Not for pipeline state — the sparse channel encodes the *query* with
+      # miniCOIL (retrieval/channels.py -> ingestion.sparse_embedder), so the
+      # server downloads the model too. Sharing this volume lets HF_HOME
+      # (= /app/state/hf) survive container recreates instead of re-fetching.
+      - ingest_state:/app/state
     expose:
       - "8080"
     networks:
@@ -115,9 +121,15 @@ services:
       # (the pipeline reads objects straight from the bucket instead).
       - sharepoint_documents:/app/documents
 
+  # Only meaningful when DOCUMENT_SOURCE=sharepoint: the daemon exits 2 on any
+  # other source (services/sharepoint_sync/main.py), and `restart:
+  # unless-stopped` would turn that into a crash-loop. Gated behind a profile
+  # so a plain `up -d` is correct for the local and s3 sources. Start with:
+  #   docker compose -f docker-compose.prod.yml --profile sharepoint up -d
   sharepoint-sync:
     <<: *app-image
     command: ["python", "-m", "services.sharepoint_sync"]
+    profiles: ["sharepoint"]
     volumes:
       - ingest_state:/app/state
       - sharepoint_documents:/app/documents
