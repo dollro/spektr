@@ -19,6 +19,32 @@ commands:
       description: Install go-task
       command: |
         sudo npm install -g @go-task/cli
+    - user: "1000"
+      description: Pre-warm model caches
+      command: |
+        export PATH="$HOME/.local/bin:$PATH"
+        export HF_HUB_DISABLE_PROGRESS_BARS=1
+        # miniCOIL sparse encoder, ~275 MB. fastembed resolves its cache to
+        # $TMPDIR/fastembed_cache unless FASTEMBED_CACHE_PATH is set, and
+        # ingestion/sparse_embedder.py never passes cache_dir — so warm exactly
+        # that default. This kit schema has no `env:` field, so redirecting the
+        # cache elsewhere is not an option here.
+        uv run --no-project --with fastembed python -c \
+          "from fastembed import SparseTextEmbedding as S; S(model_name='Qdrant/minicoil-v1')" || true
+        # HuggingFace repos, ~1.3 GB, into ~/.cache/huggingface/hub.
+        # jina-embeddings-v4 is fetched tokenizer-only: docling's
+        # HuggingFaceTokenizer needs just those files and the full repo is
+        # multi-GB.
+        uv run --no-project --with huggingface-hub python -c "
+        from huggingface_hub import snapshot_download
+        snapshot_download('fastino/gliner2-base-v1')
+        snapshot_download('docling-project/docling-models')
+        snapshot_download('docling-project/docling-layout-heron')
+        snapshot_download('jinaai/jina-embeddings-v4', allow_patterns=[
+            'tokenizer*', 'vocab.json', 'merges.txt',
+            'special_tokens_map.json', 'added_tokens.json',
+        ])
+        " || true
 
 network:
   allowedDomains:
@@ -33,3 +59,13 @@ network:
     - "mcp.grep.app:443"
     - "git.dolltons.com:443"
     - "localhost:8090"
+    # Runtime APIs the integration suite actually calls.
+    - "api.jina.ai:443"          # EMBEDDING_PROVIDER=jina + jina-reranker-v3.5
+    - "openrouter.ai:443"        # LLM_BASE_URL — extraction, schema induction, decomposition
+    # Model weights: Qdrant/minicoil-v1 (sparse), fastino/gliner2-base-v1,
+    # jinaai/jina-embeddings-v4 tokenizer, docling layout models. The apex is
+    # listed separately because a "*." wildcard does not match it, and weights
+    # redirect to both cdn-lfs.huggingface.co and cdn-lfs-*.hf.co.
+    - "huggingface.co:443"
+    - "*.huggingface.co:443"
+    - "*.hf.co:443"
