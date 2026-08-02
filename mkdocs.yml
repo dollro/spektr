@@ -48,6 +48,7 @@ nav:
     - SharePoint Setup: ingestion/sharepoint-setup.md
   - MCP Server:
     - Overview: server/overview.md
+    - Contract & Client Migration: server/contract.md
     - Search Tools: server/search-tools.md
     - Authentication: server/authentication.md
     - Client Setup: server/client-setup.md
