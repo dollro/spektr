@@ -41,8 +41,6 @@ async def vector_search(
     content_type: str | None = None,
     source_file: str | None = None,
     session_id: str | None = None,
-    *,
-    _skip_rerank: bool = False,
 ) -> list[dict]:  # type: ignore[type-arg]
     """Search documents by semantic similarity.
 
@@ -56,7 +54,11 @@ async def vector_search(
         content_type: Optional MIME type filter.
         source_file: Optional source file name filter.
         session_id: Optional session ID for live session context.
-        _skip_rerank: Internal flag — skip reranking.
+
+    Keep every parameter positional-or-keyword. FastMCP marks keyword-only
+    parameters as required in the generated tool schema regardless of their
+    default, so a `*`-guarded argument here becomes mandatory for every MCP
+    client and makes the tool uncallable.
     """
     if not query or not query.strip():
         return []
@@ -113,7 +115,7 @@ async def vector_search(
                 ).model_dump()
             )
 
-        if settings.rerank_enabled and results and not _skip_rerank:
+        if settings.rerank_enabled and results:
             from retrieval.rerank import rerank_dicts
 
             results = await rerank_dicts(query, results, top_k=limit)

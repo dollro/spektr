@@ -428,6 +428,27 @@ class TestMCPServer:
         else:
             assert "visual_search" not in tool_names
 
+    async def test_no_tool_exposes_a_private_parameter(self):
+        """Underscore-prefixed params must never reach a tool's public schema.
+
+        FastMCP marks keyword-only parameters as *required* regardless of their
+        default, so a `*`-guarded internal flag becomes mandatory for every MCP
+        client and makes the tool uncallable. `vector_search._skip_rerank` did
+        exactly that and no test caught it: the suite calls these functions
+        directly, where the default applies normally, so the break was only
+        visible across the MCP boundary.
+        """
+        from server.mcp_server import mcp
+
+        # FastMCP's server-side FunctionTool exposes the JSON schema as
+        # `.parameters`; `inputSchema` is the wire name a *client* sees.
+        offenders = {
+            t.name: leaked
+            for t in await mcp.list_tools()
+            if (leaked := [p for p in t.parameters.get("required", []) if p.startswith("_")])
+        }
+        assert not offenders, f"private parameters exposed as required: {offenders}"
+
 
 # ---------------------------------------------------------------------------
 # Edge case tests
@@ -545,6 +566,57 @@ class TestBearerAuth:
         context = MagicMock()
         context.method = "tools/call"
         context.fastmcp_context = mock_fastmcp_ctx
+
+        call_next = AsyncMock(return_value="ok")
+
+        with patch("server.mcp_server.settings") as mock_settings:
+            mock_settings.mcp_api_key = "secret-key"
+            result = await middleware(context, call_next)
+
+        assert result == "ok"
+        call_next.assert_awaited_once()
+
+    async def test_bearer_auth_middleware_gates_tools_list(self):
+        """tools/list is protected too, not just tools/call.
+
+        It returns every tool name, description and input schema, so leaving it
+        open lets an unauthenticated caller enumerate the whole surface.
+        """
+        from server.mcp_server import BearerAuthMiddleware
+
+        middleware = BearerAuthMiddleware()
+
+        mock_request = MagicMock()
+        mock_request.headers = {}
+        mock_req_ctx = MagicMock()
+        mock_req_ctx.request = mock_request
+        mock_fastmcp_ctx = MagicMock()
+        mock_fastmcp_ctx.request_context = mock_req_ctx
+
+        context = MagicMock()
+        context.method = "tools/list"
+        context.fastmcp_context = mock_fastmcp_ctx
+
+        call_next = AsyncMock()
+
+        with patch("server.mcp_server.settings") as mock_settings:
+            mock_settings.mcp_api_key = "secret-key"
+            with pytest.raises(PermissionError, match="Authentication"):
+                await middleware(context, call_next)
+
+    async def test_bearer_auth_middleware_leaves_initialize_open(self):
+        """The handshake stays unauthenticated by design.
+
+        A client must complete `initialize` before it can be told anything, and
+        the response carries no information of ours. Pinning this stops a future
+        widening of _PROTECTED_METHODS from silently breaking every client.
+        """
+        from server.mcp_server import BearerAuthMiddleware
+
+        middleware = BearerAuthMiddleware()
+
+        context = MagicMock()
+        context.method = "initialize"
 
         call_next = AsyncMock(return_value="ok")
 

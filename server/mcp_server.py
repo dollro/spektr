@@ -23,15 +23,23 @@ setup_observability()
 logger = get_logger(__name__)
 
 
+# Methods that require a valid bearer when MCP_API_KEY is set. `tools/list` is
+# gated alongside `tools/call`: it returns every tool name, description and
+# input schema, so leaving it open lets an unauthenticated caller enumerate the
+# whole surface. `initialize` stays open — a client must complete the handshake
+# before it can be told anything, and it carries no information of ours.
+_PROTECTED_METHODS = frozenset({"tools/call", "tools/list"})
+
+
 class BearerAuthMiddleware(Middleware):
-    """Reject unauthenticated MCP tool calls when an API key is configured."""
+    """Reject unauthenticated MCP requests when an API key is configured."""
 
     async def __call__(
         self,
         context: MiddlewareContext,
         call_next,  # type: ignore[no-untyped-def]
     ):  # type: ignore[no-untyped-def]
-        if settings.mcp_api_key and context.method == "tools/call":
+        if settings.mcp_api_key and context.method in _PROTECTED_METHODS:
             ctx = context.fastmcp_context
             if ctx.request_context and ctx.request_context.request:
                 auth = ctx.request_context.request.headers.get(
