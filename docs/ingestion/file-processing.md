@@ -140,11 +140,11 @@ Iterates over words, accumulating into parts that stay within `max_size`. Never 
 
 ## Integration
 
-`file_to_pages()`, `docling_chunk()`, and `semantic_chunk()` are called inside the [`ingest_file` CocoIndex op](cocoindex.md):
+`file_to_pages()`, `docling_chunk()`, and `semantic_chunk()` are called inside [`process_file_impl`](cocoindex.md#process_file_impl), the per-file CocoIndex component:
 
 1. `result = file_to_pages(filename, content)` returns pages + Docling document.
 2. `dl_chunks = docling_chunk(result.docling_document)` produces structure-aware chunks once.
-3. For each text page, `_process_text_page` filters `dl_chunks` to that page (or falls back to `semantic_chunk`), embeds them, and writes points to `documents_dense`.
+3. For each text page, `_process_text_page` filters `dl_chunks` to that page (or falls back to `semantic_chunk`), embeds them, and declares points on the `documents_dense` target.
 4. After all pages, the collected chunks are passed to `engine.ingest(...)` for graph extraction.
 
 See also: [Pipeline Overview](overview.md) | [Architecture Data Flow](../architecture/data-flow.md)

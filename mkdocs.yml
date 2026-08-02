@@ -64,6 +64,7 @@ nav:
   - API Reference:
     - Response Models: api/models.md
   - Operations:
+    - First Ingest: operations/first-ingest.md
     - Ingestion Failure Semantics: operations/atomicity.md
     - Observability: operations/observability.md
     - Backup & Restore: operations/backup-restore.md

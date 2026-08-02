@@ -15,10 +15,10 @@ Before modifying or exploring ANY module, you MUST first read the corresponding 
 
 | Area | Read first | Then explore |
 |---|---|---|
-| Ingestion (bulk, Path A) | `docs/ingestion/` | `ingestion/pipeline.py`, `file_processor.py`, `embedder.py`, `graph_engine.py` |
+| Ingestion (bulk, Path A) | `docs/ingestion/` | `ingestion/app.py`, `runner.py`, `pipeline.py`, `page_processor.py`, `file_processor.py`, `embedder.py`, `graph_engine.py` |
 | Ingestion (live, Path B) | `docs/ingestion/` | `ingestion/live_ingest.py`, `graphiti_client.py` |
 | MCP server & tools | `docs/mcp-server/` | `server/mcp_server.py`, `server/tools/` |
-| Vector store (Qdrant) | `docs/infrastructure/` | `ingestion/qdrant_setup.py`, `ingestion/embedders/` |
+| Vector store (Qdrant) | `docs/infrastructure/` | `ingestion/qdrant_setup.py`, `ingestion/qdrant_target.py`, `ingestion/embedders/` |
 | Knowledge graph (Neo4j) | `docs/infrastructure/` | `ingestion/neo4j_setup.py`, `ingestion/graph_writer.py` |
 | Entity extraction & schema | `docs/ingestion/` | `ingestion/entity_extractor.py`, `schema_inducer.py` |
 | Agent | `docs/agent/` | `agent/` |
@@ -36,7 +36,8 @@ Before modifying or exploring ANY module, you MUST first read the corresponding 
 
 ## Architecture
 
-- **Ingestion (Path A — Bulk):** CocoIndex pipeline + Docling/PyMuPDF for file processing, Jina/Voyage/OpenRouter for embeddings (selected by `EMBEDDING_PROVIDER`), pluggable `GraphEngine` for entity/relation extraction. Document source is selected by `DOCUMENT_SOURCE` (`local` default, or `s3` / `sharepoint`). Triggered by S3→SQS events (long-running `--live` daemon polls SQS), SharePoint sync (`services/sharepoint_sync/`), or local filesystem watch. Without `--live`, runs as one-shot batch. The `ingest-live` prod service is this SQS daemon — not an HTTP endpoint.
+- **Ingestion (Path A — Bulk):** CocoIndex v1 app (`ingestion/app.py` — one memoized component per file, Qdrant points *declared* on native collection targets) + Docling/PyMuPDF for file processing, Jina/Voyage/OpenRouter for embeddings (selected by `EMBEDDING_PROVIDER`), pluggable `GraphEngine` for entity/relation extraction. Document source is selected by `DOCUMENT_SOURCE` (`local` default, or `s3` / `sharepoint`). Live mode: `localfs` is a real watcher; S3 is scan-only in v1, so `ingestion/sqs_trigger.py` uses SQS as a *trigger* for a debounced catch-up scan (plus an interval and a startup sweep). Without `--live`, runs as one-shot batch. The `ingest-live` prod service is this daemon — not an HTTP endpoint.
+- **Pipeline state:** CocoIndex v1 keeps its target-state ledger, memoization cache and component tree in a local **LMDB directory** (`COCOINDEX_DB_PATH`, default `state/cocoindex.db`). No PostgreSQL anywhere in the stack.
 - **Ingestion (Path B — Live):** FastAPI HTTP endpoint (`live_ingest.py`, port 8001) for streaming text, configured embedding provider, Graphiti for temporal episodic memory
 - **Vector Store:** Qdrant (dense + optional ColBERT multi-vector, Jina-only). Both paths write to `documents_dense`; live data tagged with `session_id` and `is_live`
 - **Knowledge Graph:** Neo4j with two pluggable engines for Path A — **Graphiti is the default** (`GRAPH_ENGINE=graphiti`, LLM-based temporal episodes); **GLiNER2 is opt-in** (`GRAPH_ENGINE=gliner`, schema-driven CPU extraction). Path B always uses Graphiti directly, regardless of `GRAPH_ENGINE`. Both engines coexist in the same Neo4j instance.
@@ -57,7 +58,14 @@ Before modifying or exploring ANY module, you MUST first read the corresponding 
 │   ├── logging.py          # Logging configuration
 │   └── observability.py    # Logfire/OTel setup (setup_observability, instrument_fastapi)
 ├── ingestion/              # Document ingestion pipeline
-│   ├── pipeline.py         # Main ingestion orchestrator
+│   ├── app.py              # CocoIndex v1 App: lifespan, source selection, source_key()
+│   ├── runner.py           # Process entrypoint: run_pipeline, mode dispatch, error reporting
+│   ├── sqs_trigger.py      # SQS-as-trigger daemon for the S3 source (live mode)
+│   ├── pipeline.py         # Per-file processing (process_file_impl) + CLI shim
+│   ├── page_processor.py   # Per-page chunk/embed/declare-point
+│   ├── vlm_caption.py      # VLM captioning of visual pages -> graph
+│   ├── qdrant_target.py    # Native Qdrant connector wiring (managed_by=USER)
+│   ├── graph_target.py     # Custom TargetHandler: graph cleanup on source deletion
 │   ├── file_processor.py   # PDF/image processing (Docling + PyMuPDF fallback)
 │   ├── embedder.py         # Embedding dispatcher
 │   ├── embedders/          # Provider implementations (jina.py, voyage.py, openrouter.py)
@@ -67,11 +75,10 @@ Before modifying or exploring ANY module, you MUST first read the corresponding 
 │   ├── graphiti_client.py  # Graphiti client singleton
 │   ├── schema_inducer.py   # LLM-based per-document schema induction
 │   ├── live_ingest.py      # Live streaming ingestion (FastAPI, Path B)
-│   ├── cocoindex_ops.py    # CocoIndex operations
-│   ├── target_connector.py # Qdrant/Neo4j target connectors for CocoIndex flow
+│   ├── cocoindex_ops.py    # Standalone one-shot embedding helpers (not wired into the app)
 │   ├── _failure_tracker.py # SQLite-backed per-file retry counter (poison-pill)
 │   ├── _utils.py           # Internal ingestion helpers
-│   ├── qdrant_setup.py     # Qdrant collection setup
+│   ├── qdrant_setup.py     # Qdrant collection setup (sole provisioning authority)
 │   └── neo4j_setup.py      # Neo4j schema setup
 ├── server/                 # MCP server
 │   ├── mcp_server.py       # FastMCP server entry point
@@ -92,7 +99,7 @@ Before modifying or exploring ANY module, you MUST first read the corresponding 
 ├── docs/                   # MkDocs documentation — READ FIRST (see top of file)
 ├── plans/                  # Disposable brainstorming — NOT source of truth
 ├── scripts/                # Utility scripts (backup.py, restore.py, doctor.py, …)
-├── docker-compose.yml      # Qdrant + Neo4j + PostgreSQL (local dev)
+├── docker-compose.yml      # Qdrant + Neo4j (local dev)
 ├── docker-compose.prod.yml # Full production stack (app + data services + Traefik labels on mcp)
 ├── Dockerfile              # Multi-stage Python 3.13 + uv image (shared by all app services)
 ├── Caddyfile               # Sample reverse-proxy config (alternative to external Traefik)
@@ -108,7 +115,7 @@ Use [go-task](https://taskfile.dev) as the task runner. `task --list` shows all 
 ```bash
 cp .env.example .env     # Configure environment (gitignored)
 task setup               # Install uv and project dependencies
-task up                  # Start Qdrant, Neo4j, PostgreSQL
+task up                  # Start Qdrant, Neo4j
 task ingest              # Run bulk ingestion pipeline
 task serve               # Start MCP server
 ```
@@ -131,9 +138,10 @@ task docs-build          # Build docs
 task smoke               # Direct vector_search smoke test (no MCP/LLM)
 task smoke-graph         # Direct graph_search smoke test
 task ask -- "question"   # End-to-end through agent + MCP + LLM (needs `task serve`)
-task doctor              # Diff CocoIndex tracking vs Qdrant; flags drift
-task doctor-fix          # Repair drift (deletes orphan tracking rows)
-task backup              # Snapshot Qdrant + Neo4j + Postgres to ./backups/<ts>/
+task doctor              # Diff CocoIndex's LMDB ledger vs Qdrant; flags drift
+task doctor-fix          # Repair drift (deletes Qdrant points no CocoIndex run declared)
+task ingest -- --full-reprocess   # Reprocess everything, invalidating the memo cache
+task backup              # Snapshot Qdrant + Neo4j + CocoIndex state to ./backups/<ts>/
 task restore -- --from backups/<ts> --target all --yes-i-know-this-wipes-things
 ```
 
@@ -160,9 +168,22 @@ task restore -- --from backups/<ts> --target all --yes-i-know-this-wipes-things
 These are load-bearing invariants introduced by the `feat/prod-hardening` work. Don't break them silently.
 
 **Ingestion failure semantics** (`ingestion/pipeline.py` + `ingestion/_failure_tracker.py`):
-- A failing `ingest_file` re-raises so CocoIndex leaves the tracking row out and retries next run.
-- After `PIPELINE_MAX_RETRIES` (default 3) failures for the same file, the poison-pill kicks in: log CRITICAL, swallow, let CocoIndex mark it processed so the rest of the batch proceeds.
+- A failing `process_file_impl` re-raises, so CocoIndex writes no memoization entry and re-processes the file next run.
+- After `PIPELINE_MAX_RETRIES` (default 3) failures for the same file, the poison-pill kicks in: log CRITICAL, swallow, let the memo entry be written so the file is not retried. CocoIndex separately logs-and-swallows a failing component, so the rest of the batch proceeds regardless.
+- `app.update()` does **not** raise on per-file failures. `ingestion/runner.py` reads `stats().total.num_errors` and the exit code reflects it — don't "fix" that by assuming a raise.
 - Failure counts live in `state/ingestion_failures.db` (sqlite, gitignored). Successful ingest resets the count.
+
+**CocoIndex targets** (`ingestion/qdrant_target.py` + `ingestion/graph_target.py`):
+- Qdrant collection targets are mounted `managed_by=ManagedBy.USER`. CocoIndex must never create, replace or drop a collection: a *replace* would drop Path B's live-session points, which share `documents_dense`. `ingestion/qdrant_setup.ensure_collections` is the sole provisioning authority.
+- Deletion is per point id; there is no orphan sweep, so points CocoIndex never declared (live sessions) are invisible to Path A's reconciliation.
+- Points are declared, not upserted — nothing reaches Qdrant until a file's component fully succeeds.
+- Graph writes stay side effects (Graphiti is episodic and doesn't fit declared target state). Only *cleanup on source deletion* goes through the custom `TargetHandler` in `graph_target.py`.
+- `QDRANT_DB` / `_PROVIDER_NAME` context-key strings are part of persistent tracking keys. Renaming them orphans the ledger and re-declares everything.
+
+**Pipeline state:**
+- CocoIndex v1 stores its ledger, memo cache and component tree in an LMDB directory (`COCOINDEX_DB_PATH`, default `state/cocoindex.db`). No PostgreSQL, no `DATABASE_URL`, no `ragingestion__cocoindex_tracking` table.
+- `PIPELINE_MAX_CONCURRENT_FILES` (default 4) caps `max_inflight_components`; CocoIndex's own default of 1024 would blow past embedding rate limits.
+- Forcing reprocessing = `task ingest -- --full-reprocess`, or deleting the state directory. Losing that directory costs a full reprocess, not data loss (point ids are deterministic uuid5).
 
 **Qdrant payload schema:**
 - `documents_dense` uses **named vectors**: `dense` (embedding, cosine) and
@@ -196,8 +217,9 @@ These are load-bearing invariants introduced by the `feat/prod-hardening` work. 
 - JSON log records carry `trace_id`/`span_id` when emitted inside an active span.
 
 **Backup cadence** (`scripts/backup.py`):
-- `task backup` captures Qdrant + Neo4j + Postgres + a `manifest.json`. Recommended nightly via cron.
+- `task backup` captures Qdrant + Neo4j + the CocoIndex LMDB state + a `manifest.json`. Recommended nightly via cron.
 - Neo4j dump requires ~10-30s downtime (Community Edition has no online backup).
+- LMDB has no safe hot-copy: stop the ingest process, or take the backup between ingests.
 - `task restore` refuses without `--yes-i-know-this-wipes-things`.
 
 See `docs/operations/` for runbooks, `docs/eval/golden-set.md` for eval details.

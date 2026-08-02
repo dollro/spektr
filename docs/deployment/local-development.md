@@ -34,12 +34,12 @@ This installs all base, dev, and test dependencies from `pyproject.toml`.
 docker compose up -d
 ```
 
-This starts Qdrant, Neo4j, and PostgreSQL. See [Infrastructure Services](../configuration/infrastructure.md) for details on each service.
+This starts Qdrant and Neo4j. CocoIndex's pipeline state needs no service — it lives in a local LMDB directory (`COCOINDEX_DB_PATH`, default `state/cocoindex.db`). See [Infrastructure Services](../configuration/infrastructure.md) for details on each service.
 
-Wait for all services to be ready:
+Wait for both services to be ready:
 
 ```bash
-./scripts/wait-for-services.sh
+curl -sf http://localhost:6333/healthz && curl -sf http://localhost:7474
 ```
 
 ### 4. Configure environment
@@ -139,7 +139,7 @@ curl http://localhost:6333/healthz
 
 ### Pipeline hangs on S3 source
 
-Only relevant when `DOCUMENT_SOURCE=s3`. Ensure `S3_BUCKET_NAME` and `S3_SQS_QUEUE_URL` are configured (the pipeline fails fast at startup otherwise). For S3 testing without real AWS, use [LocalStack](aws-setup.md#localstack-local-development). For purely local work, leave `DOCUMENT_SOURCE` unset (defaults to `local`).
+Only relevant when `DOCUMENT_SOURCE=s3`. Ensure `S3_BUCKET_NAME` is configured (the pipeline fails fast at startup otherwise). `S3_SQS_QUEUE_URL` is optional — without it, `task ingest-live` degrades to a sweep every `S3_FULL_SCAN_INTERVAL_HOURS` (default 24), which looks a lot like a hang. For S3 testing without real AWS, use [LocalStack](aws-setup.md#localstack-local-development). For purely local work, leave `DOCUMENT_SOURCE` unset (defaults to `local`).
 
 ### Import errors
 

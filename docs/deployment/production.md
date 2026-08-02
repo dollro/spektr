@@ -25,9 +25,10 @@ Internet
      ├──► sharepoint-sync (python -m services.sharepoint_sync, optional)
      │
      ├──► qdrant    (:6333, internal only; 127.0.0.1 publish for backup scripts)
-     ├──► neo4j     (:7687, internal only)
-     └──► postgres  (:5432, internal only)
+     └──► neo4j     (:7687, internal only)
 ```
+
+CocoIndex's pipeline state needs no service: it lives in an LMDB directory under `state/`, on the `ingest_state` volume shared by every service that runs the pipeline.
 
 The app services (`mcp`, `agent-api`, `ingest-live`, `sharepoint-sync`, one-shot `ingest`) all share a single image built from the repo `Dockerfile`.
 
@@ -70,16 +71,16 @@ cp .env.example .env.prod
 
 Edit `.env.prod`. Required values in production:
 
-- `NEO4J_PASSWORD`, `POSTGRES_PASSWORD` — strong, randomly generated
+- `NEO4J_PASSWORD` — strong, randomly generated
 - `JINA_API_KEY` (or `VOYAGE_API_KEY` / `OPENROUTER_API_KEY` depending on `EMBEDDING_PROVIDER`)
 - `LLM_API_KEY`
 - `MCP_API_KEY` — Bearer token clients must present
 - `MCP_PUBLIC_DOMAIN` — public hostname Traefik should route to `mcp` (e.g. `mcp.example.com`)
 - `INGEST_API_KEY` — gates `/session/start` on the live-ingest endpoint
-- AWS block (`AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `S3_BUCKET_NAME`, `S3_SQS_QUEUE_URL`) when `DOCUMENT_SOURCE=s3`
+- AWS block (`AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `S3_BUCKET_NAME`) when `DOCUMENT_SOURCE=s3`; add `S3_SQS_QUEUE_URL` unless you're happy with interval-only sweeps
 - SharePoint block (`SHAREPOINT_*`) when `DOCUMENT_SOURCE=sharepoint`
 
-Service hostnames use container names: `qdrant`, `neo4j`, `postgres`. Do not change these — other services resolve each other by name on `spektr-net`.
+Service hostnames use container names: `qdrant`, `neo4j`. Do not change these — other services resolve each other by name on `spektr-net`.
 
 ### 3. Build the image and start the stack
 
@@ -139,7 +140,7 @@ task prod:up                 # recreates containers with the new image
 ### Stopping
 
 ```bash
-task prod:down               # keeps volumes (qdrant_data, neo4j_data, postgres_data)
+task prod:down               # keeps volumes (qdrant_data, neo4j_data, ingest_state)
 ```
 
 ### Backups
@@ -156,7 +157,8 @@ task prod:restore -- --from backups/20260419-153000 \
 
 Under the hood:
 
-- `scripts/backup.py --compose-file docker-compose.prod.yml` threads `-f docker-compose.prod.yml` into every `docker compose ...` shell-out (neo4j stop/run/start, postgres exec).
+- `scripts/backup.py --compose-file docker-compose.prod.yml` threads `-f docker-compose.prod.yml` into every `docker compose ...` shell-out (neo4j stop/run/start).
+- The CocoIndex state is archived by tarring `COCOINDEX_DB_PATH`. LMDB has no safe hot-copy, so stop `ingest-live` (or schedule the backup between ingests) before running it.
 - `QDRANT_URL=http://127.0.0.1:6333` is exported by the task so the host-side script can reach the Qdrant HTTP snapshot API via the port the prod compose publishes on `127.0.0.1` only.
 - Neo4j Community 5 has no online backup — the script stops the `neo4j` service for ~10-30s, runs `neo4j-admin database dump`, then starts it again. Plan backups outside peak traffic.
 - Output lands in `./backups/<timestamp>/` on the VM with a `manifest.json`.
@@ -239,7 +241,6 @@ Rough baseline for a small instance:
 |-|-|-|
 | qdrant | 1-2 GB | grows with corpus size |
 | neo4j | 1-2 GB | plus APOC plugin |
-| postgres | 256 MB | CocoIndex tracking only |
 | mcp | 512 MB | mostly idle |
 | agent-api | 512 MB | |
 | ingest-live | 1-2 GB | spikes during extraction |

@@ -150,17 +150,17 @@ Text and image embedding tasks use different concurrency strategies to stay with
 
 This split prevents TPM exhaustion while still maximising throughput for text-heavy workloads.
 
-## CocoIndex Ops Wrapper
+## Standalone Embedding Helpers
 
-`ingestion/cocoindex_ops.py` exposes the embedder as synchronous CocoIndex operations using `from ingestion._utils import run_async`.
+`ingestion/cocoindex_ops.py` exposes the embedder as plain synchronous functions using `from ingestion._utils import run_async`.
 
-|CocoIndex Op|Wraps|Description|
+|Helper|Wraps|Description|
 |-|-|-|
 |`op_embed_text(text)`|`embed_text([text])`|Text -> dense vector|
 |`op_embed_image(image_bytes)`|`embed_image(image_bytes)`|Image -> dense vector|
 |`op_embed_image_multivec(image_bytes)`|`embed_multi_vector(image_bytes)`|Image -> ColBERT token vectors|
 
-The embedder instance is lazily initialized via `create_embedder()` on first use.
+The embedder instance is lazily initialized via `create_embedder()` on first use. None of these are wired into the ingestion app — the bulk pipeline embeds through `ingestion/page_processor.py` — they exist for callers that want a one-shot embedding without an event loop.
 
 ## Graphiti Integration
 

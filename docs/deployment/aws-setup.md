@@ -124,7 +124,7 @@ AWS_ACCESS_KEY_ID=your-access-key
 AWS_SECRET_ACCESS_KEY=your-secret-key
 ```
 
-Set `DOCUMENT_SOURCE=s3` to enable S3 ingestion. Both `S3_BUCKET_NAME` and `S3_SQS_QUEUE_URL` are required when `DOCUMENT_SOURCE=s3`; the pipeline fails fast at startup if either is missing. Without `DOCUMENT_SOURCE=s3`, the pipeline ignores S3 settings even when populated.
+Set `DOCUMENT_SOURCE=s3` to enable S3 ingestion. Only `S3_BUCKET_NAME` is required; the pipeline fails fast at startup if it's missing. `S3_SQS_QUEUE_URL` is **optional** — it is used purely as a trigger for a catch-up scan, and without it live mode degrades to a sweep every `S3_FULL_SCAN_INTERVAL_HOURS` (default 24). Without `DOCUMENT_SOURCE=s3`, the pipeline ignores S3 settings even when populated.
 
 ## LocalStack (Local Development)
 

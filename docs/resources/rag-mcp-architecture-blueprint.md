@@ -1,6 +1,14 @@
 # RAG-as-MCP-Server — Architecture Blueprint
 
-**Stack:** Jina v4 (API) · Neo4j · Qdrant · CocoIndex · PostgreSQL · FastMCP · Pydantic AI · AWS S3/SQS
+**Stack:** Jina v4 (API) · Neo4j · Qdrant · CocoIndex · FastMCP · Pydantic AI · AWS S3/SQS
+
+!!! warning "Historical design document"
+    This blueprint records the original design and has not been kept in step with the implementation. Two parts of it are now factually wrong about Spektr's stack:
+
+    - **There is no PostgreSQL service.** CocoIndex stores its target-state ledger, memoization cache and component tree in a local LMDB directory (`COCOINDEX_DB_PATH`, default `state/cocoindex.db`). Every `postgres` / `DATABASE_URL` / `POSTGRES_*` reference below is obsolete.
+    - **The CocoIndex code is v0 API.** `@cocoindex.flow_def`, `FlowBuilder`, `DataScope`, collectors and `export()` are gone, as is `AmazonS3(sqs_queue_url=…)` — v1's S3 connector is scan-only and SQS is used as an external trigger.
+
+    For the implemented design, read [CocoIndex Pipeline](../ingestion/cocoindex.md), [Architecture Overview](../architecture/overview.md) and [Environment Variables](../configuration/environment.md).
 
 ---
 

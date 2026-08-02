@@ -9,7 +9,7 @@
 - **Session-aware search** -- MCP tools accept an optional `session_id` to combine live session context with bulk KB results
 - **Multimodal embeddings** -- pluggable provider (Jina v4 / Voyage / OpenRouter) produces dense vectors for text and images, plus optional ColBERT 128-d multi-vectors (Jina only) for layout-aware visual search
 - **Dynamic schema induction** -- per-document LLM call proposes domain-specific entity types for GLiNER2, improving extraction quality across diverse document types
-- **Automatic sync** -- CocoIndex pipeline watches S3 via SQS event notifications; new, updated, and deleted files are processed incrementally
+- **Automatic sync** -- the CocoIndex pipeline reconciles the source incrementally; new, updated, and deleted files are picked up on each catch-up scan, and SQS event notifications trigger those scans within seconds for S3
 - **Seven MCP tools** -- search: `vector_search`, `visual_search`, `graph_search`, `multi_search`, `hybrid_search`; listing: `list_documents`, `list_document_chunks`
 - **Bearer auth middleware** -- optional token-based protection on `tools/call` requests
 - **Pluggable graph engine** -- choose Graphiti (LLM-based, temporal awareness) or GLiNER2 (local CPU, zero API cost) via `GRAPH_ENGINE` setting
@@ -18,10 +18,10 @@
 
 ```mermaid
 graph LR
-    S3[AWS S3] -->|SQS events| Pipeline[CocoIndex Pipeline\nPath A: Bulk KB]
+    S3[AWS S3] -->|SQS-triggered scan| Pipeline[CocoIndex Pipeline\nPath A: Bulk KB]
     Pipeline -->|dense + ColBERT vectors| Qdrant[(Qdrant)]
     Pipeline -->|entities / relations| Neo4j[(Neo4j)]
-    Pipeline -->|pipeline state| PG[(PostgreSQL)]
+    Pipeline -->|pipeline state| LMDB[(CocoIndex LMDB\nstate directory)]
     Live[HTTP POST\nPath B: Live] -->|dense vectors| Qdrant
     Live -->|temporal episodes| Neo4j
     Qdrant --- MCP[FastMCP Server]
@@ -32,9 +32,9 @@ graph LR
 ## Quick start
 
 ```bash
-# Infrastructure
+# Infrastructure (Qdrant + Neo4j)
 docker compose up -d
-./scripts/wait-for-services.sh
+curl -sf http://localhost:6333/healthz && curl -sf http://localhost:7474
 
 # Copy and fill environment variables
 cp .env.example .env
@@ -75,7 +75,7 @@ See [Local Development](deployment/local-development.md) for the full setup guid
 | Embeddings | Jina v4 / Voyage / OpenRouter (provider selectable; ColBERT 128-d available with Jina) |
 | Vector store | Qdrant v1.17 |
 | Knowledge graph | Neo4j 5.26 + Graphiti (default) or GLiNER2 (pluggable via `GRAPH_ENGINE`) |
-| State DB | PostgreSQL 17.2 |
+| Pipeline state | CocoIndex LMDB state directory (`COCOINDEX_DB_PATH`) |
 | MCP server | FastMCP (streamable-http default + SSE legacy + stdio) |
 | Agent framework | Pydantic AI |
 | Document sources | Local filesystem, AWS S3 + SQS, SharePoint |

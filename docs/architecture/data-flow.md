@@ -6,7 +6,7 @@ Four data paths define how data moves through Spektr: **bulk ingest** (S3 to sto
 
 ## Bulk ingest path (Path A)
 
-A document lands in S3, triggers an SQS event, and flows through the CocoIndex pipeline into Qdrant and Neo4j. When `SCHEMA_INDUCTION_ENABLED=true` and `GRAPH_ENGINE=gliner`, a per-document LLM call proposes domain-specific entity types before GLiNER2 extraction.
+A document lands in S3, an SQS event triggers a catch-up scan, and the changed object flows through the CocoIndex pipeline into Qdrant and Neo4j. When `SCHEMA_INDUCTION_ENABLED=true` and `GRAPH_ENGINE=gliner`, a per-document LLM call proposes domain-specific entity types before GLiNER2 extraction.
 
 ```mermaid
 sequenceDiagram
@@ -18,12 +18,12 @@ sequenceDiagram
     participant Sparse as miniCOIL<br/>(local CPU, fastembed)
     participant QD as Qdrant
     participant GE as Graph Engine<br/>(Graphiti or GLiNER2)
-    participant PG as PostgreSQL
+    participant LMDB as CocoIndex LMDB state
 
     S3->>SQS: S3 event notification (create/update)
-    SQS->>Coco: Deliver event
-    Coco->>Coco: Check state — skip if unchanged
-    Coco->>FP: Read file bytes + filename
+    SQS->>Coco: Trigger (debounced) — run a catch-up scan
+    Coco->>Coco: List objects; skip unchanged (memoized)
+    Coco->>FP: Read file bytes + source key
 
     FP->>FP: Guess MIME type
     alt Text file (md, txt, csv, json, xml, html, yaml)
@@ -45,7 +45,7 @@ sequenceDiagram
             Jina-->>Coco: dense vector (512-d)
             Coco->>Sparse: encode_documents(chunk)
             Sparse-->>Coco: sparse vector (miniCOIL)
-            Coco->>QD: Upsert to documents_dense<br/>(named vectors: dense + sparse)
+            Coco->>Coco: declare_point on the documents_dense target<br/>(named vectors: dense + sparse)
         end
 
         Coco->>GE: engine.ingest(chunks, source_key)
@@ -56,12 +56,12 @@ sequenceDiagram
         alt Visual content detected (smart gating)
             Coco->>Jina: embed_image(resized page, 400px) → dense
             Jina-->>Coco: dense vector (512-d)
-            Coco->>QD: Upsert to documents_dense
+            Coco->>Coco: declare_point on documents_dense
 
             opt ColBERT enabled
                 Coco->>Jina: embed_image_multivec(page) → ColBERT
                 Jina-->>Coco: multi-vector (N × 128-d)
-                Coco->>QD: Upsert to documents_multivec
+                Coco->>Coco: declare_point on documents_multivec
             end
         else Text-only page
             Coco->>QD: Store thumbnail (200px, no embedding)
@@ -71,15 +71,17 @@ sequenceDiagram
     loop Each standalone image
         Coco->>Jina: embed_image(image) → dense
         Jina-->>Coco: dense vector (512-d)
-        Coco->>QD: Upsert to documents_dense
+        Coco->>Coco: declare_point on documents_dense
     end
 
-    Coco->>PG: Update pipeline state + ingestion log
+    Coco->>QD: Flush declared points (batched, after the file succeeds)
+    Coco->>LMDB: Write memoization entry + target-state records
 ```
 
 ### Key design decisions in the bulk ingest path
 
-- **Deterministic IDs** -- chunk and point IDs are derived from `{source_file}::p{page}::c{chunk_idx}` via UUID5, making upserts idempotent.
+- **Deterministic IDs** -- chunk and point IDs are derived from `{source_file}::p{page}::c{chunk_idx}` via UUID5, so re-ingesting a file reuses the same point ids instead of duplicating.
+- **Declared, not upserted** -- points are declared on CocoIndex's native Qdrant collection targets and flushed by the engine across the reconcile batch. Nothing reaches Qdrant until the file's component has fully succeeded, so a mid-file failure cannot leave a half-written document.
 - **Dual embedding for visual content** -- images get both a dense single-vector (for standard NN search) and ColBERT multi-vectors (for layout-aware retrieval). Text chunks get a dense vector plus a miniCOIL sparse vector (local CPU, no API cost) on the same `documents_dense` point, for the lexical retrieval channel used by `multi_search`/`hybrid_search`.
 - **Dynamic schema induction** -- when enabled, a single LLM call per document proposes domain-specific entity/relationship types for GLiNER2. Results are cached by content hash. See [Knowledge Graph](../ingestion/knowledge-graph.md).
 - **Pluggable graph engine** -- text chunks are passed to `engine.ingest()`. Graphiti submits them as LLM-processed episodes; GLiNER2 extracts entities and relations locally and writes directly to Neo4j. See [Knowledge Graph](../ingestion/knowledge-graph.md).
@@ -242,29 +244,37 @@ sequenceDiagram
 
 ## Delete / invalidation path
 
-When a file is deleted from S3, the SQS event reaches the CocoIndex pipeline. CocoIndex's incremental state tracking detects the deletion and removes the file from its state table.
+When a file is deleted from S3 (or from the local/SharePoint mirror), the next catch-up scan no longer sees it. CocoIndex reconciles both of the file's target states to non-existence: its Qdrant points are deleted by id, and the custom graph target handler removes its episodes or entities.
 
 ```mermaid
 sequenceDiagram
     participant S3 as AWS S3
     participant SQS as AWS SQS
     participant Coco as CocoIndex Pipeline
-    participant PG as PostgreSQL
+    participant QD as Qdrant
+    participant GT as GraphSourceHandler<br/>(ingestion/graph_target.py)
+    participant Neo4j as Neo4j
 
     S3->>SQS: S3 event notification (delete)
-    SQS->>Coco: Deliver delete event
-    Coco->>PG: Remove file from pipeline state
-    Note over Coco: Qdrant points and Neo4j entities<br/>from the deleted file remain until<br/>a full re-index or manual cleanup
+    SQS->>Coco: Trigger a catch-up scan
+    Coco->>Coco: Object no longer listed —<br/>nothing declares its target states
+    Coco->>QD: Delete the file's points by id
+    Coco->>GT: reconcile(key, NON_EXISTENCE)
+    alt GRAPH_ENGINE=gliner
+        GT->>Neo4j: MATCH (e:Entity {source: key}) DETACH DELETE e
+    else Graphiti
+        GT->>Neo4j: remove_episode() for each episode whose<br/>source_description matches the key
+    end
 ```
 
-!!! warning "Stale data after deletion"
-    CocoIndex currently tracks deletions in its own state, but does not propagate deletes to Qdrant or Neo4j. Vectors and graph entities from deleted files persist until a full re-index. In Graphiti, temporal metadata (`expired_at`) can mark facts as outdated, but this requires explicit invalidation via the Graphiti API.
+Deletion is **per point id**, derived from what CocoIndex declared — there is no filter-delete and no orphan sweep. Points CocoIndex never declared (Path B's live-session points, which share `documents_dense`) are invisible to this path and are therefore never collateral damage.
+
+Graph cleanup errors are logged, never raised: a failed cleanup must not abort the rest of the batch's reconciliation. `graph_target.handle_file_delete(source_key)` is the supported entry point for out-of-band cleanup.
 
 ### Re-index strategy
 
-To fully clean stale data:
+Deletes are handled incrementally, so a re-index is only needed when the collection's vector configuration itself changes. See [Re-indexing](../operations/reindex.md) for the full runbook; in short:
 
-1. Clear Qdrant collections: delete and recreate `documents_dense` and `documents_multivec`
-2. Reset Neo4j graph: clear Graphiti episodes or drop and recreate the database
-3. Reset CocoIndex state: drop the PostgreSQL ingestion tables
-4. Re-run the pipeline: `uv run python -m ingestion.pipeline`
+1. Drop `documents_dense` (and `documents_multivec` if its config changed)
+2. Reset the Neo4j graph if graph extraction changed too
+3. Re-run with `task ingest -- --full-reprocess`, which invalidates CocoIndex's memoization cache so every file is re-read

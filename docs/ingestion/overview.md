@@ -30,11 +30,11 @@ flowchart LR
 
 |Stage|Module|Description|
 |-|-|-|
-|Source|`pipeline.py`|CocoIndex reads from S3 (via SQS), local `documents/`, or the SharePoint local mirror|
+|Source|`app.py`|CocoIndex reads from S3 (scan, triggered by SQS in live mode), local `documents/`, or the SharePoint local mirror|
 |Classify|`file_processor.py`|MIME-detect file type, return `FileProcessingResult` with `Page`s and an optional Docling `DoclingDocument`|
 |Chunk|`file_processor.py`|`docling_chunk()` (HybridChunker, Jina v4 tokenizer) when a Docling document is available; `semantic_chunk()` paragraph fallback otherwise|
 |Embed|`embedders/{jina,voyage,openrouter}.py`|Provider-agnostic dense embeddings (provider-default dimensions); ColBERT 128d via Jina only|
-|Store|`pipeline.py`|Upsert vectors to Qdrant with `embedder_model` + `embedder_dim` in every payload|
+|Store|`page_processor.py`|Declare Qdrant points on CocoIndex's native collection targets, with `embedder_model` + `embedder_dim` in every payload|
 |Schema|`schema_inducer.py`|Per-document LLM call proposing domain-specific entity/relationship types (GLiNER only, when `SCHEMA_INDUCTION_ENABLED=true`)|
 |Graph|`graph_engine.py`|Ingest text chunks into Neo4j via pluggable engine (Graphiti or GLiNER2)|
 
@@ -153,13 +153,14 @@ See [Knowledge Graph](knowledge-graph.md) for details on Graphiti's temporal epi
 ## Key Design Decisions
 
 - **Two ingestion paths** — bulk documents and streaming data have fundamentally different requirements (batch vs push, multimodal vs text-only, flat entities vs temporal episodes). Clean separation is simpler than forced unification.
-- **All processing happens inside `ingest_file`** (Path A) — a single CocoIndex custom op that writes directly to Qdrant and Neo4j. CocoIndex handles source management, incremental state, and the delete connector only.
+- **All processing happens inside one component per file** (Path A) — `process_file_impl` declares Qdrant points on CocoIndex's native collection targets and writes to Neo4j as a side effect. CocoIndex handles source management, incremental state, point reconciliation, and (via `graph_target.py`) delete detection.
+- **Qdrant writes are declared, not upserted** (Path A) — nothing lands in Qdrant until a file's processing has fully succeeded, so mid-file partial writes are structurally impossible; deletion is per point id, so Path B's live-session points in the same collection are untouchable by Path A's reconciliation.
 - **Provider-default dense dimensions** — Qdrant's `documents_dense` collection is sized at provisioning from `settings.dense_dimensions` (Jina default 2048, Voyage 1024, OpenRouter 3072). All points carry `embedder_model` and `embedder_dim` so drift can be detected.
 - **Smart image embedding** — for `IMAGE_EMBED_STRATEGY=smart` (default), only PDF pages with at least one embedded raster image (`fitz_page.get_images()`) are image-embedded. `IMAGE_EMBED_STRATEGY=all` embeds every PDF page. Pure image files are always embedded.
 - **Late chunking** — when Docling is installed, `HybridChunker` (Jina v4 tokenizer, 256 max tokens) produces structure-aware chunks with `contextualized_text` (heading-prefixed). Jina v4 receives the per-page batch as a single API call with `late_chunking=True`. `semantic_chunk()` is the plain paragraph fallback.
 - **Dynamic schema induction** (Path A, GLiNER only) — when `SCHEMA_INDUCTION_ENABLED=true` and `GRAPH_ENGINE=gliner`, a single LLM call per document proposes domain-specific entity/relationship types from a sample of the first 3 chunks. Results are cached by SHA256 of the first 500 chars (TTL `SCHEMA_CACHE_TTL`, default 3600s). If the sample is shorter than `_MIN_TEXT_LEN = 200` chars, induction is skipped and the base schema is used.
 - **Pluggable graph engine** — `GRAPH_ENGINE` selects Graphiti (LLM-based, slow, rich) or GLiNER2 (local CPU, fast, cheap). Both implement the same `GraphEngine` protocol. See [Knowledge Graph](knowledge-graph.md).
-- **Failure semantics** — `ingest_file` re-raises on failure so CocoIndex retries; after `PIPELINE_MAX_RETRIES` (default 3) failures the poison-pill kicks in: log CRITICAL, swallow, mark processed. Counts persist in `state/ingestion_failures.db` and reset on success.
+- **Failure semantics** — `process_file_impl` re-raises on failure, so CocoIndex writes no memoization entry and re-processes the file next run; after `PIPELINE_MAX_RETRIES` (default 3) failures the poison-pill kicks in: log CRITICAL, swallow, let the memo entry be written. Counts persist in `state/ingestion_failures.db` and reset on success.
 - **Text content flows to both stores** — Qdrant for vector search, Neo4j for entity/relationship queries.
 - **Text tasks run concurrently, image tasks run sequentially** — image embeddings are far heavier per request and would blow TPM limits in parallel. The pipeline splits tasks by type accordingly.
 - **Per-file timeout with graceful cancellation** — each file gets a `PIPELINE_TIMEOUT` (default 3600s). On expiry, in-flight tasks are cancelled and the failure is recorded.
@@ -175,6 +176,9 @@ See [Knowledge Graph](knowledge-graph.md) for details on Graphiti's temporal epi
 |`embedders/jina.py`|A + B|[Embeddings](embeddings.md)|
 |`embedders/voyage.py`|A + B|[Embeddings](embeddings.md)|
 |`embedders/openrouter.py`|A + B|[Embeddings](embeddings.md)|
+|`app.py`|A|[CocoIndex Pipeline](cocoindex.md)|
+|`runner.py`|A|[CocoIndex Pipeline](cocoindex.md)|
+|`sqs_trigger.py`|A|[CocoIndex Pipeline](cocoindex.md)|
 |`cocoindex_ops.py`|A|[CocoIndex Pipeline](cocoindex.md)|
 |`schema_inducer.py`|A|[Knowledge Graph](knowledge-graph.md)|
 |`graph_engine.py`|A|[Knowledge Graph](knowledge-graph.md)|
@@ -182,7 +186,10 @@ See [Knowledge Graph](knowledge-graph.md) for details on Graphiti's temporal epi
 |`graphiti_client.py`|A + B|[Knowledge Graph](knowledge-graph.md)|
 |`live_ingest.py`|B|This page (Path B section above)|
 |`pipeline.py`|A|[CocoIndex Pipeline](cocoindex.md)|
-|`target_connector.py`|A|[CocoIndex Pipeline](cocoindex.md)|
+|`page_processor.py`|A|[CocoIndex Pipeline](cocoindex.md)|
+|`vlm_caption.py`|A|[CocoIndex Pipeline](cocoindex.md)|
+|`qdrant_target.py`|A|[CocoIndex Pipeline](cocoindex.md)|
+|`graph_target.py`|A|[CocoIndex Pipeline](cocoindex.md)|
 |`_failure_tracker.py`|A|[CocoIndex Pipeline](cocoindex.md)|
 
 See also: [Architecture Data Flow](../architecture/data-flow.md)

@@ -29,7 +29,7 @@ graph TB
     subgraph Storage
         Qdrant[(Qdrant)]
         Neo4j[(Neo4j)]
-        PG[(PostgreSQL)]
+        LMDB[(CocoIndex LMDB\nstate directory)]
     end
 
     subgraph "MCP Server (FastMCP)"
@@ -45,13 +45,13 @@ graph TB
     Agent[LLM Agents]
 
     S3 -->|event notification| SQS
-    SQS -->|push events| Pipeline
+    SQS -->|trigger catch-up scan| Pipeline
     Pipeline --> Classify --> Chunk --> Embed
     Chunk --> SchemaInd --> Extract
     Embed -->|dense| Qdrant
     Embed -->|ColBERT 128-d| Qdrant
     Extract -->|entities + relations| Neo4j
-    Pipeline -->|state| PG
+    Pipeline -->|state| LMDB
 
     LiveAPI -->|text chunks| LiveEmbed
     LiveEmbed -->|dense| Qdrant
@@ -71,14 +71,14 @@ graph TB
 | Component | Role | Key details |
 |-|-|-|
 | **AWS S3** | Document source (Path A) | PDFs, images, markdown, CSV, JSON, XML, HTML, YAML |
-| **AWS SQS** | Event delivery (Path A) | Receives S3 create/update/delete notifications; provides push-based trigger to pipeline |
-| **CocoIndex** | Pipeline orchestrator (Path A) | Manages incremental state, source reading, and lineage tracking via PostgreSQL |
+| **AWS SQS** | Change trigger (Path A) | Receives S3 create/update/delete notifications. Used purely as a trigger: `ingestion/sqs_trigger.py` debounces an event burst, then runs one ordinary catch-up scan. Optional — without it, live mode sweeps on an interval |
+| **CocoIndex** | Pipeline orchestrator (Path A) | Manages incremental state, source reading, and per-point Qdrant reconciliation. State lives in a local LMDB directory |
 | **FastAPI** | Live ingestion server (Path B) | HTTP POST endpoint for streaming text chunks; session lifecycle management (start/ingest/end) |
 | **Schema Inducer** | Dynamic schema (Path A) | Per-document LLM call proposes domain-specific entity types for GLiNER2; cached by content hash |
 | **Jina v4 API** | Embedding model | Single model for text and images; produces dense 512-d single-vectors (Matryoshka truncation) and ColBERT 128-d multi-vectors. Used by both paths |
 | **Qdrant** | Vector store | Two collections: `documents_dense` (single-vector NN search) and `documents_multivec` (ColBERT late interaction). Both paths write to `documents_dense`; live data tagged with `session_id` and `is_live` |
 | **Neo4j** | Knowledge graph | Dual-engine: GLiNER2 (Path A, schema-driven CPU extraction) writes flat entities; Graphiti (Path B, LLM-based) writes temporal episodes with fact evolution tracking. Both coexist in the same instance |
-| **PostgreSQL** | Pipeline state | CocoIndex stores flow state and ingestion logs |
+| **LMDB state directory** | Pipeline state | CocoIndex's target-state ledger, memoization cache and component tree (`COCOINDEX_DB_PATH`, default `state/cocoindex.db`). Local files, no service |
 | **FastMCP** | MCP server | Registers seven tools (five search + two listing/inventory); supports streamable-http (default), SSE (legacy), and stdio transports; optional Bearer auth middleware |
 | **Pydantic AI** | Agent framework | Connects to MCP server, binds tools, orchestrates multi-step retrieval |
 
@@ -116,7 +116,7 @@ The bulk pipeline (CocoIndex) is batch-oriented — it manages incremental state
 
 ### Why CocoIndex?
 
-CocoIndex provides incremental processing with state tracking. When a file changes in S3, only that file is re-processed. It also handles source abstraction (S3 or local filesystem) and exports ingestion logs to PostgreSQL for observability.
+CocoIndex provides incremental processing with state tracking. When a file changes in S3, only that file is re-processed; when one disappears, its Qdrant points are deleted by id and its graph data is cleaned up by a custom target handler. It also handles source abstraction (S3 or local filesystem), and keeps all of that state in a local LMDB directory rather than requiring a database service.
 
 ### Why FastMCP?
 
@@ -140,4 +140,4 @@ Seven tools are registered. Five are search; two are listing/inventory helpers u
 
 - **Bearer auth middleware** -- when `MCP_API_KEY` is set, the `BearerAuthMiddleware` rejects unauthenticated `tools/call` requests. When empty, auth is disabled (development mode).
 - **Credentials** -- all secrets live in `.env` (gitignored). See [Environment Variables](../configuration/environment.md).
-- **Network** -- infrastructure services (Qdrant, Neo4j, PostgreSQL) are not exposed publicly in production; only the MCP server port is accessible to agents.
+- **Network** -- infrastructure services (Qdrant, Neo4j) are not exposed publicly in production; only the MCP server port is accessible to agents.
