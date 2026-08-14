@@ -4,6 +4,8 @@ import asyncio
 import base64
 import logging
 import math
+import threading
+import weakref
 
 import httpx
 from tenacity import (
@@ -77,36 +79,63 @@ class JinaV4Embedder:
             tokens_per_sec=settings.jina_tpm / 60.0,
             burst=settings.jina_tpm,
         )
-        # Loop-bound resources — recreated when the event loop changes
-        # because run_async() creates a new loop per call.
+        # httpx.AsyncClient and asyncio.Semaphore are bound to the event loop
+        # they were created on. CocoIndex runs file components concurrently on
+        # multiple worker threads, each with its own loop, all sharing this one
+        # embedder instance. A single shared client slot therefore gets clobbered
+        # across loops, and an in-flight request ends up awaiting a connection-pool
+        # lock owned by a different loop ("RuntimeError: the current task is not
+        # holding this lock"). Keep the loop-affine resources isolated per loop so
+        # each loop only ever touches the client it created. Keyed weakly so
+        # entries drop when a worker loop is garbage-collected.
+        self._loop_resources: weakref.WeakKeyDictionary[
+            asyncio.AbstractEventLoop, tuple[httpx.AsyncClient, asyncio.Semaphore]
+        ] = weakref.WeakKeyDictionary()
+        self._resources_lock = threading.Lock()
+        # Point at the current loop's resources for introspection/back-compat.
         self._client: httpx.AsyncClient | None = None
         self._semaphore: asyncio.Semaphore | None = None
         self._bound_loop: asyncio.AbstractEventLoop | None = None
         self._tokens_used: float = 0.0
 
-    def _ensure_loop_resources(self) -> None:
-        """Recreate loop-bound async resources when the event loop changes.
+    def _build_client(self) -> httpx.AsyncClient:
+        return httpx.AsyncClient(
+            headers={
+                "Authorization": f"Bearer {self._api_key}",
+                "Content-Type": "application/json",
+            },
+            timeout=httpx.Timeout(60.0),
+        )
 
-        ``run_async`` calls ``asyncio.run()`` which creates a fresh loop each
-        time, so the httpx client and semaphore must be re-created to avoid
-        "bound to a different event loop" errors.
+    def _ensure_loop_resources(
+        self,
+    ) -> tuple[httpx.AsyncClient, asyncio.Semaphore]:
+        """Return the (client, semaphore) bound to the running loop.
+
+        Creates them on first use per loop and reuses them thereafter, so
+        connection pooling is preserved within a loop while never sharing a
+        client across loops. Thread-safe: multiple worker loops may call this
+        concurrently.
         """
         loop = asyncio.get_running_loop()
-        if self._bound_loop is not loop:
-            self._client = httpx.AsyncClient(
-                headers={
-                    "Authorization": f"Bearer {self._api_key}",
-                    "Content-Type": "application/json",
-                },
-                timeout=httpx.Timeout(60.0),
-            )
-            self._semaphore = asyncio.Semaphore(self._max_concurrent)
+        with self._resources_lock:
+            resources = self._loop_resources.get(loop)
+            if resources is None:
+                resources = (self._build_client(), asyncio.Semaphore(self._max_concurrent))
+                self._loop_resources[loop] = resources
+            # Best-effort introspection handles; the request path uses the
+            # returned locals, not these, so a concurrent overwrite is harmless.
+            self._client, self._semaphore = resources
             self._bound_loop = loop
+            return resources
 
     async def close(self) -> None:
-        """Close the underlying HTTP client."""
-        if self._client is not None:
-            await self._client.aclose()
+        """Close every per-loop HTTP client (best effort)."""
+        for client, _ in list(self._loop_resources.values()):
+            try:
+                await client.aclose()
+            except Exception:  # noqa: BLE001 — closing a foreign-loop client may fail
+                pass
 
     @property
     def tokens_used(self) -> float:
@@ -259,13 +288,13 @@ class JinaV4Embedder:
         timeout: float | None = None,
     ) -> dict:  # type: ignore[type-arg]
         """Send request with rate limiting + concurrency control."""
-        self._ensure_loop_resources()
+        client, semaphore = self._ensure_loop_resources()
         estimated_tokens = self._estimate_tokens(payload)
         self._tokens_used += estimated_tokens
         await self._rpm_limiter.acquire()
         await self._tpm_limiter.acquire(estimated_tokens)
-        async with self._semaphore:  # type: ignore[union-attr]
-            return await self._request_with_retry(payload, timeout)
+        async with semaphore:
+            return await self._request_with_retry(client, payload, timeout)
 
     @retry(
         wait=wait_exponential(multiplier=2, min=5, max=60),
@@ -279,6 +308,7 @@ class JinaV4Embedder:
     )
     async def _request_with_retry(
         self,
+        client: httpx.AsyncClient,
         payload: dict,  # type: ignore[type-arg]
         timeout: float | None = None,
     ) -> dict:  # type: ignore[type-arg]
@@ -286,9 +316,7 @@ class JinaV4Embedder:
         kwargs: dict = {"json": payload}  # type: ignore[type-arg]
         if timeout is not None:
             kwargs["timeout"] = timeout
-        resp = await self._client.post(  # type: ignore[union-attr]
-            self._embeddings_url, **kwargs
-        )
+        resp = await client.post(self._embeddings_url, **kwargs)
         if resp.status_code != 200:
             exc = httpx.HTTPStatusError(
                 f"Jina API error: {resp.text}",
