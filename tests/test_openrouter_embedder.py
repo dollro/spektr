@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import threading
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -105,6 +107,69 @@ class TestUnsupported:
     async def test_embed_query_multi_vector_raises(self, embedder: OpenRouterEmbedder) -> None:
         with pytest.raises(NotImplementedError):
             await embedder.embed_query_multi_vector("q")
+
+
+class TestEventLoopIsolation:
+    """Regression: one shared embedder is used from several event loops.
+
+    CocoIndex runs file components concurrently on multiple worker threads,
+    each with its own asyncio loop, all sharing a single embedder instance.
+    The old implementation kept one ``self._client`` slot and recreated it
+    whenever the loop changed, so concurrent loops clobbered each other and an
+    in-flight request awaited a connection-pool lock owned by a different loop
+    (``RuntimeError: the current task is not holding this lock``). Resources
+    must instead be isolated per loop.
+    """
+
+    def test_client_is_stable_within_a_loop_under_concurrency(
+        self, mock_settings: MagicMock
+    ) -> None:
+        with patch("ingestion.embedders.openrouter.settings", mock_settings):
+            emb = OpenRouterEmbedder(api_key="test-or-key")
+
+        mid = threading.Barrier(2)
+        results: dict[int, tuple[bool, int]] = {}
+        errors: list[BaseException] = []
+        keepalive: list[httpx.AsyncClient] = []  # keep clients alive so ids are stable
+
+        def worker(tag: int) -> None:
+            async def run() -> None:
+                c1, _ = emb._ensure_loop_resources()
+                mid.wait()  # hold both loops open & bound at the same time
+                c2, _ = emb._ensure_loop_resources()
+                keepalive.extend((c1, c2))
+                results[tag] = (c1 is c2, id(c1))
+
+            try:
+                asyncio.run(run())
+            except BaseException as exc:  # noqa: BLE001 — surface the loop-race crash
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert not errors, f"embedder raised across concurrent loops: {errors}"
+        # Each loop kept the same client across both calls (no cross-loop clobber).
+        assert results[0][0] is True, "client was recreated mid-loop (slot clobbered)"
+        assert results[1][0] is True, "client was recreated mid-loop (slot clobbered)"
+        # The two loops received genuinely distinct clients (true isolation).
+        assert results[0][1] != results[1][1], "two loops shared one client"
+
+    async def test_request_uses_the_current_loops_client(
+        self, mock_settings: MagicMock
+    ) -> None:
+        with patch("ingestion.embedders.openrouter.settings", mock_settings):
+            emb = OpenRouterEmbedder(api_key="test-or-key")
+            client, _ = emb._ensure_loop_resources()
+            mock_resp = _mock_response([{"embedding": [0.1] * DIMS}])
+            with patch.object(
+                client, "post", new_callable=AsyncMock, return_value=mock_resp
+            ) as mock_post:
+                await emb.embed_text(["hi"])
+            mock_post.assert_awaited_once()
 
 
 class TestProtocolCompliance:
