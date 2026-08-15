@@ -82,7 +82,7 @@ OpenAI-compatible server (OpenRouter, Ollama, vLLM, LiteLLM, etc.):
 
 ```bash
 LLM_BASE_URL=https://openrouter.ai/api/v1
-LLM_MODEL=anthropic/claude-sonnet-4-20250514
+LLM_MODEL=anthropic/claude-sonnet-5
 LLM_API_KEY=sk-or-...
 ```
 

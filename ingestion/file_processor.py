@@ -107,6 +107,37 @@ _docling_converter = None
 _docling_checked = False
 
 
+def _log_docling_device() -> None:
+    """Log the device Docling resolved to, so GPU use is visible rather than assumed.
+
+    We do not pass AcceleratorOptions, so Docling uses its default of
+    ``device=auto``: CUDA (or MPS) when a matching torch build is installed,
+    silently falling back to CPU when it is not. A CPU-only torch wheel
+    therefore turns into "ingestion got slow" rather than an error.
+
+    Docling does log the resolved device itself, but once per model it builds
+    -- five-plus repeats per run, under its own logger, with no indication the
+    choice was automatic. This emits it once, at converter init, in our
+    namespace. Purely informational: it never changes the selection.
+    """
+    try:
+        # Import from accelerator_options, not pipeline_options: the latter
+        # re-exports the name without declaring it, which mypy rejects.
+        from docling.datamodel.accelerator_options import AcceleratorOptions
+        from docling.utils.accelerator_utils import decide_device
+
+        opts = AcceleratorOptions()
+        resolved = decide_device(opts.device)
+        logger.info(
+            "Docling accelerator: %s (auto-selected from device=%s, cpu_threads=%d)",
+            resolved,
+            opts.device,
+            opts.num_threads,
+        )
+    except Exception:  # pragma: no cover - never break ingestion over a log line
+        logger.debug("Could not resolve Docling accelerator device", exc_info=True)
+
+
 def _get_docling_converter() -> object | None:
     """Lazily initialize Docling converter, or return None if not installed."""
     global _docling_converter, _docling_checked  # noqa: PLW0603
@@ -118,6 +149,7 @@ def _get_docling_converter() -> object | None:
 
         _docling_converter = DocumentConverter()
         logger.info("Docling available for scanned PDF fallback")
+        _log_docling_device()
     except ImportError:
         logger.info("Docling not installed, scanned PDF OCR disabled")
     return _docling_converter
