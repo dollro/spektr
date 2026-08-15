@@ -107,6 +107,20 @@ async def _ingest_to_graph_with_schema(
     await engine.ingest(chunks=chunks, source_key=source_file, schema=schema)
 
 
+async def _cancel_and_settle(tasks: list[asyncio.Task[Any]]) -> None:
+    """Cancel *tasks* and wait for them to finish unwinding.
+
+    Awaiting after cancelling is the point: it guarantees no task outlives
+    the file it belongs to, and that each one's ``finally`` has run before
+    the caller inspects or closes anything.
+    """
+    for task in tasks:
+        if not task.done():
+            task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
 async def _process_pages(
     *,
     filename: str,
@@ -119,16 +133,32 @@ async def _process_pages(
     embedder: Embedder,
     graph_engine: GraphEngine | None,
 ) -> None:
-    """Run every page of one file: text pages concurrently, images serially."""
+    """Run every page of one file: text pages concurrently, images serially.
+
+    Cleanup is ownership-based. A coroutine handed to a task belongs to that
+    task and is cancelled, never closed from here — see ``_bounded``.
+    """
     sem = asyncio.Semaphore(2)
     all_chunks: list[TextChunk] = []
 
     async def _bounded(coro: Any) -> Any:
-        async with sem:
-            return await coro
+        """Run *coro* under the semaphore, owning its lifecycle.
+
+        The ``finally`` is what makes the ownership rule safe to rely on: it
+        closes *coro* whether we ran it, it raised, or we were cancelled
+        while still queued on the semaphore. Closing an already-finished
+        coroutine is a no-op, so this only ever suppresses the "never
+        awaited" warning for one that never got to start.
+        """
+        try:
+            async with sem:
+                return await coro
+        finally:
+            coro.close()
 
     text_tasks: list[Any] = []
     image_tasks: list[Any] = []
+    running: list[asyncio.Task[Any]] = []
     try:
         for page in pages:
             pt = _build_page_tasks(
@@ -148,17 +178,30 @@ async def _process_pages(
 
         # Text: concurrent (lightweight, small TPM footprint)
         if text_tasks:
-            await asyncio.gather(*[_bounded(t) for t in text_tasks])
+            running = [asyncio.create_task(_bounded(c)) for c in text_tasks]
+            # Ownership moves to the tasks; the cleanup path must not close
+            # these coroutines while a sibling is still queued to await one.
+            text_tasks = []
+            await asyncio.gather(*running)
+            running = []
 
         # Bulk graph ingestion after all text pages are processed
         if graph_engine and all_chunks:
             await _ingest_to_graph_with_schema(filename, all_chunks, graph_engine)
 
-        # Images: sequential (heavy, TPM-sensitive)
-        for task in image_tasks:
-            await task
+        # Images: sequential (heavy, TPM-sensitive). Pop before awaiting so
+        # the list only ever holds coroutines that were never started.
+        while image_tasks:
+            await image_tasks.pop(0)
     except BaseException:
-        # Close unawaited coroutines to suppress RuntimeWarnings
+        # gather() propagates the first failure and leaves its siblings
+        # running. Settle them before returning: an orphan would outlive the
+        # file it belongs to and surface as "Task exception was never
+        # retrieved" at interpreter shutdown.
+        await _cancel_and_settle(running)
+        # Whatever is left here was never handed to a task, so closing it is
+        # ours to do — this is the only case the old blanket close was right
+        # about.
         for coro in text_tasks + image_tasks:
             coro.close()
         raise
