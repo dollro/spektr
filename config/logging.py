@@ -54,6 +54,13 @@ class JSONFormatter(logging.Formatter):
             "tool",
             "query",
             "result_count",
+            # Relevance-gate telemetry (retrieval/gate.py)
+            "gate_fired",
+            "gate_reranked",
+            "gate_widened_to",
+            "top_score",
+            "top_score_after",
+            "retry_helped",
         ):
             if hasattr(record, key):
                 log_data[key] = getattr(record, key)
@@ -90,6 +97,17 @@ def setup_logging() -> None:
 
     root.handlers.clear()
     root.addHandler(handler)
+
+    # Graphiti's entity-dedup query reads n.name_embedding before any entity
+    # exists, so on a cold graph Neo4j emits an 01N52 "property key does not
+    # exist" notification per call — each one dumping the full GQL text. It is
+    # expected and self-resolving (the key registers once the first entity is
+    # written), and the query is correct meanwhile: cosine against a missing
+    # property yields null, which the score floor filters out. Suppressed at
+    # WARNING because the volume buries real ingest output; genuine driver
+    # problems still surface at ERROR.
+    logging.getLogger("neo4j.notifications").setLevel(logging.ERROR)
+
     _initialized = True
 
 

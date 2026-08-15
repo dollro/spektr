@@ -27,7 +27,7 @@ from retrieval.channels import (
 )
 from retrieval.decompose import decompose
 from retrieval.fusion import rrf
-from retrieval.gate import should_retry
+from retrieval.gate import log_gate_decision, should_retry
 from retrieval.models import Candidate, FusedResult
 from retrieval.rerank import RerankError, rerank
 
@@ -137,17 +137,28 @@ async def _run_channel_set(
     """
     results, degraded = await _retrieve_and_rank(queries, rank_query, limit, query_filter)
 
-    retried = False
-    if gate and settings.retry_enabled and should_retry(results, settings.rerank_score_floor):
-        widened = limit * settings.retry_limit_multiplier
-        logger.info("Relevance gate fired, widening pool to %d", widened)
-        results, degraded = await _retrieve_and_rank(
-            queries, rank_query, widened, query_filter
-        )
-        results = results[:limit]
-        retried = True
+    if not (gate and settings.retry_enabled):
+        return results, degraded, False
 
-    return results, degraded, retried
+    top_score = results[0].score if results else None
+    if not should_retry(results, settings.rerank_score_floor):
+        log_gate_decision(fired=False, top_score=top_score, degraded=degraded)
+        return results, degraded, False
+
+    # The gate judged the FIRST pass, so its health is what makes top_score
+    # interpretable. `degraded` is rebound below by the widened pass.
+    judged_degraded = degraded
+    widened = limit * settings.retry_limit_multiplier
+    results, degraded = await _retrieve_and_rank(queries, rank_query, widened, query_filter)
+    results = results[:limit]
+    log_gate_decision(
+        fired=True,
+        top_score=top_score,
+        degraded=judged_degraded,
+        top_score_after=results[0].score if results else None,
+        widened_to=widened,
+    )
+    return results, degraded, True
 
 
 async def fast_pipeline(
@@ -219,9 +230,7 @@ async def smart_pipeline(
         _run_channel_set(sub_queries, query, limit, build_kb_filter(content_type, source_file))
     )
     live_task = asyncio.create_task(
-        _run_channel_set(
-            sub_queries, query, limit, build_live_filter(session_id), gate=False
-        )
+        _run_channel_set(sub_queries, query, limit, build_live_filter(session_id), gate=False)
     )
     (
         (kb_results, kb_degraded, kb_retried),
