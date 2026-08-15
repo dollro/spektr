@@ -24,24 +24,25 @@ cp .env.example .env
 
 | Variable | Default | Required | Description |
 |-|-|-|-|
-| `EMBEDDING_PROVIDER` | `jina` | No | Active embedding provider: `jina`, `voyage`, or `openrouter` |
+| `EMBEDDING_MODEL` | `gemini-2` | No | `jina-v4`, `voyage-4`, or `gemini-2` — determines capabilities and default dimensions |
+| `EMBEDDING_ROUTE` | `openrouter` | No | `native` (vendor API) or `openrouter` (gateway). Illegal pairs are rejected at startup |
+| `EMBEDDING_DIMENSIONS` | `0` | No | `0` = the model's default; MRL models accept smaller |
 
 Set this to choose the active provider, then configure the corresponding section below. See [Embeddings](../ingestion/embeddings.md) for details on switching providers.
 
-## Jina v4 (when `EMBEDDING_PROVIDER=jina`)
+## Jina v4 (when `EMBEDDING_MODEL=jina-v4`)
 
 | Variable | Default | Required | Description |
 |-|-|-|-|
 | `JINA_API_KEY` | — | If jina | API key for Jina v4 embedding service |
 | `JINA_API_URL` | `https://api.jina.ai` | No | Base URL (change for proxy/self-hosted) |
 | `JINA_MODEL` | `jina-embeddings-v4` | No | Jina embedding model name |
-| `JINA_DENSE_DIMENSIONS` | `2048` | No | Dimensionality of dense embeddings (Matryoshka: 128/256/512/1024/2048) |
 | `JINA_RPM` | `500` | No | Jina requests per minute (free=500, tier1=500, tier2=5000) |
 | `JINA_TPM` | `100000` | No | Jina tokens per minute (free=100k, tier1=10M, tier2=100M) |
 | `JINA_BATCH_SIZE` | `10` | No | Max texts per `embed_text` API call (lower to avoid TPM caps on long docs) |
 | `JINA_MAX_CONCURRENT` | `5` | No | Max concurrent requests to Jina API |
 
-## Voyage AI (when `EMBEDDING_PROVIDER=voyage`)
+## Voyage AI (when `EMBEDDING_MODEL=voyage-4`)
 
 | Variable | Default | Required | Description |
 |-|-|-|-|
@@ -49,28 +50,26 @@ Set this to choose the active provider, then configure the corresponding section
 | `VOYAGE_API_URL` | `https://api.voyageai.com` | No | Base URL |
 | `VOYAGE_TEXT_MODEL` | `voyage-4-large` | No | Text embedding model |
 | `VOYAGE_MULTIMODAL_MODEL` | `voyage-multimodal-3.5` | No | Image embedding model |
-| `VOYAGE_DENSE_DIMENSIONS` | `1024` | No | Output dimensions (256, 512, 1024, 2048) |
 | `VOYAGE_RPM` | `300` | No | Voyage requests per minute |
 | `VOYAGE_MAX_CONCURRENT` | `10` | No | Max concurrent requests to Voyage API |
 
-ColBERT multi-vector embeddings are not supported by Voyage; setting `MULTIVEC_ENABLED=true` with `EMBEDDING_PROVIDER=voyage` raises a validation error at startup.
+ColBERT multi-vector is not supported by Voyage; `MULTIVEC_ENABLED=true` raises a validation error at startup unless the active model+route pair supports it (only `jina-v4` + `native` does).
 
-## OpenRouter (when `EMBEDDING_PROVIDER=openrouter`)
+## OpenRouter (when `EMBEDDING_ROUTE=openrouter`)
 
-OpenAI-compatible `/v1/embeddings` endpoint. The default targets Google Gemini Embedding 2 (text-only, 3072d, MRL truncation). Any OpenRouter-served embedding model can be selected. **Text-only**: image embedding raises `NotImplementedError`, so use `jina` or `voyage` if your pipeline needs PDF page or image embeddings.
+OpenAI-compatible `/v1/embeddings` endpoint, serving `gemini-2` and `voyage-4`; the wire model id comes from the registry, not from a setting. Documents and queries are embedded asymmetrically via `input_type`. **Image embedding is supported for `gemini-2`** — text and images share one vector space, so `IMAGE_EMBED_STRATEGY=smart` works here. ColBERT multi-vector is not available, so `visual_search` still needs `jina-v4` + `native`.
 
 | Variable | Default | Required | Description |
 |-|-|-|-|
 | `OPENROUTER_API_KEY` | — | If openrouter | API key from <https://openrouter.ai/keys> |
 | `OPENROUTER_API_URL` | `https://openrouter.ai/api` | No | Base URL |
-| `OPENROUTER_MODEL` | `google/gemini-embedding-2-preview` | No | OpenRouter embedding model id |
-| `OPENROUTER_DENSE_DIMENSIONS` | `3072` | No | Output dimensions (Gemini Embedding 2 supports MRL: 768/1536/3072) |
+| `OPENROUTER_BATCH_SIZE` | `100` | No | Max inputs per call. Gemini hard-rejects more with a non-retryable 400 |
 | `OPENROUTER_RPM` | `300` | No | Requests per minute |
 | `OPENROUTER_MAX_CONCURRENT` | `10` | No | Max concurrent requests |
 | `OPENROUTER_HTTP_REFERER` | — | No | Optional `HTTP-Referer` header for openrouter.ai rankings |
 | `OPENROUTER_X_TITLE` | — | No | Optional `X-Title` header for openrouter.ai rankings |
 
-ColBERT multi-vector embeddings are not supported by OpenRouter; setting `MULTIVEC_ENABLED=true` with `EMBEDDING_PROVIDER=openrouter` raises a validation error at startup.
+ColBERT multi-vector is not available on this route (gemini-2 emits a single vector); `MULTIVEC_ENABLED=true` raises a validation error at startup, and `visual_search` requires `jina-v4` + `native`. `IMAGE_EMBED_STRATEGY=smart|all` *is* supported here — image points go to `documents_dense` and are retrieved by the ordinary dense channel.
 
 ## Qdrant
 
@@ -147,7 +146,7 @@ All six required fields below must be populated when `DOCUMENT_SOURCE=sharepoint
 | Variable | Default | Required | Description |
 |-|-|-|-|
 | `LLM_API_TYPE` | `anthropic` | No | LLM API type (`anthropic` or `openai`) |
-| `LLM_MODEL` | `claude-sonnet-4-20250514` | No | Model identifier for entity extraction and generation |
+| `LLM_MODEL` | `claude-sonnet-5` | No | Model identifier for entity extraction and generation |
 | `LLM_API_KEY` | — | Yes | API key for the configured LLM provider |
 | `LLM_BASE_URL` | — | No | Custom base URL for OpenAI-compatible servers (OpenRouter, Ollama, vLLM, LiteLLM) |
 
@@ -197,7 +196,7 @@ When `LLM_BASE_URL` is set, the **agent** uses an OpenAI-compatible client regar
 | Variable | Default | Required | Description |
 |-|-|-|-|
 | `SCHEMA_INDUCTION_ENABLED` | `true` | No | Enable per-document LLM schema induction for GLiNER2 (Path A only) |
-| `SCHEMA_INDUCTION_MODEL` | `claude-haiku-4-5-20251001` | No | Fast/cheap model used for schema proposals |
+| `SCHEMA_INDUCTION_MODEL` | — | No | Model used for schema proposals. Empty falls back to `LLM_MODEL`; set it to a cheaper/faster model to split the two. Must use the naming of whatever endpoint `LLM_BASE_URL` points at |
 | `SCHEMA_CACHE_TTL` | `3600` | No | Seconds to cache induced schemas before re-inducing |
 
 ## Feature Flags

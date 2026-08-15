@@ -64,7 +64,7 @@ If you've ever wanted "give the agent access to my company knowledge" without bu
   - `s3` — S3 + SQS event-driven daemon
   - `sharepoint` — SharePoint sync to a local volume
 - **Path B — Live streaming text.** FastAPI endpoint for real-time text input. Each session gets isolated `session_id`-scoped points.
-- **Embedding providers** (selected by `EMBEDDING_PROVIDER`): `jina` (default), `voyage`, `openrouter`.
+- **Embeddings**: `EMBEDDING_MODEL` (`jina-v4` | `voyage-4` | `gemini-2`) × `EMBEDDING_ROUTE` (`native` | `openrouter`). Default: `gemini-2` via `openrouter`.
 - **Optional ColBERT multi-vector** (`MULTIVEC_ENABLED=true`, Jina only) for layout-aware visual search.
 - **Pluggable graph engine** (`GRAPH_ENGINE`):
   - `graphiti` — LLM-driven temporal episodic memory (default; used unconditionally for Path B)
@@ -238,7 +238,7 @@ Detailed runbooks:
 
 |Variable|When required|
 |-|-|
-|`JINA_API_KEY` / `VOYAGE_API_KEY` / `OPENROUTER_API_KEY`|Whichever `EMBEDDING_PROVIDER` you pick|
+|`JINA_API_KEY` / `VOYAGE_API_KEY` / `OPENROUTER_API_KEY`|Whichever `EMBEDDING_ROUTE` you pick|
 |`NEO4J_PASSWORD`|Always|
 |`LLM_API_KEY`|For Graphiti, schema induction, the agent|
 |`S3_BUCKET_NAME`, `S3_SQS_QUEUE_URL`|`DOCUMENT_SOURCE=s3`|
@@ -251,7 +251,9 @@ Detailed runbooks:
 
 |Variable|Default|Description|
 |-|-|-|
-|`EMBEDDING_PROVIDER`|`jina`|`jina` \| `voyage` \| `openrouter`|
+|`EMBEDDING_MODEL`|`gemini-2`|`jina-v4` \| `voyage-4` \| `gemini-2`|
+|`EMBEDDING_ROUTE`|`openrouter`|`native` \| `openrouter`|
+|`EMBEDDING_DIMENSIONS`|`0`|`0` = model default; MRL models accept less|
 |`MCP_TRANSPORT`|`http`|`http` (streamable-http) \| `sse` \| `stdio`|
 |`GRAPH_ENGINE`|`graphiti`|`graphiti` \| `gliner` (Path A only)|
 |`GRAPH_ENABLED`|`true`|Disable Neo4j writes entirely|

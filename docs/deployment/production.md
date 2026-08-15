@@ -72,7 +72,7 @@ cp .env.example .env.prod
 Edit `.env.prod`. Required values in production:
 
 - `NEO4J_PASSWORD` — strong, randomly generated
-- `JINA_API_KEY` (or `VOYAGE_API_KEY` / `OPENROUTER_API_KEY` depending on `EMBEDDING_PROVIDER`)
+- `OPENROUTER_API_KEY` (or `JINA_API_KEY` / `VOYAGE_API_KEY` depending on `EMBEDDING_ROUTE`)
 - `LLM_API_KEY`
 - `MCP_API_KEY` — Bearer token clients must present
 - `MCP_PUBLIC_DOMAIN` — public hostname Traefik should route to `mcp` (e.g. `mcp.example.com`)
@@ -159,7 +159,7 @@ What it does:
 | Adds | `COCOINDEX_DB_PATH`, `PIPELINE_MAX_CONCURRENT_FILES`, `S3_PREFIX`, `S3_SQS_DEBOUNCE_SECONDS`, `S3_FULL_SCAN_INTERVAL_HOURS`, at their documented defaults |
 | Retunes | `JINA_DENSE_DIMENSIONS` 512 → 2048 and `LLM_MODEL` → `claude-sonnet-5`, but *only* where the file holds exactly the stale value, so a deliberate override survives |
 | Flags | `QDRANT_DENSE_COLLECTION` / `QDRANT_MULTIVEC_COLLECTION` — test-suite overrides that point production at throwaway collections |
-| Validates | required variables, the embedding key matching `EMBEDDING_PROVIDER`, and `S3_BUCKET_NAME` when `DOCUMENT_SOURCE=s3` |
+| Validates | required variables, the embedding key matching `EMBEDDING_ROUTE`, and `S3_BUCKET_NAME` when `DOCUMENT_SOURCE=s3` |
 
 It exits 1 when the migrated file would still be invalid, so a deploy script can gate on it. Re-running against an already-migrated file is a no-op, which makes it safe in automation.
 

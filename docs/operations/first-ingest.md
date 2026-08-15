@@ -22,7 +22,7 @@ task setup     # uv + dependencies
 task up        # Qdrant + Neo4j
 ```
 
-`.env` must have, at minimum, an API key for the configured `EMBEDDING_PROVIDER` and `NEO4J_PASSWORD`. See [Environment](../configuration/environment.md).
+`.env` must have, at minimum, an API key for the configured `EMBEDDING_ROUTE` and `NEO4J_PASSWORD`. See [Environment](../configuration/environment.md).
 
 Put at least one supported document in `LOCAL_DOCUMENTS_PATH` (default `documents/`). Supported extensions are listed in `ingestion/pipeline.py::SUPPORTED_PATTERNS` — pdf, common image formats, and md/txt/csv/json/xml/html/yaml.
 

@@ -28,7 +28,19 @@ def _is_retryable(exc: BaseException) -> bool:
     if isinstance(exc, httpx.HTTPStatusError):
         code = exc.response.status_code
         return code == 429 or code >= 500
-    return isinstance(exc, (httpx.ReadError, httpx.ConnectError, httpx.RemoteProtocolError))
+    # httpx.TimeoutException is a SIBLING of NetworkError, not a subclass of
+    # ConnectError — so listing ConnectError does not cover ConnectTimeout.
+    # Omitting it made a plain connect timeout non-retryable and failed a
+    # whole file on one transient blip.
+    return isinstance(
+        exc,
+        (
+            httpx.TimeoutException,
+            httpx.ReadError,
+            httpx.ConnectError,
+            httpx.RemoteProtocolError,
+        ),
+    )
 
 
 _TILE_SIZE = 28
@@ -69,7 +81,7 @@ class JinaV4Embedder:
         self._api_key = api_key or settings.jina_api_key
         self._embeddings_url = f"{settings.jina_api_url}/v1/embeddings"
         self._model = settings.jina_model
-        self._dimensions = settings.jina_dense_dimensions
+        self._dimensions = settings.dense_dimensions
         self._max_concurrent = settings.jina_max_concurrent
         self._rpm_limiter = TokenBucket(
             tokens_per_sec=settings.jina_rpm / 60.0,

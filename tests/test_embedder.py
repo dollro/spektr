@@ -15,7 +15,7 @@ from ingestion.embedder import Embedder, TokenBucket, create_embedder
 from ingestion.embedders.jina import JinaV4Embedder
 
 FIXTURES = Path(__file__).parent / "fixtures"
-DIMS = settings.jina_dense_dimensions
+DIMS = settings.dense_dimensions
 
 
 @pytest.fixture
@@ -38,15 +38,28 @@ class TestEmbedderProtocol:
         assert isinstance(JinaV4Embedder(api_key="k"), Embedder)
 
     def test_factory_returns_jina(self) -> None:
-        emb = create_embedder(api_key="k")
+        """Dispatch is on the route; ambient .env must not decide the test."""
+        with patch("ingestion.embedder.settings") as mock_settings:
+            mock_settings.embedding_route = "native"
+            mock_settings.embedding_model = "jina-v4"
+            emb = create_embedder(api_key="k")
         assert isinstance(emb, JinaV4Embedder)
 
-    def test_factory_unknown_provider(self) -> None:
-        with patch(
-            "ingestion.embedder.settings",
-        ) as mock_settings:
-            mock_settings.embedding_provider = "nope"
-            with pytest.raises(ValueError, match="Unknown embedding provider"):
+    def test_factory_returns_openrouter_for_openrouter_route(self) -> None:
+        from ingestion.embedders.openrouter import OpenRouterEmbedder
+
+        with patch("ingestion.embedder.settings") as mock_settings:
+            mock_settings.embedding_route = "openrouter"
+            mock_settings.embedding_model = "gemini-2"
+            emb = create_embedder(api_key="k")
+        assert isinstance(emb, OpenRouterEmbedder)
+
+    def test_factory_unknown_native_model(self) -> None:
+        """gemini-2 has no native client; the factory must say so, not guess."""
+        with patch("ingestion.embedder.settings") as mock_settings:
+            mock_settings.embedding_route = "native"
+            mock_settings.embedding_model = "gemini-2"
+            with pytest.raises(ValueError, match="No native client"):
                 create_embedder()
 
 
@@ -303,7 +316,7 @@ class TestLateChunking:
                 mock_s.jina_batch_size = 10
                 mock_s.jina_api_url = "https://api.jina.ai"
                 mock_s.jina_model = "jina-embeddings-v4"
-                mock_s.jina_dense_dimensions = DENSE_DIM
+                mock_s.dense_dimensions = DENSE_DIM
                 await embedder.embed_text(
                     [f"chunk {i}" for i in range(n_texts)],
                     late_chunking=True,

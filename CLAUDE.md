@@ -36,7 +36,7 @@ Before modifying or exploring ANY module, you MUST first read the corresponding 
 
 ## Architecture
 
-- **Ingestion (Path A — Bulk):** CocoIndex v1 app (`ingestion/app.py` — one memoized component per file, Qdrant points *declared* on native collection targets) + Docling/PyMuPDF for file processing, Jina/Voyage/OpenRouter for embeddings (selected by `EMBEDDING_PROVIDER`), pluggable `GraphEngine` for entity/relation extraction. Document source is selected by `DOCUMENT_SOURCE` (`local` default, or `s3` / `sharepoint`). Live mode: `localfs` is a real watcher; S3 is scan-only in v1, so `ingestion/sqs_trigger.py` uses SQS as a *trigger* for a debounced catch-up scan (plus an interval and a startup sweep). Without `--live`, runs as one-shot batch. The `ingest-live` prod service is this daemon — not an HTTP endpoint.
+- **Ingestion (Path A — Bulk):** CocoIndex v1 app (`ingestion/app.py` — one memoized component per file, Qdrant points *declared* on native collection targets) + Docling/PyMuPDF for file processing, embeddings selected by `EMBEDDING_MODEL` x `EMBEDDING_ROUTE` (see `config/embedding_models.py`), pluggable `GraphEngine` for entity/relation extraction. Document source is selected by `DOCUMENT_SOURCE` (`local` default, or `s3` / `sharepoint`). Live mode: `localfs` is a real watcher; S3 is scan-only in v1, so `ingestion/sqs_trigger.py` uses SQS as a *trigger* for a debounced catch-up scan (plus an interval and a startup sweep). Without `--live`, runs as one-shot batch. The `ingest-live` prod service is this daemon — not an HTTP endpoint.
 - **Pipeline state:** CocoIndex v1 keeps its target-state ledger, memoization cache and component tree in a local **LMDB directory** (`COCOINDEX_DB_PATH`, default `state/cocoindex.db`). No PostgreSQL anywhere in the stack.
 - **Ingestion (Path B — Live):** FastAPI HTTP endpoint (`live_ingest.py`, port 8001) for streaming text, configured embedding provider, Graphiti for temporal episodic memory
 - **Vector Store:** Qdrant (dense + optional ColBERT multi-vector, Jina-only). Both paths write to `documents_dense`; live data tagged with `session_id` and `is_live`
@@ -103,14 +103,16 @@ Before modifying or exploring ANY module, you MUST first read the corresponding 
 ├── docker-compose.prod.yml # Full production stack (app + data services + Traefik labels on mcp)
 ├── Dockerfile              # Multi-stage Python 3.13 + uv image (shared by all app services)
 ├── Caddyfile               # Sample reverse-proxy config (alternative to external Traefik)
-├── Taskfile.yml            # go-task entry points (task --list to enumerate)
+├── Taskfile.yml            # go-task entry points (bare `task` for a grouped overview)
 ├── pyproject.toml          # Python config (single source of truth)
 └── mkdocs.yml              # Documentation site config
 ```
 
 ## Quick Start
 
-Use [go-task](https://taskfile.dev) as the task runner. `task --list` shows all tasks.
+Use [go-task](https://taskfile.dev) as the task runner. A bare `task` prints a grouped
+overview of the common commands; `task --list` shows all tasks alphabetically, and
+`task --summary <name>` explains one task — what it does, its args, and its gotchas.
 
 ```bash
 cp .env.example .env     # Configure environment (gitignored)

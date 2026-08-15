@@ -39,7 +39,7 @@ docker compose down -v
 
 Qdrant stores two collections:
 
-- **`documents_dense`** — dense vectors. Dimensionality follows the active embedding provider (`JINA_DENSE_DIMENSIONS` default `2048`, `VOYAGE_DENSE_DIMENSIONS` default `1024`, `OPENROUTER_DENSE_DIMENSIONS` default `3072`)
+- **`documents_dense`** — dense vectors. Dimensionality is `EMBEDDING_DIMENSIONS`, or the active `EMBEDDING_MODEL`'s registry default when that is `0` (`jina-v4` 2048, `voyage-4` 1024, `gemini-2` 3072). Text chunks and page images share this collection, so a text query retrieves both
 - **`documents_multivec`** — 128-dimensional ColBERT multi-vectors (Jina v4 only, opt-in via `MULTIVEC_ENABLED=true`)
 
 Collections are provisioned automatically by the ingestion pipeline on first run.

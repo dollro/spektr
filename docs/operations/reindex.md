@@ -7,8 +7,8 @@ Some changes to `documents_dense` are not additive — a new embedding provider,
 
 ## When this applies
 
-- Switching `EMBEDDING_PROVIDER` (different dimensionality, different embedding space — see [Embeddings](../ingestion/embeddings.md#switching-providers))
-- Changing `JINA_DENSE_DIMENSIONS` / `VOYAGE_DENSE_DIMENSIONS` / `OPENROUTER_DENSE_DIMENSIONS`
+- Switching `EMBEDDING_MODEL` or `EMBEDDING_DIMENSIONS` (different embedding space — see [Embeddings](../ingestion/embeddings.md)). Switching `EMBEDDING_ROUTE` alone does **not** require a reindex: the same model through a different endpoint returns the same vectors.
+- Changing `EMBEDDING_DIMENSIONS` (one key for every model since the model/route split)
 - A vector-naming or vector-config change to `documents_dense` itself — the retrieval upgrade's move from a single unnamed vector to named `dense` + `sparse` vectors is the reference case this runbook was written for (named and unnamed vectors cannot coexist in one collection)
 
 Not needed for provider-internal changes that don't touch dimensionality or vector config (e.g. swapping the reranker model), and not needed for `documents_multivec` alone unless you're also changing `MULTIVEC_DIM`.

@@ -89,6 +89,11 @@ Returns `list[SearchResult]`:
 
 ColBERT multi-vector search against the Qdrant `documents_multivec` collection. Best suited for visually rich content: charts, diagrams, tables, and formatted layouts. When `VLM_GENERATION_ENABLED=true`, a VLM-generated answer is prepended to the results.
 
+!!! warning "This tool requires `jina-v4` + `native`"
+    It queries `documents_multivec` with `using="colbert"` and has **no dense fallback**, so it returns nothing unless `MULTIVEC_ENABLED=true` — which only `jina-v4` on the `native` route supports.
+
+    **Searching images does not require this tool.** With `IMAGE_EMBED_STRATEGY=smart|all` on a pair that can embed images (including the default `gemini-2` + `openrouter`), page images become points in `documents_dense` alongside text, in the same vector space. A plain text query therefore retrieves them through `vector_search`, `multi_search`, and `hybrid_search`. `visual_search` adds late-interaction *precision* on top; it is not the only path to image content.
+
 ### Parameters
 
 | Name | Type | Default | Description |
@@ -241,6 +246,8 @@ Same fused retrieval core as `multi_search` — dense + sparse -> RRF -> rerank 
 **Decomposition.** When `DECOMPOSE_ENABLED=true` (default), the query is split into up to `DECOMPOSE_MAX_SUBQUERIES` (default 4) sub-queries by one LLM call (`DECOMPOSE_MODEL`, falling back to `LLM_MODEL` when unset). Each sub-query becomes its own dense + sparse channel pair, all fused together in one RRF pass. If decomposition fails or the query is a single ask, it falls back to `[query]` unchanged — a decomposition outage degrades to single-query retrieval rather than an error.
 
 **Relevance-gated retry.** The fused, reranked results are checked against `RERANK_SCORE_FLOOR` (default `0.0`). `jina-reranker-v3.5` is listwise and its scores are unbounded and logit-like, not the pointwise v2 reranker's bounded `[0, 1]` — a strong match scores around `+0.39`, and irrelevant text scores negative. A floor of `0.0` therefore means "retry only when the best candidate was judged actively irrelevant," not "retry on anything less than a great match." When `RETRY_ENABLED=true` (default) and the top score is below the floor, the candidate pool is widened by `RETRY_LIMIT_MULTIPLIER` (default `3`x `limit`) and the whole retrieve-and-rank step runs once more. This targets the failure mode where the right chunk was ranked outside the initial pool.
+
+Every gate evaluation is logged, fired or not, so the retry rate is measurable rather than guessed — see [Relevance-gate telemetry](../operations/observability.md#relevance-gate-telemetry) and `task retry-stats`. The rate is the standing evidence for whether first-stage recall needs investment: retries that fire *and improve* the top-1 score mean the reranker never saw the right candidate.
 
 ### Parameters
 

@@ -20,7 +20,7 @@ def mock_settings() -> MagicMock:
     s.voyage_api_url = "https://api.voyageai.com"
     s.voyage_text_model = "voyage-4-large"
     s.voyage_multimodal_model = "voyage-multimodal-3.5"
-    s.voyage_dense_dimensions = DIMS
+    s.dense_dimensions = DIMS
     s.voyage_rpm = 300
     s.voyage_max_concurrent = 10
     s.max_retries = 3

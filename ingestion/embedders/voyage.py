@@ -39,7 +39,7 @@ class VoyageEmbedder:
         self._multimodal_url = f"{settings.voyage_api_url}/v1/multimodalembeddings"
         self._text_model = settings.voyage_text_model
         self._multimodal_model = settings.voyage_multimodal_model
-        self._dimensions = settings.voyage_dense_dimensions
+        self._dimensions = settings.dense_dimensions
         self._max_concurrent = settings.voyage_max_concurrent
         self._rpm_limiter = TokenBucket(
             tokens_per_sec=settings.voyage_rpm / 60.0,
