@@ -4,6 +4,14 @@ name: spektr-stack
 displayName: Spektr dev stack
 description: uv/uvx toolchain plus network allowlist for the project MCP servers.
 
+environment:
+  variables:
+    # `.mcp.json` points the `spektr` server at ${SPEKTR_MCP_URL:-localhost:8090}.
+    # On the host the default is right; from inside the sandbox the MCP server
+    # lives on the host, so override it here. This is what keeps a single
+    # server entry working in both places.
+    SPEKTR_MCP_URL: "http://host.docker.internal:8090/mcp"
+
 commands:
   install:
     - user: "1000"
@@ -27,8 +35,9 @@ commands:
         # miniCOIL sparse encoder, ~275 MB. fastembed resolves its cache to
         # $TMPDIR/fastembed_cache unless FASTEMBED_CACHE_PATH is set, and
         # ingestion/sparse_embedder.py never passes cache_dir — so warm exactly
-        # that default. This kit schema has no `env:` field, so redirecting the
-        # cache elsewhere is not an option here.
+        # that default. (`environment.variables` above could set
+        # FASTEMBED_CACHE_PATH instead, but the warmed default is what the
+        # runtime looks for today — don't split them.)
         uv run --no-project --with fastembed python -c \
           "from fastembed import SparseTextEmbedding as S; S(model_name='Qdrant/minicoil-v1')" || true
         # HuggingFace repos, ~1.3 GB, into ~/.cache/huggingface/hub.
@@ -59,6 +68,7 @@ network:
     - "mcp.grep.app:443"
     - "git.dolltons.com:443"
     - "localhost:8090"
+    - "host.docker.internal:8090"   # the spektr MCP server, seen from inside the sandbox
     # Runtime APIs the integration suite actually calls.
     - "api.jina.ai:443"          # EMBEDDING_PROVIDER=jina + jina-reranker-v3.5
     - "openrouter.ai:443"        # LLM_BASE_URL — extraction, schema induction, decomposition

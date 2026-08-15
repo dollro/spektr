@@ -2,14 +2,7 @@
   "mcpServers": {
     "spektr": {
       "type": "http",
-      "url": "http://localhost:8090/mcp",
-      "headers": {
-        "Authorization": "Bearer ${SPEKTR_MCP_BEARER}"
-      }
-    },
-    "spektr-sbx": {
-      "type": "http",
-      "url": "http://host.docker.internal:8090/mcp",
+      "url": "${SPEKTR_MCP_URL:-http://localhost:8090/mcp}",
       "headers": {
         "Authorization": "Bearer ${SPEKTR_MCP_BEARER}"
       }
@@ -31,9 +24,7 @@
     "context7": {
       "type": "http",
       "url": "https://mcp.context7.com/mcp",
-      "headers": {
-        "CONTEXT7_API_KEY": "${CONTEXT7_API_KEY}"
-      }
+      "headers": { "CONTEXT7_API_KEY": "${CONTEXT7_API_KEY}" }
     },
     "grep.app": {
       "type": "stdio",

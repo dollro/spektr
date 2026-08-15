@@ -20,7 +20,8 @@ backups/
 *~
 
 # Local tooling state — per-developer, never shared.
-# .claude/settings.json IS tracked; only the .local. override is personal.
-.mcp.json
+# .claude/settings.json and .mcp.json ARE tracked; .mcp.json holds only
+# ${VAR} placeholders. The secrets they expand to live in
+# .claude/settings.local.json, which is personal and never shared.
 .claude/settings.local.json
 .serena/
