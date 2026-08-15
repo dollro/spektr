@@ -22,12 +22,13 @@ Internet
      │ spektr-net
      ├──► agent-api       (python -m agent.api,                :8001)
      ├──► ingest-live     (python -m ingestion.pipeline --live)
-     ├──► sharepoint-sync (python -m services.sharepoint_sync, optional)
+     ├──► sharepoint-sync (python -m services.sharepoint_sync, profile: sharepoint)
      │
      ├──► qdrant    (:6333, internal only; 127.0.0.1 publish for backup scripts)
-     ├──► neo4j     (:7687, internal only)
-     └──► postgres  (:5432, internal only)
+     └──► neo4j     (:7687, internal only)
 ```
+
+CocoIndex's pipeline state needs no service: it lives in an LMDB directory under `state/`, on the `ingest_state` volume shared by every service that runs the pipeline.
 
 The app services (`mcp`, `agent-api`, `ingest-live`, `sharepoint-sync`, one-shot `ingest`) all share a single image built from the repo `Dockerfile`.
 
@@ -70,16 +71,16 @@ cp .env.example .env.prod
 
 Edit `.env.prod`. Required values in production:
 
-- `NEO4J_PASSWORD`, `POSTGRES_PASSWORD` — strong, randomly generated
-- `JINA_API_KEY` (or `VOYAGE_API_KEY` / `OPENROUTER_API_KEY` depending on `EMBEDDING_PROVIDER`)
+- `NEO4J_PASSWORD` — strong, randomly generated
+- `OPENROUTER_API_KEY` (or `JINA_API_KEY` / `VOYAGE_API_KEY` depending on `EMBEDDING_ROUTE`)
 - `LLM_API_KEY`
 - `MCP_API_KEY` — Bearer token clients must present
 - `MCP_PUBLIC_DOMAIN` — public hostname Traefik should route to `mcp` (e.g. `mcp.example.com`)
 - `INGEST_API_KEY` — gates `/session/start` on the live-ingest endpoint
-- AWS block (`AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `S3_BUCKET_NAME`, `S3_SQS_QUEUE_URL`) when `DOCUMENT_SOURCE=s3`
+- AWS block (`AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `S3_BUCKET_NAME`) when `DOCUMENT_SOURCE=s3`; add `S3_SQS_QUEUE_URL` unless you're happy with interval-only sweeps
 - SharePoint block (`SHAREPOINT_*`) when `DOCUMENT_SOURCE=sharepoint`
 
-Service hostnames use container names: `qdrant`, `neo4j`, `postgres`. Do not change these — other services resolve each other by name on `spektr-net`.
+Service hostnames use container names: `qdrant`, `neo4j`. Do not change these — other services resolve each other by name on `spektr-net`.
 
 ### 3. Build the image and start the stack
 
@@ -136,11 +137,70 @@ task prod:build
 task prod:up                 # recreates containers with the new image
 ```
 
+If the pull crosses the CocoIndex v0→v1 boundary (the release that removed PostgreSQL), this is not enough — the pipeline state and the vector collection both have to be rebuilt. Follow [Upgrading a Deployment](../operations/upgrading.md) instead, which sequences the teardown, the env migration below and the re-ingest.
+
+### Migrating an existing `.env.prod`
+
+An env file written for the old stack carries variables nothing reads any more and is missing ones the new pipeline expects. Neither is reported at boot — the pipeline just runs on defaults. `scripts/migrate_env.py` reconciles it:
+
+```bash
+python3 scripts/migrate_env.py .env.prod          # report only, changes nothing
+python3 scripts/migrate_env.py .env.prod --write  # rewrite in place, keeps .env.prod.bak
+task prod:migrate-env -- --write                  # same, via go-task
+```
+
+Unlike the rest of `scripts/`, this one is stdlib-only and runs under plain `python3` — a deploy VM has Docker but usually no project virtualenv. Your comments, ordering and untouched lines are preserved; the output is written mode 600. Values are never printed, only variable names, so the report is safe to paste into a ticket.
+
+What it does:
+
+| Action | Detail |
+|-|-|
+| Drops | `DATABASE_URL`, `POSTGRES_USER/PASSWORD/DB/PORT/HOST` — dead since the LMDB ledger replaced PostgreSQL |
+| Adds | `COCOINDEX_DB_PATH`, `PIPELINE_MAX_CONCURRENT_FILES`, `S3_PREFIX`, `S3_SQS_DEBOUNCE_SECONDS`, `S3_FULL_SCAN_INTERVAL_HOURS`, at their documented defaults |
+| Retunes | `JINA_DENSE_DIMENSIONS` 512 → 2048 and `LLM_MODEL` → `claude-sonnet-5`, but *only* where the file holds exactly the stale value, so a deliberate override survives |
+| Flags | `QDRANT_DENSE_COLLECTION` / `QDRANT_MULTIVEC_COLLECTION` — test-suite overrides that point production at throwaway collections |
+| Validates | required variables, the embedding key matching `EMBEDDING_ROUTE`, and `S3_BUCKET_NAME` when `DOCUMENT_SOURCE=s3` |
+
+It exits 1 when the migrated file would still be invalid, so a deploy script can gate on it. Re-running against an already-migrated file is a no-op, which makes it safe in automation.
+
+The migration does not invent secrets. Anything the new schema needs but the old file never had — `MCP_API_KEY` on a stack that ran unauthenticated, for instance — is reported as a problem for you to fill in.
+
+### SharePoint sync
+
+`sharepoint-sync` is behind the `sharepoint` profile, so `task prod:up` skips it. It refuses to start unless `DOCUMENT_SOURCE=sharepoint` (exit 2), which combined with `restart: unless-stopped` would crash-loop on a local or S3 deployment. When you do want it:
+
+```bash
+docker compose -f docker-compose.prod.yml --env-file .env.prod --profile sharepoint up -d
+```
+
+### Health check
+
+```bash
+task prod:doctor             # diffs the CocoIndex ledger against Qdrant, inside the stack
+```
+
+Unlike `task doctor`, this runs in a container, so the VM needs no `uv` or Python environment. It flags drift, mixed `embedder_model`/`embedder_dim`, and text chunks missing their `sparse` vector.
+
 ### Stopping
 
 ```bash
-task prod:down               # keeps volumes (qdrant_data, neo4j_data, postgres_data)
+task prod:down               # keeps volumes (qdrant_data, neo4j_data, ingest_state)
 ```
+
+### Wiping everything
+
+For a clean slate — a schema change that cannot be migrated in place, or standing the instance back up from nothing:
+
+```bash
+task prod:nuke -- --yes-i-know-this-wipes-things
+```
+
+!!! danger "This deletes all data"
+    Every vector, the whole graph, and all pipeline state. Run `task prod:backup` first unless you genuinely intend to lose it. The task refuses to run without the flag.
+
+It brings the stack down with `-v --remove-orphans` across all profiles, then removes `spektr_postgres_data` explicitly — a leftover from the pre-CocoIndex-v1 stack that this compose file no longer declares and therefore cannot clean up on its own.
+
+Afterwards, follow [First Ingest](../operations/first-ingest.md) from step 2: the collections and Neo4j constraints are recreated by the next ingestion run, since `ingestion/runner.py::_provision()` is the only code that provisions them. Nothing is searchable until that run succeeds.
 
 ### Backups
 
@@ -156,7 +216,8 @@ task prod:restore -- --from backups/20260419-153000 \
 
 Under the hood:
 
-- `scripts/backup.py --compose-file docker-compose.prod.yml` threads `-f docker-compose.prod.yml` into every `docker compose ...` shell-out (neo4j stop/run/start, postgres exec).
+- `scripts/backup.py --compose-file docker-compose.prod.yml` threads `-f docker-compose.prod.yml` into every `docker compose ...` shell-out (neo4j stop/run/start).
+- The CocoIndex state is archived by tarring `COCOINDEX_DB_PATH`. LMDB has no safe hot-copy, so stop `ingest-live` (or schedule the backup between ingests) before running it.
 - `QDRANT_URL=http://127.0.0.1:6333` is exported by the task so the host-side script can reach the Qdrant HTTP snapshot API via the port the prod compose publishes on `127.0.0.1` only.
 - Neo4j Community 5 has no online backup — the script stops the `neo4j` service for ~10-30s, runs `neo4j-admin database dump`, then starts it again. Plan backups outside peak traffic.
 - Output lands in `./backups/<timestamp>/` on the VM with a `manifest.json`.
@@ -239,7 +300,6 @@ Rough baseline for a small instance:
 |-|-|-|
 | qdrant | 1-2 GB | grows with corpus size |
 | neo4j | 1-2 GB | plus APOC plugin |
-| postgres | 256 MB | CocoIndex tracking only |
 | mcp | 512 MB | mostly idle |
 | agent-api | 512 MB | |
 | ingest-live | 1-2 GB | spikes during extraction |

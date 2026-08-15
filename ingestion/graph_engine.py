@@ -7,6 +7,7 @@ Switch between engines via the GRAPH_ENGINE setting:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING, Protocol
 
@@ -14,6 +15,8 @@ from ingestion.file_processor import TextChunk
 from server.models import GraphFact
 
 if TYPE_CHECKING:
+    import neo4j
+
     from ingestion.schema_inducer import MergedSchema
 
 logger = logging.getLogger(__name__)
@@ -76,6 +79,11 @@ class GLiNEREngine:
     then writes directly to Neo4j via Cypher MERGE statements.
     Zero LLM API calls.
     """
+
+    # Class-level defaults so instances built via __new__ (tests bypassing
+    # __init__ to inject a fake driver) still satisfy _get_driver.
+    _driver: neo4j.AsyncDriver | None = None
+    _driver_loop: asyncio.AbstractEventLoop | None = None
 
     # Entities shorter than this are noise
     _MIN_ENTITY_LEN = 2
@@ -145,22 +153,53 @@ class GLiNEREngine:
 
     def __init__(self) -> None:
         from gliner2 import GLiNER2
-        from neo4j import AsyncGraphDatabase
 
         from config.constants import ENTITY_TYPES, RELATIONSHIP_TYPES
         from config.settings import settings
 
         self._extractor = GLiNER2.from_pretrained("fastino/gliner2-base-v1")
-        self._driver = AsyncGraphDatabase.driver(
-            settings.neo4j_uri,
-            auth=(settings.neo4j_user, settings.neo4j_password),
-        )
+
+        # The Neo4j async driver binds its socket to the event loop that is
+        # live when it is built, but this engine is a process-wide singleton
+        # (see get_graph_engine) and the model above is far too expensive to
+        # rebuild. So keep the model, and build the cheap driver lazily per
+        # loop — otherwise a second loop awaits futures owned by the first and
+        # gets "attached to a different loop".
+        self._neo4j_uri = settings.neo4j_uri
+        self._neo4j_auth = (settings.neo4j_user, settings.neo4j_password)
+        self._driver: neo4j.AsyncDriver | None = None
+        self._driver_loop: asyncio.AbstractEventLoop | None = None
 
         self._schema = (
             self._extractor.create_schema()
             .entities(ENTITY_TYPES)
             .relations(RELATIONSHIP_TYPES)
         )
+
+    def _get_driver(self) -> neo4j.AsyncDriver:
+        """Return a driver owned by the running loop, rebuilding on change.
+
+        In production there is one loop for the process lifetime, so this
+        builds once. Across loops (tests, repeated asyncio.run) the stale
+        driver is abandoned rather than closed — its loop is already gone, so
+        awaiting close() on it is exactly the failure being avoided.
+
+        A driver present with no recorded loop was injected from outside (a
+        test fake); it is the caller's to manage, so use it as-is.
+        """
+        from neo4j import AsyncGraphDatabase
+
+        loop = asyncio.get_running_loop()
+        if self._driver is not None and self._driver_loop is None:
+            return self._driver
+        if self._driver is None or self._driver_loop is not loop:
+            if self._driver is not None:
+                logger.debug("Event loop changed; rebuilding Neo4j driver.")
+            self._driver = AsyncGraphDatabase.driver(
+                self._neo4j_uri, auth=self._neo4j_auth
+            )
+            self._driver_loop = loop
+        return self._driver
 
     @staticmethod
     def _merge_chunks(chunks: list[TextChunk], min_chars: int = 200) -> list[str]:
@@ -222,7 +261,7 @@ class GLiNEREngine:
         else:
             active_schema = self._schema
 
-        async with self._driver.session() as session:
+        async with self._get_driver().session() as session:
             for text in merged_texts:
                 result = self._extractor.extract(text, active_schema)
 
@@ -317,7 +356,7 @@ class GLiNEREngine:
         results: list[GraphFact] = []
         seen: set[str] = set()
 
-        async with self._driver.session() as session:
+        async with self._get_driver().session() as session:
             result = await session.run(cypher, parameters={"query": query, "limit": limit})
             records = await result.data()
 
@@ -351,7 +390,11 @@ class GLiNEREngine:
         return results[:limit]
 
     async def close(self) -> None:
-        await self._driver.close()
+        # No driver means it was never used from any loop — nothing to close.
+        if self._driver is not None:
+            await self._driver.close()
+            self._driver = None
+            self._driver_loop = None
 
 
 _engine: GraphEngine | None = None

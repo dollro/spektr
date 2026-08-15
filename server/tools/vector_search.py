@@ -10,7 +10,7 @@ import logging
 
 from qdrant_client import QdrantClient, models
 
-from config.constants import DENSE_COLLECTION
+from config.constants import DENSE_COLLECTION, DENSE_VECTOR_NAME
 from config.settings import settings
 from ingestion.embedder import Embedder, create_embedder
 from server.models import SearchResult
@@ -41,8 +41,6 @@ async def vector_search(
     content_type: str | None = None,
     source_file: str | None = None,
     session_id: str | None = None,
-    *,
-    _skip_rerank: bool = False,
 ) -> list[dict]:  # type: ignore[type-arg]
     """Search documents by semantic similarity.
 
@@ -56,7 +54,11 @@ async def vector_search(
         content_type: Optional MIME type filter.
         source_file: Optional source file name filter.
         session_id: Optional session ID for live session context.
-        _skip_rerank: Internal flag — skip reranking.
+
+    Keep every parameter positional-or-keyword. FastMCP marks keyword-only
+    parameters as required in the generated tool schema regardless of their
+    default, so a `*`-guarded argument here becomes mandatory for every MCP
+    client and makes the tool uncallable.
     """
     if not query or not query.strip():
         return []
@@ -93,6 +95,7 @@ async def vector_search(
         response = qdrant.query_points(
             collection_name=DENSE_COLLECTION,
             query=query_vector,
+            using=DENSE_VECTOR_NAME,
             query_filter=query_filter,
             limit=limit,
             with_payload=True,
@@ -112,10 +115,10 @@ async def vector_search(
                 ).model_dump()
             )
 
-        if settings.rerank_enabled and results and not _skip_rerank:
-            from server.tools.reranker import rerank
+        if settings.rerank_enabled and results:
+            from retrieval.rerank import rerank_dicts
 
-            results = await rerank(query, results, top_k=limit)
+            results = await rerank_dicts(query, results, top_k=limit)
 
         return results
     except Exception as exc:
@@ -147,12 +150,14 @@ def _dual_query(
         ],
     )
 
-    kb_conditions: list[models.Condition] = [
-        models.FieldCondition(
-            key="is_live",
-            match=models.MatchValue(value=False),
-        ),
-    ]
+    # Bulk KB points (Path A) never write an `is_live` key at all, so this
+    # must be `must_not: is_live == True` rather than `is_live == False OR
+    # is_null(is_live)`: Qdrant's IsNullCondition matches an explicit JSON
+    # null, not a missing key, so that should-clause matches zero real KB
+    # points. `must_not` naturally treats a missing field as "not equal to
+    # True". Same pattern as list_documents.py / list_document_chunks.py /
+    # retrieval/channels.py's build_kb_filter.
+    kb_conditions: list[models.Condition] = []
     if content_type is not None:
         kb_conditions.append(
             models.FieldCondition(
@@ -169,15 +174,11 @@ def _dual_query(
         )
 
     kb_filter = models.Filter(
-        should=[
-            models.Filter(must=kb_conditions),
-            # Also match points without is_live field (bulk KB)
-            models.Filter(
-                must=[
-                    models.IsNullCondition(
-                        is_null=models.PayloadField(key="is_live"),
-                    ),
-                ],
+        must=kb_conditions,
+        must_not=[
+            models.FieldCondition(
+                key="is_live",
+                match=models.MatchValue(value=True),
             ),
         ],
     )
@@ -185,6 +186,7 @@ def _dual_query(
     live_resp = qdrant.query_points(
         collection_name=DENSE_COLLECTION,
         query=query_vector,
+        using=DENSE_VECTOR_NAME,
         query_filter=live_filter,
         limit=limit,
         with_payload=True,
@@ -192,6 +194,7 @@ def _dual_query(
     kb_resp = qdrant.query_points(
         collection_name=DENSE_COLLECTION,
         query=query_vector,
+        using=DENSE_VECTOR_NAME,
         query_filter=kb_filter,
         limit=limit,
         with_payload=True,

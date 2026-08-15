@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import threading
 import time
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -14,7 +15,7 @@ from ingestion.embedder import Embedder, TokenBucket, create_embedder
 from ingestion.embedders.jina import JinaV4Embedder
 
 FIXTURES = Path(__file__).parent / "fixtures"
-DIMS = settings.jina_dense_dimensions
+DIMS = settings.dense_dimensions
 
 
 @pytest.fixture
@@ -37,15 +38,28 @@ class TestEmbedderProtocol:
         assert isinstance(JinaV4Embedder(api_key="k"), Embedder)
 
     def test_factory_returns_jina(self) -> None:
-        emb = create_embedder(api_key="k")
+        """Dispatch is on the route; ambient .env must not decide the test."""
+        with patch("ingestion.embedder.settings") as mock_settings:
+            mock_settings.embedding_route = "native"
+            mock_settings.embedding_model = "jina-v4"
+            emb = create_embedder(api_key="k")
         assert isinstance(emb, JinaV4Embedder)
 
-    def test_factory_unknown_provider(self) -> None:
-        with patch(
-            "ingestion.embedder.settings",
-        ) as mock_settings:
-            mock_settings.embedding_provider = "nope"
-            with pytest.raises(ValueError, match="Unknown embedding provider"):
+    def test_factory_returns_openrouter_for_openrouter_route(self) -> None:
+        from ingestion.embedders.openrouter import OpenRouterEmbedder
+
+        with patch("ingestion.embedder.settings") as mock_settings:
+            mock_settings.embedding_route = "openrouter"
+            mock_settings.embedding_model = "gemini-2"
+            emb = create_embedder(api_key="k")
+        assert isinstance(emb, OpenRouterEmbedder)
+
+    def test_factory_unknown_native_model(self) -> None:
+        """gemini-2 has no native client; the factory must say so, not guess."""
+        with patch("ingestion.embedder.settings") as mock_settings:
+            mock_settings.embedding_route = "native"
+            mock_settings.embedding_model = "gemini-2"
+            with pytest.raises(ValueError, match="No native client"):
                 create_embedder()
 
 
@@ -302,7 +316,7 @@ class TestLateChunking:
                 mock_s.jina_batch_size = 10
                 mock_s.jina_api_url = "https://api.jina.ai"
                 mock_s.jina_model = "jina-embeddings-v4"
-                mock_s.jina_dense_dimensions = DENSE_DIM
+                mock_s.dense_dimensions = DENSE_DIM
                 await embedder.embed_text(
                     [f"chunk {i}" for i in range(n_texts)],
                     late_chunking=True,
@@ -546,3 +560,57 @@ class TestEmbedderIntegration:
         result = await live_embedder.embed_query_multi_vector("test")
         assert len(result) > 0
         assert all(len(v) == 128 for v in result)
+
+
+class TestEventLoopIsolation:
+    """Regression: one shared embedder is used from several event loops.
+
+    CocoIndex runs file components concurrently on multiple worker threads,
+    each with its own asyncio loop, all sharing a single embedder instance.
+    The old implementation kept one ``self._client`` slot and recreated it
+    whenever the loop changed, so concurrent loops clobbered each other and an
+    in-flight request awaited a connection-pool lock owned by a different loop
+    (``RuntimeError: the current task is not holding this lock``). Resources
+    must instead be isolated per loop.
+    """
+
+    def test_client_is_stable_within_a_loop_under_concurrency(self) -> None:
+        emb = JinaV4Embedder(api_key="test-key")
+        mid = threading.Barrier(2)
+        results: dict[int, tuple[bool, int]] = {}
+        errors: list[BaseException] = []
+        keepalive: list[httpx.AsyncClient] = []  # keep clients alive so ids are stable
+
+        def worker(tag: int) -> None:
+            async def run() -> None:
+                c1, _ = emb._ensure_loop_resources()
+                mid.wait()  # hold both loops open & bound at the same time
+                c2, _ = emb._ensure_loop_resources()
+                keepalive.extend((c1, c2))
+                results[tag] = (c1 is c2, id(c1))
+
+            try:
+                asyncio.run(run())
+            except BaseException as exc:  # noqa: BLE001 — surface the loop-race crash
+                errors.append(exc)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert not errors, f"embedder raised across concurrent loops: {errors}"
+        assert results[0][0] is True, "client was recreated mid-loop (slot clobbered)"
+        assert results[1][0] is True, "client was recreated mid-loop (slot clobbered)"
+        assert results[0][1] != results[1][1], "two loops shared one client"
+
+    async def test_request_uses_the_current_loops_client(self) -> None:
+        emb = JinaV4Embedder(api_key="test-key")
+        client, _ = emb._ensure_loop_resources()
+        mock_resp = _mock_response([{"embedding": [0.1] * DIMS}])
+        with patch.object(
+            client, "post", new_callable=AsyncMock, return_value=mock_resp
+        ) as mock_post:
+            await emb.embed_text(["hi"])
+        mock_post.assert_awaited_once()

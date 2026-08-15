@@ -6,28 +6,43 @@ All configuration is loaded from a `.env` file (or real environment variables) v
 cp .env.example .env
 ```
 
+!!! warning "Empty values must not carry an inline comment"
+    Docker Compose's `env_file:` parser only strips an inline comment when a value precedes it. `FOO=  # note` therefore sets `FOO` to the literal string `# note` inside the container — not to empty. Put the comment on the line *above* any variable you intend to leave empty:
+
+    ```ini
+    # optional key prefix to restrict the scan
+    S3_PREFIX=
+    ```
+
+    Inline comments are fine on lines that do have a value. This only affects the containerised path; local runs read `.env` through python-dotenv, which strips them correctly either way. A garbage `S3_PREFIX` makes the bucket scan match nothing and ingest zero documents with no error, so the distinction matters.
+
+## Migrating an older `.env`
+
+`scripts/migrate_env.py` upgrades an env file written for the pre-CocoIndex-v1 stack (the one with PostgreSQL) to the current schema. See [Production Deployment](../deployment/production.md#migrating-an-existing-envprod).
+
 ## Embedding Provider
 
 | Variable | Default | Required | Description |
 |-|-|-|-|
-| `EMBEDDING_PROVIDER` | `jina` | No | Active embedding provider: `jina`, `voyage`, or `openrouter` |
+| `EMBEDDING_MODEL` | `gemini-2` | No | `jina-v4`, `voyage-4`, or `gemini-2` — determines capabilities and default dimensions |
+| `EMBEDDING_ROUTE` | `openrouter` | No | `native` (vendor API) or `openrouter` (gateway). Illegal pairs are rejected at startup |
+| `EMBEDDING_DIMENSIONS` | `0` | No | `0` = the model's default; MRL models accept smaller |
 
 Set this to choose the active provider, then configure the corresponding section below. See [Embeddings](../ingestion/embeddings.md) for details on switching providers.
 
-## Jina v4 (when `EMBEDDING_PROVIDER=jina`)
+## Jina v4 (when `EMBEDDING_MODEL=jina-v4`)
 
 | Variable | Default | Required | Description |
 |-|-|-|-|
 | `JINA_API_KEY` | — | If jina | API key for Jina v4 embedding service |
 | `JINA_API_URL` | `https://api.jina.ai` | No | Base URL (change for proxy/self-hosted) |
 | `JINA_MODEL` | `jina-embeddings-v4` | No | Jina embedding model name |
-| `JINA_DENSE_DIMENSIONS` | `2048` | No | Dimensionality of dense embeddings (Matryoshka: 128/256/512/1024/2048) |
 | `JINA_RPM` | `500` | No | Jina requests per minute (free=500, tier1=500, tier2=5000) |
 | `JINA_TPM` | `100000` | No | Jina tokens per minute (free=100k, tier1=10M, tier2=100M) |
 | `JINA_BATCH_SIZE` | `10` | No | Max texts per `embed_text` API call (lower to avoid TPM caps on long docs) |
 | `JINA_MAX_CONCURRENT` | `5` | No | Max concurrent requests to Jina API |
 
-## Voyage AI (when `EMBEDDING_PROVIDER=voyage`)
+## Voyage AI (when `EMBEDDING_MODEL=voyage-4`)
 
 | Variable | Default | Required | Description |
 |-|-|-|-|
@@ -35,28 +50,26 @@ Set this to choose the active provider, then configure the corresponding section
 | `VOYAGE_API_URL` | `https://api.voyageai.com` | No | Base URL |
 | `VOYAGE_TEXT_MODEL` | `voyage-4-large` | No | Text embedding model |
 | `VOYAGE_MULTIMODAL_MODEL` | `voyage-multimodal-3.5` | No | Image embedding model |
-| `VOYAGE_DENSE_DIMENSIONS` | `1024` | No | Output dimensions (256, 512, 1024, 2048) |
 | `VOYAGE_RPM` | `300` | No | Voyage requests per minute |
 | `VOYAGE_MAX_CONCURRENT` | `10` | No | Max concurrent requests to Voyage API |
 
-ColBERT multi-vector embeddings are not supported by Voyage; setting `MULTIVEC_ENABLED=true` with `EMBEDDING_PROVIDER=voyage` raises a validation error at startup.
+ColBERT multi-vector is not supported by Voyage; `MULTIVEC_ENABLED=true` raises a validation error at startup unless the active model+route pair supports it (only `jina-v4` + `native` does).
 
-## OpenRouter (when `EMBEDDING_PROVIDER=openrouter`)
+## OpenRouter (when `EMBEDDING_ROUTE=openrouter`)
 
-OpenAI-compatible `/v1/embeddings` endpoint. The default targets Google Gemini Embedding 2 (text-only, 3072d, MRL truncation). Any OpenRouter-served embedding model can be selected. **Text-only**: image embedding raises `NotImplementedError`, so use `jina` or `voyage` if your pipeline needs PDF page or image embeddings.
+OpenAI-compatible `/v1/embeddings` endpoint, serving `gemini-2` and `voyage-4`; the wire model id comes from the registry, not from a setting. Documents and queries are embedded asymmetrically via `input_type`. **Image embedding is supported for `gemini-2`** — text and images share one vector space, so `IMAGE_EMBED_STRATEGY=smart` works here. ColBERT multi-vector is not available, so `visual_search` still needs `jina-v4` + `native`.
 
 | Variable | Default | Required | Description |
 |-|-|-|-|
 | `OPENROUTER_API_KEY` | — | If openrouter | API key from <https://openrouter.ai/keys> |
 | `OPENROUTER_API_URL` | `https://openrouter.ai/api` | No | Base URL |
-| `OPENROUTER_MODEL` | `google/gemini-embedding-2-preview` | No | OpenRouter embedding model id |
-| `OPENROUTER_DENSE_DIMENSIONS` | `3072` | No | Output dimensions (Gemini Embedding 2 supports MRL: 768/1536/3072) |
+| `OPENROUTER_BATCH_SIZE` | `100` | No | Max inputs per call. Gemini hard-rejects more with a non-retryable 400 |
 | `OPENROUTER_RPM` | `300` | No | Requests per minute |
 | `OPENROUTER_MAX_CONCURRENT` | `10` | No | Max concurrent requests |
 | `OPENROUTER_HTTP_REFERER` | — | No | Optional `HTTP-Referer` header for openrouter.ai rankings |
 | `OPENROUTER_X_TITLE` | — | No | Optional `X-Title` header for openrouter.ai rankings |
 
-ColBERT multi-vector embeddings are not supported by OpenRouter; setting `MULTIVEC_ENABLED=true` with `EMBEDDING_PROVIDER=openrouter` raises a validation error at startup.
+ColBERT multi-vector is not available on this route (gemini-2 emits a single vector); `MULTIVEC_ENABLED=true` raises a validation error at startup, and `visual_search` requires `jina-v4` + `native`. `IMAGE_EMBED_STRATEGY=smart|all` *is* supported here — image points go to `documents_dense` and are retrieved by the ordinary dense channel.
 
 ## Qdrant
 
@@ -74,15 +87,18 @@ ColBERT multi-vector embeddings are not supported by OpenRouter; setting `MULTIV
 | `NEO4J_USER` | `neo4j` | No | Neo4j username |
 | `NEO4J_PASSWORD` | — | Yes | Neo4j password |
 
-## PostgreSQL
+## CocoIndex Pipeline State
+
+CocoIndex keeps its target-state ledger, memoization cache and component tree in a local LMDB directory — no database service is involved.
 
 | Variable | Default | Required | Description |
 |-|-|-|-|
-| `DATABASE_URL` | `postgresql://cocoindex:cocoindex@localhost:5432/cocoindex` | No | PostgreSQL connection URL for CocoIndex pipeline state |
+| `COCOINDEX_DB_PATH` | `state/cocoindex.db` | No | LMDB state *directory*. Lives under `state/` so the production `ingest_state` volume covers it |
+| `COCOINDEX_LMDB_MAP_SIZE` | 4 GiB (`4294967296`) | No | Read by CocoIndex itself, not by `config/settings.py`. Raise if the ledger outgrows the default map size |
 
 ## Document Source
 
-The ingestion pipeline reads files from exactly one source. Settings validation rejects `s3` without `S3_BUCKET_NAME`+`S3_SQS_QUEUE_URL`, and rejects `sharepoint` without all `SHAREPOINT_*` required fields populated.
+The ingestion pipeline reads files from exactly one source. Settings validation rejects `s3` without `S3_BUCKET_NAME`, and rejects `sharepoint` without all `SHAREPOINT_*` required fields populated.
 
 | Variable | Default | Required | Description |
 |-|-|-|-|
@@ -96,11 +112,16 @@ Credentials can be set explicitly here or left empty to use the default boto3 cr
 | Variable | Default | Required | Description |
 |-|-|-|-|
 | `S3_BUCKET_NAME` | — | When `DOCUMENT_SOURCE=s3` | S3 bucket containing source documents |
-| `S3_SQS_QUEUE_URL` | — | When `DOCUMENT_SOURCE=s3` | SQS queue URL for S3 event notifications |
+| `S3_PREFIX` | — | No | Optional key prefix restricting the scan to part of the bucket |
+| `S3_SQS_QUEUE_URL` | — | No | SQS queue used as a *trigger* for a catch-up scan in live mode. Empty falls back to interval-only sweeps |
+| `S3_SQS_DEBOUNCE_SECONDS` | `5` | No | Wait after the first event so a burst coalesces into a single update |
+| `S3_FULL_SCAN_INTERVAL_HOURS` | `24` | No | Safety-net sweep interval for missed or expired events (and the only trigger when no queue is configured) |
 | `AWS_REGION` | `us-east-1` | No | AWS region for S3 and SQS |
 | `AWS_ACCESS_KEY_ID` | — | No | Optional explicit access key (else default credential chain) |
 | `AWS_SECRET_ACCESS_KEY` | — | No | Optional explicit secret key |
 | `AWS_ENDPOINT_URL` | — | No | S3-compatible endpoint (e.g. `http://localhost:4566` for LocalStack) |
+
+CocoIndex v1's `amazon_s3` connector is scan-only — there is no built-in SQS push trigger. `ingestion/sqs_trigger.py` supplies the trigger externally; see [CocoIndex Pipeline](../ingestion/cocoindex.md#s3-sqs-as-a-trigger).
 
 See [AWS Setup](../deployment/aws-setup.md) for IAM permissions.
 
@@ -125,7 +146,7 @@ All six required fields below must be populated when `DOCUMENT_SOURCE=sharepoint
 | Variable | Default | Required | Description |
 |-|-|-|-|
 | `LLM_API_TYPE` | `anthropic` | No | LLM API type (`anthropic` or `openai`) |
-| `LLM_MODEL` | `claude-sonnet-4-20250514` | No | Model identifier for entity extraction and generation |
+| `LLM_MODEL` | `claude-sonnet-5` | No | Model identifier for entity extraction and generation |
 | `LLM_API_KEY` | — | Yes | API key for the configured LLM provider |
 | `LLM_BASE_URL` | — | No | Custom base URL for OpenAI-compatible servers (OpenRouter, Ollama, vLLM, LiteLLM) |
 
@@ -156,7 +177,8 @@ When `LLM_BASE_URL` is set, the **agent** uses an OpenAI-compatible client regar
 | Variable | Default | Required | Description |
 |-|-|-|-|
 | `PIPELINE_TIMEOUT` | `3600` | No | Per-file processing timeout in seconds (increase for large PDFs with graph ingestion) |
-| `PIPELINE_MAX_RETRIES` | `3` | No | Failures per file before the poison-pill swallows the error and lets CocoIndex mark it processed |
+| `PIPELINE_MAX_RETRIES` | `3` | No | Failures per file before the poison-pill swallows the error and lets CocoIndex write the file's memoization entry |
+| `PIPELINE_MAX_CONCURRENT_FILES` | `4` | No | Files processed in parallel (CocoIndex's `max_inflight_components`, whose own default of 1024 would blow past embedding rate limits) |
 | `GRAPHITI_CONCURRENCY` | `3` | No | Max concurrent Graphiti episode ingestions per page (bounded by LLM rate limits) |
 | `EXTRACTION_TIMEOUT` | `30` | No | Timeout in seconds for entity extraction |
 | `TOOL_TIMEOUT` | `30` | No | Timeout in seconds for MCP tool execution |
@@ -174,7 +196,7 @@ When `LLM_BASE_URL` is set, the **agent** uses an OpenAI-compatible client regar
 | Variable | Default | Required | Description |
 |-|-|-|-|
 | `SCHEMA_INDUCTION_ENABLED` | `true` | No | Enable per-document LLM schema induction for GLiNER2 (Path A only) |
-| `SCHEMA_INDUCTION_MODEL` | `claude-haiku-4-5-20251001` | No | Fast/cheap model used for schema proposals |
+| `SCHEMA_INDUCTION_MODEL` | — | No | Model used for schema proposals. Empty falls back to `LLM_MODEL`; set it to a cheaper/faster model to split the two. Must use the naming of whatever endpoint `LLM_BASE_URL` points at |
 | `SCHEMA_CACHE_TTL` | `3600` | No | Seconds to cache induced schemas before re-inducing |
 
 ## Feature Flags

@@ -172,7 +172,7 @@ When `SCHEMA_INDUCTION_ENABLED=true` (default) and `GRAPH_ENGINE=gliner`, the pi
 **How it works:**
 
 1. The pipeline takes a sample from the first 3 chunks of a document
-2. `SchemaInducer.induce(sample_text)` calls the LLM (`SCHEMA_INDUCTION_MODEL`, default Haiku) with a prompt asking for 3-8 entity types and 3-6 relationship types specific to the document's domain
+2. `SchemaInducer.induce(sample_text)` calls the LLM (`SCHEMA_INDUCTION_MODEL`, falling back to `LLM_MODEL` when unset) with a prompt asking for 3-8 entity types and 3-6 relationship types specific to the document's domain
 3. `merge_with_base(induced)` merges proposed types on top of the base schema (base types are never removed)
 4. The merged schema is passed to `GLiNEREngine.ingest(chunks, source_key, schema=merged)`
 

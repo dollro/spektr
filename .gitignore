@@ -1,5 +1,9 @@
 .env
 .env.prod
+# Backups of env files hold the same live credentials.
+.env.bak
+.env.*.bak
+*.env.bak
 __pycache__/
 .venv/
 *.pyc
@@ -13,4 +17,15 @@ site/
 state/
 eval-reports/
 backups/
-.mcp.json
+
+# Editor scratch files.
+*.swp
+*.swo
+*~
+
+# Local tooling state — per-developer, never shared.
+# .claude/settings.json and .mcp.json ARE tracked; .mcp.json holds only
+# ${VAR} placeholders. The secrets they expand to live in
+# .claude/settings.local.json, which is personal and never shared.
+.claude/settings.local.json
+.serena/

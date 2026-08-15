@@ -10,19 +10,28 @@ import logging
 import os
 from collections.abc import Iterable
 
-# Graphiti reads EMBEDDING_DIM at import time for vector index sizing
-os.environ.setdefault("EMBEDDING_DIM", str(512))
+from config.settings import settings
 
-from graphiti_core import Graphiti
-from graphiti_core.cross_encoder.openai_reranker_client import (
+# Graphiti reads EMBEDDING_DIM at import time to size any vector index it
+# creates, so this must run BEFORE graphiti_core is imported — hence the
+# deliberate import ordering and the E402 waivers below.
+#
+# It must track the active model. A literal here sat at 512 from when that
+# was the Jina default, which would size an index for 512 while
+# name_embedding holds 768 floats — entity similarity would then silently
+# match nothing. No vector index exists today (cosine is computed per node),
+# which is the only reason the stale value stayed harmless.
+os.environ.setdefault("EMBEDDING_DIM", str(settings.dense_dimensions))
+
+from graphiti_core import Graphiti  # noqa: E402
+from graphiti_core.cross_encoder.openai_reranker_client import (  # noqa: E402
     OpenAIRerankerClient,
 )
-from graphiti_core.embedder.client import EmbedderClient
-from graphiti_core.llm_client import LLMConfig
-from graphiti_core.llm_client.openai_generic_client import OpenAIGenericClient
+from graphiti_core.embedder.client import EmbedderClient  # noqa: E402
+from graphiti_core.llm_client import LLMConfig  # noqa: E402
+from graphiti_core.llm_client.openai_generic_client import OpenAIGenericClient  # noqa: E402
 
-from config.settings import settings
-from ingestion.embedder import create_embedder
+from ingestion.embedder import create_embedder  # noqa: E402
 
 logger = logging.getLogger(__name__)
 

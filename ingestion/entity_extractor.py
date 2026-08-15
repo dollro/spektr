@@ -63,7 +63,7 @@ class AnthropicClient:
     def __init__(
         self,
         api_key: str | None = None,
-        model: str = "claude-sonnet-4-20250514",
+        model: str = "claude-sonnet-5",
     ) -> None:
         import anthropic
 
@@ -117,13 +117,14 @@ class OpenAIClient:
         return response.choices[0].message.content or ""
 
 
-def get_llm_client() -> LLMClient:
-    """Factory: create LLM client based on settings."""
+def get_llm_client(model: str | None = None) -> LLMClient:
+    """Factory: create LLM client based on settings, optionally overriding the model."""
     provider = settings.llm_api_type.lower()
+    name = model or settings.llm_model
     if provider == "anthropic":
-        return AnthropicClient(model=settings.llm_model)
+        return AnthropicClient(model=name)
     if provider == "openai":
-        return OpenAIClient(model=settings.llm_model)
+        return OpenAIClient(model=name)
     msg = f"Unsupported LLM provider: {provider}"
     raise ValueError(msg)
 

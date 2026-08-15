@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+import threading
+import weakref
 
 import httpx
 from tenacity import (
@@ -37,36 +39,69 @@ class VoyageEmbedder:
         self._multimodal_url = f"{settings.voyage_api_url}/v1/multimodalembeddings"
         self._text_model = settings.voyage_text_model
         self._multimodal_model = settings.voyage_multimodal_model
-        self._dimensions = settings.voyage_dense_dimensions
+        self._dimensions = settings.dense_dimensions
         self._max_concurrent = settings.voyage_max_concurrent
         self._rpm_limiter = TokenBucket(
             tokens_per_sec=settings.voyage_rpm / 60.0,
             burst=settings.voyage_max_concurrent,
         )
-        # Loop-bound resources — recreated when the event loop changes
+        # httpx.AsyncClient and asyncio.Semaphore are bound to the event loop
+        # they were created on. CocoIndex runs file components concurrently on
+        # multiple worker threads, each with its own loop, all sharing this one
+        # embedder instance. A single shared client slot therefore gets clobbered
+        # across loops, and an in-flight request ends up awaiting a connection-pool
+        # lock owned by a different loop ("RuntimeError: the current task is not
+        # holding this lock"). Keep the loop-affine resources isolated per loop so
+        # each loop only ever touches the client it created. Keyed weakly so
+        # entries drop when a worker loop is garbage-collected.
+        self._loop_resources: weakref.WeakKeyDictionary[
+            asyncio.AbstractEventLoop, tuple[httpx.AsyncClient, asyncio.Semaphore]
+        ] = weakref.WeakKeyDictionary()
+        self._resources_lock = threading.Lock()
+        # Point at the current loop's resources for introspection/back-compat.
         self._client: httpx.AsyncClient | None = None
         self._semaphore: asyncio.Semaphore | None = None
         self._bound_loop: asyncio.AbstractEventLoop | None = None
         self._tokens_used: float = 0.0
 
-    def _ensure_loop_resources(self) -> None:
-        """Recreate loop-bound async resources when the event loop changes."""
+    def _build_client(self) -> httpx.AsyncClient:
+        return httpx.AsyncClient(
+            headers={
+                "Authorization": f"Bearer {self._api_key}",
+                "Content-Type": "application/json",
+            },
+            timeout=httpx.Timeout(60.0),
+        )
+
+    def _ensure_loop_resources(
+        self,
+    ) -> tuple[httpx.AsyncClient, asyncio.Semaphore]:
+        """Return the (client, semaphore) bound to the running loop.
+
+        Creates them on first use per loop and reuses them thereafter, so
+        connection pooling is preserved within a loop while never sharing a
+        client across loops. Thread-safe: multiple worker loops may call this
+        concurrently.
+        """
         loop = asyncio.get_running_loop()
-        if self._bound_loop is not loop:
-            self._client = httpx.AsyncClient(
-                headers={
-                    "Authorization": f"Bearer {self._api_key}",
-                    "Content-Type": "application/json",
-                },
-                timeout=httpx.Timeout(60.0),
-            )
-            self._semaphore = asyncio.Semaphore(self._max_concurrent)
+        with self._resources_lock:
+            resources = self._loop_resources.get(loop)
+            if resources is None:
+                resources = (self._build_client(), asyncio.Semaphore(self._max_concurrent))
+                self._loop_resources[loop] = resources
+            # Best-effort introspection handles; the request path uses the
+            # returned locals, not these, so a concurrent overwrite is harmless.
+            self._client, self._semaphore = resources
             self._bound_loop = loop
+            return resources
 
     async def close(self) -> None:
-        """Close the underlying HTTP client."""
-        if self._client is not None:
-            await self._client.aclose()
+        """Close every per-loop HTTP client (best effort)."""
+        for client, _ in list(self._loop_resources.values()):
+            try:
+                await client.aclose()
+            except Exception:  # noqa: BLE001 — closing a foreign-loop client may fail
+                pass
 
     @property
     def tokens_used(self) -> float:
@@ -150,10 +185,10 @@ class VoyageEmbedder:
         timeout: float | None = None,
     ) -> dict:  # type: ignore[type-arg]
         """Send request with rate limiting + concurrency control."""
-        self._ensure_loop_resources()
+        client, semaphore = self._ensure_loop_resources()
         await self._rpm_limiter.acquire()
-        async with self._semaphore:  # type: ignore[union-attr]
-            return await self._request_with_retry(url, payload, timeout)
+        async with semaphore:
+            return await self._request_with_retry(client, url, payload, timeout)
 
     @retry(
         wait=wait_exponential(multiplier=1, min=2, max=30),
@@ -167,6 +202,7 @@ class VoyageEmbedder:
     )
     async def _request_with_retry(
         self,
+        client: httpx.AsyncClient,
         url: str,
         payload: dict,  # type: ignore[type-arg]
         timeout: float | None = None,
@@ -175,7 +211,7 @@ class VoyageEmbedder:
         kwargs: dict = {"json": payload}  # type: ignore[type-arg]
         if timeout is not None:
             kwargs["timeout"] = timeout
-        resp = await self._client.post(url, **kwargs)  # type: ignore[union-attr]
+        resp = await client.post(url, **kwargs)
         if resp.status_code != 200:
             exc = httpx.HTTPStatusError(
                 f"Voyage API error: {resp.text}",

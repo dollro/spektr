@@ -60,7 +60,7 @@ async def _call_llm(prompt: str) -> str:
     """Call the schema induction LLM (cheap/fast model)."""
     from ingestion.entity_extractor import get_llm_client
 
-    client = get_llm_client()
+    client = get_llm_client(settings.schema_induction_model)
     return await client.chat(
         [{"role": "user", "content": prompt}],
     )

@@ -11,13 +11,18 @@ COPY --from=ghcr.io/astral-sh/uv:0.5 /uv /uvx /bin/
 
 WORKDIR /app
 
+# --extra gliner: GRAPH_ENGINE is a runtime setting, so the image must carry
+# both engines or `GRAPH_ENGINE=gliner` fails at first graph-engine use — at
+# ingest time, not build time, because the gliner2 import is lazy. The extra
+# adds only gliner/gliner2/sentencepiece; torch is already a base dep via
+# docling. Omitting it here is the same trap as a bare `uv sync` locally.
 COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-install-project --no-dev
+    uv sync --frozen --no-install-project --no-dev --extra gliner
 
 COPY . .
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev
+    uv sync --frozen --no-dev --extra gliner
 
 
 FROM python:3.13-slim AS runtime

@@ -9,7 +9,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 from ingestion.file_processor import Page
-from ingestion.pipeline import _build_page_tasks
+from ingestion.page_processor import _build_page_tasks
 
 
 class TestDualEmbedMixedPages:
@@ -25,7 +25,7 @@ class TestDualEmbedMixedPages:
             has_visual_content=True,
         )
 
-        with patch("ingestion.pipeline.settings") as mock_settings:
+        with patch("ingestion.page_processor.settings") as mock_settings:
             mock_settings.image_embed_strategy = "all"
             mock_settings.multivec_enabled = False
             mock_settings.vlm_generation_enabled = False
@@ -35,7 +35,8 @@ class TestDualEmbedMixedPages:
                 source_file="report.pdf",
                 mime="application/pdf",
                 now="2026-03-05T00:00:00Z",
-                qdrant=MagicMock(),
+                dense=MagicMock(),
+                multivec=None,
                 embedder=MagicMock(),
                 graph_engine=None,
             )
@@ -55,7 +56,7 @@ class TestDualEmbedMixedPages:
             has_visual_content=True,
         )
 
-        with patch("ingestion.pipeline.settings") as mock_settings:
+        with patch("ingestion.page_processor.settings") as mock_settings:
             mock_settings.image_embed_strategy = "smart"
             mock_settings.multivec_enabled = False
             mock_settings.vlm_generation_enabled = False
@@ -65,7 +66,8 @@ class TestDualEmbedMixedPages:
                 source_file="scan.pdf",
                 mime="application/pdf",
                 now="2026-03-05T00:00:00Z",
-                qdrant=MagicMock(),
+                dense=MagicMock(),
+                multivec=None,
                 embedder=MagicMock(),
                 graph_engine=None,
             )
@@ -84,7 +86,7 @@ class TestDualEmbedMixedPages:
             content_type="text",
         )
 
-        with patch("ingestion.pipeline.settings") as mock_settings:
+        with patch("ingestion.page_processor.settings") as mock_settings:
             mock_settings.multivec_enabled = False
             mock_settings.vlm_generation_enabled = False
 
@@ -93,7 +95,8 @@ class TestDualEmbedMixedPages:
                 source_file="readme.md",
                 mime="text/markdown",
                 now="2026-03-05T00:00:00Z",
-                qdrant=MagicMock(),
+                dense=MagicMock(),
+                multivec=None,
                 embedder=MagicMock(),
                 graph_engine=None,
             )
@@ -112,7 +115,7 @@ class TestDualEmbedMixedPages:
             content_type="image",
         )
 
-        with patch("ingestion.pipeline.settings") as mock_settings:
+        with patch("ingestion.page_processor.settings") as mock_settings:
             mock_settings.multivec_enabled = False
             mock_settings.vlm_generation_enabled = False
 
@@ -121,7 +124,8 @@ class TestDualEmbedMixedPages:
                 source_file="photo.jpg",
                 mime="image/jpeg",
                 now="2026-03-05T00:00:00Z",
-                qdrant=MagicMock(),
+                dense=MagicMock(),
+                multivec=None,
                 embedder=MagicMock(),
                 graph_engine=None,
             )
@@ -145,7 +149,7 @@ class TestImageEmbedStrategy:
             has_visual_content=False,
         )
 
-        with patch("ingestion.pipeline.settings") as mock_settings:
+        with patch("ingestion.page_processor.settings") as mock_settings:
             mock_settings.image_embed_strategy = "smart"
             mock_settings.multivec_enabled = False
             mock_settings.vlm_generation_enabled = False
@@ -155,7 +159,8 @@ class TestImageEmbedStrategy:
                 source_file="report.pdf",
                 mime="application/pdf",
                 now="2026-03-05T00:00:00Z",
-                qdrant=MagicMock(),
+                dense=MagicMock(),
+                multivec=None,
                 embedder=MagicMock(),
                 graph_engine=None,
             )
@@ -175,7 +180,7 @@ class TestImageEmbedStrategy:
             has_visual_content=True,
         )
 
-        with patch("ingestion.pipeline.settings") as mock_settings:
+        with patch("ingestion.page_processor.settings") as mock_settings:
             mock_settings.image_embed_strategy = "smart"
             mock_settings.multivec_enabled = False
             mock_settings.vlm_generation_enabled = False
@@ -185,7 +190,8 @@ class TestImageEmbedStrategy:
                 source_file="report.pdf",
                 mime="application/pdf",
                 now="2026-03-05T00:00:00Z",
-                qdrant=MagicMock(),
+                dense=MagicMock(),
+                multivec=None,
                 embedder=MagicMock(),
                 graph_engine=None,
             )
@@ -205,7 +211,7 @@ class TestImageEmbedStrategy:
             has_visual_content=False,
         )
 
-        with patch("ingestion.pipeline.settings") as mock_settings:
+        with patch("ingestion.page_processor.settings") as mock_settings:
             mock_settings.image_embed_strategy = "all"
             mock_settings.multivec_enabled = False
             mock_settings.vlm_generation_enabled = False
@@ -215,7 +221,8 @@ class TestImageEmbedStrategy:
                 source_file="report.pdf",
                 mime="application/pdf",
                 now="2026-03-05T00:00:00Z",
-                qdrant=MagicMock(),
+                dense=MagicMock(),
+                multivec=None,
                 embedder=MagicMock(),
                 graph_engine=None,
             )

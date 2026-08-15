@@ -2,6 +2,9 @@
 
 *A 2-hour reading guide for understanding what we're building and why each piece exists.*
 
+!!! note "Background reading"
+    This is conceptual background, not an API reference. The CocoIndex snippets below are written against the v0 flow API (`@cocoindex.flow_def`, `FlowBuilder`, collectors, `export()`), which Spektr no longer uses. For the current shape — a `coco.App` with one memoized component per file, declared Qdrant targets, and LMDB-backed state — see [CocoIndex Pipeline](../ingestion/cocoindex.md).
+
 ---
 
 ## Table of Contents
@@ -222,7 +225,7 @@ The MCP server exposes both as separate tools, and the agent decides which to us
 
 ### Why Not Just PostgreSQL + pgvector?
 
-PostgreSQL with the pgvector extension can do vector similarity search. We're already running PostgreSQL for CocoIndex. So why add another database?
+PostgreSQL with the pgvector extension can do vector similarity search. So why run a dedicated vector database at all?
 
 The answer is **multi-vector support**. pgvector stores one vector per row and computes cosine similarity between single vectors. It has no concept of multi-vector documents or MaxSim scoring. Qdrant does.
 
@@ -480,17 +483,17 @@ def rag_ingestion_flow(flow_builder, data_scope):
 
 You never write a loop. CocoIndex figures out what to process based on what changed since the last run.
 
-### State Tracking via PostgreSQL
+### State Tracking
 
-CocoIndex uses PostgreSQL to track pipeline state — which files have been processed, what the hash of each file was, which chunks were produced. This is why we have PostgreSQL in the stack even though we use Qdrant for vectors.
+CocoIndex tracks pipeline state — which files have been processed, what the fingerprint of each file was, which target records were produced — in a local LMDB directory (`COCOINDEX_DB_PATH`, default `state/cocoindex.db`). No database service is involved.
 
 When a file changes in S3:
-1. SQS delivers the change event
-2. CocoIndex compares the new file hash against the stored hash
+1. An SQS event triggers a catch-up scan
+2. CocoIndex compares the object against what it recorded
 3. If different, it re-runs the pipeline for that file only
 4. It deletes old vectors/graph nodes for that file
 5. It creates new vectors/graph nodes
-6. It updates the state in PostgreSQL
+6. It updates the state in LMDB
 
 This is the "smart caching" that makes incremental updates efficient.
 
@@ -555,22 +558,13 @@ The AWS configuration involves:
 2. **Configure S3 event notifications** to send `ObjectCreated:*` and `ObjectRemoved:*` events to the queue
 3. **Set IAM permissions** for CocoIndex to read from S3 and receive/delete SQS messages
 
-CocoIndex's S3 source supports SQS natively:
-
-```python
-cocoindex.sources.AmazonS3(
-    bucket_name="spektr-docs",
-    sqs_queue_url="https://sqs.eu-central-1.amazonaws.com/123456789/spektr-events",
-    included_patterns=["*.pdf", "*.png", "*.md"],
-    binary=True,
-)
-```
+CocoIndex's S3 connector is scan-only, so Spektr uses SQS as an external *trigger*: `ingestion/sqs_trigger.py` long-polls the queue and, on an event, debounces and then runs one ordinary catch-up scan — only objects that actually changed get downloaded. See [S3 + SQS setup](../ingestion/s3-sqs-setup.md).
 
 ### File Delete Handling
 
-When a file is deleted from S3, the SQS event includes `ObjectRemoved:Delete`. CocoIndex handles this by:
+When a file is deleted from S3, the SQS event includes `ObjectRemoved:Delete`. The next scan no longer lists the object, and CocoIndex handles the rest by:
 
-1. Finding all chunks/pages that were produced from this file (tracked in PostgreSQL state)
+1. Finding all chunks/pages that were produced from this file (tracked in its LMDB state)
 2. Deleting the corresponding points from Qdrant
 3. Deleting the corresponding nodes and relationships from Neo4j
 4. Updating its internal state
@@ -773,7 +767,7 @@ This multi-step reasoning is what makes agentic RAG more powerful than simple re
       → Write entities + relationships to Neo4j
       → Link chunks to entities via MENTIONS
 
-6. CocoIndex updates PostgreSQL state (file hash, chunk IDs, timestamps)
+6. CocoIndex updates its LMDB state (file fingerprint, target records, timestamps)
 
 7. Document is now searchable across all three retrieval modes
 ```
@@ -1047,5 +1041,4 @@ Not covered in body. `ingestion/schema_inducer.py` can propose document-specific
 
 - `qdrant/qdrant:v1.17.0`
 - `neo4j:5.26-community`
-- `postgres:17.2`
 

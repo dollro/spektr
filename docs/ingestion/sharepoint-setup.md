@@ -1,8 +1,8 @@
 # SharePoint Setup — Step-by-Step Manual
 
-A copy-paste walkthrough for wiring an O365 SharePoint document library as Spektr's ingestion source. The syncer mirrors a single in-scope folder to local disk every few minutes; CocoIndex's existing `LocalFile` source picks it up unchanged.
+A copy-paste walkthrough for wiring an O365 SharePoint document library as Spektr's ingestion source. The syncer mirrors a single in-scope folder to local disk every few minutes; CocoIndex's local filesystem watcher picks it up unchanged.
 
-This guide is the SharePoint counterpart to `s3-sqs-setup.md`. The three paths (local / S3 / SharePoint) are selected explicitly by the `DOCUMENT_SOURCE` env var. Settings validation rejects misconfigurations at startup — for example, `DOCUMENT_SOURCE=sharepoint` without all `SHAREPOINT_*` fields populated, or `DOCUMENT_SOURCE=s3` without bucket+queue. The `sharepoint-sync` service additionally refuses to start unless `DOCUMENT_SOURCE=sharepoint`, so it can never silently mirror files that no one ingests.
+This guide is the SharePoint counterpart to `s3-sqs-setup.md`. The three paths (local / S3 / SharePoint) are selected explicitly by the `DOCUMENT_SOURCE` env var. Settings validation rejects misconfigurations at startup — for example, `DOCUMENT_SOURCE=sharepoint` without all `SHAREPOINT_*` fields populated, or `DOCUMENT_SOURCE=s3` without a bucket name. The `sharepoint-sync` service additionally refuses to start unless `DOCUMENT_SOURCE=sharepoint`, so it can never silently mirror files that no one ingests.
 
 ---
 
@@ -11,14 +11,14 @@ This guide is the SharePoint counterpart to `s3-sqs-setup.md`. The three paths (
 ```
 SharePoint folder --(MS Graph delta)--> sharepoint-sync --(write)--> ./documents/sharepoint/
                                                                             |
-                                                            (LocalFile source via CocoIndex)
+                                                    (localfs.walk_dir watcher via CocoIndex)
                                                                             v
                                                                   ingest-live (--live)
                                                                             |
                                                                   Qdrant + Neo4j
 ```
 
-The syncer polls Microsoft Graph at `sharepoint_sync_interval_seconds` (default 180s), filters delta entries to `sharepoint_root_folder_path`, downloads new/changed files into the mirror dir, and **propagates deletions** by removing the local copy. CocoIndex's `target_connector.py` then purges Qdrant points and Neo4j nodes/edges for the deleted file — full parity with the S3+SQS path.
+The syncer polls Microsoft Graph at `sharepoint_sync_interval_seconds` (default 180s), filters delta entries to `sharepoint_root_folder_path`, downloads new/changed files into the mirror dir, and **propagates deletions** by removing the local copy. CocoIndex then reconciles the vanished file to non-existence: it deletes the file's Qdrant points by id, and `ingestion/graph_target.py` purges its Neo4j episodes/entities — full parity with the S3 path.
 
 | # | Thing | Lives on | Purpose |
 |-|-|-|-|
@@ -185,11 +185,17 @@ task ingest-live       # in another terminal, watches ./documents/sharepoint/ vi
 Drop a PDF into the SharePoint folder. Within `SHAREPOINT_SYNC_INTERVAL_SECONDS`, expect:
 
 - The file appears under `documents/sharepoint/`.
-- CocoIndex picks it up — a row appears in the Postgres tracking table.
+- CocoIndex picks it up — the log shows `Processing file: sharepoint/<name>` and an `Update finished: 1 added, …` line.
 - Qdrant gets vector points (verify with `task smoke "<query from doc>"`).
 - Neo4j gets entities (verify with `task smoke-graph "<entity>"`).
 
 In production, both processes run as the `sharepoint-sync` and `ingest-live` services in `docker-compose.prod.yml`; they share the `sharepoint_documents` named volume.
+
+`sharepoint-sync` sits behind the `sharepoint` compose profile, so a plain `task prod:up` does not start it — otherwise its `DOCUMENT_SOURCE` guard (exit 2) would crash-loop against `restart: unless-stopped` on every local/S3 deployment. Start it explicitly:
+
+```bash
+docker compose -f docker-compose.prod.yml --env-file .env.prod --profile sharepoint up -d
+```
 
 ---
 
@@ -219,7 +225,7 @@ rm -rf state/sharepoint documents/sharepoint
 task sharepoint-sync-once
 ```
 
-The next ingestion cycle will purge orphan vectors via `target_connector.py` (CocoIndex's deletion path) — verify with `task doctor` once the sync completes.
+The next ingestion cycle will purge orphan vectors through CocoIndex's deletion path (points by id, graph data via `ingestion/graph_target.py`) — verify with `task doctor` once the sync completes.
 
 ### Deletion semantics (parity with S3+SQS)
 

@@ -49,15 +49,15 @@ async def main(query: str) -> None:
     # Summary
     vec_count = len(vec_results) if isinstance(vec_results, list) else 0
     graph_count = len(graph_results) if isinstance(graph_results, list) else 0
-    hybrid_vec = len(hybrid_results.get("vector_results", []))
-    hybrid_graph = len(hybrid_results.get("graph_results", []))
+    hybrid_results_count = len(hybrid_results.get("results", []))
+    hybrid_graph = len(hybrid_results.get("graph_facts", []))
 
     print(f"\n{'=' * 60}")
     print("  Summary")
     print(f"{'=' * 60}")
     print(f"  vector_search:  {vec_count} results")
     print(f"  graph_search:   {graph_count} results")
-    print(f"  hybrid_search:  {hybrid_vec} vector + {hybrid_graph} graph results")
+    print(f"  hybrid_search:  {hybrid_results_count} fused + {hybrid_graph} graph facts")
 
     has_errors = any(
         isinstance(r, dict) and "error" in r

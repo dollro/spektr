@@ -113,27 +113,31 @@ class Embedder(Protocol):
 
 
 def create_embedder(api_key: str | None = None) -> Embedder:
-    """Instantiate the configured embedding provider.
+    """Instantiate the client for the configured model+route pair.
 
-    Reads ``settings.embedding_provider`` (default ``"jina"``) and lazily
-    imports the corresponding implementation. Provider-specific API keys
-    fall back to settings if *api_key* is not given.
+    Dispatch is on the **route**, because that is what determines the wire
+    protocol; the route's client resolves the model id itself. Legality of
+    the pair is enforced by Settings, so an illegal combination fails at
+    startup rather than here.
+
+    API keys fall back to settings when *api_key* is not given.
     """
-    provider = settings.embedding_provider
-    if provider == "jina":
-        from ingestion.embedders.jina import JinaV4Embedder
-
-        return JinaV4Embedder(api_key=api_key)
-
-    if provider == "voyage":
-        from ingestion.embedders.voyage import VoyageEmbedder
-
-        return VoyageEmbedder(api_key=api_key)
-
-    if provider == "openrouter":
+    route = settings.embedding_route
+    if route == "openrouter":
         from ingestion.embedders.openrouter import OpenRouterEmbedder
 
         return OpenRouterEmbedder(api_key=api_key)
 
-    msg = f"Unknown embedding provider: {provider!r}"
+    # route == "native": one client per vendor API.
+    if settings.embedding_model == "jina-v4":
+        from ingestion.embedders.jina import JinaV4Embedder
+
+        return JinaV4Embedder(api_key=api_key)
+
+    if settings.embedding_model == "voyage-4":
+        from ingestion.embedders.voyage import VoyageEmbedder
+
+        return VoyageEmbedder(api_key=api_key)
+
+    msg = f"No native client for embedding model {settings.embedding_model!r}"
     raise ValueError(msg)

@@ -14,10 +14,16 @@ Pick whichever you're comfortable with. The CLI path is faster and reproducible;
 ## How the pieces fit together
 
 ```
-S3 bucket --(event notification)--> SQS queue <--(poll)-- Spektr ingestion
-                                       |
-                                  (DLQ on N retries)
+S3 bucket --(event notification)--> SQS queue <--(long-poll)-- Spektr ingestion
+     ^                                 |                           |
+     |                            (DLQ on N retries)               |
+     +--------------(catch-up scan: list changed objects)----------+
 ```
+
+!!! note "SQS is a trigger, not a transport"
+    CocoIndex v1's `amazon_s3` connector is scan-only — it has no built-in SQS support. Spektr's `ingestion/sqs_trigger.py` long-polls the queue and, on an event, debounces and then runs one ordinary catch-up scan. The file bytes always come from S3, never from the message body, and only objects that actually changed are downloaded. See [CocoIndex Pipeline](cocoindex.md#s3-sqs-as-a-trigger).
+
+    The queue is therefore **optional**: without `S3_SQS_QUEUE_URL`, live mode falls back to sweeping every `S3_FULL_SCAN_INTERVAL_HOURS` (default 24). Everything below is about getting change latency down to seconds.
 
 You wire up **four independent things**, each with its own policy in a different AWS console. People get confused because nothing tells you up front that all four are required.
 
@@ -276,7 +282,7 @@ S3 console → bucket → **Properties** tab → scroll to **Event notifications
 - **Save**
 
 !!! warning "Existing objects don't retro-trigger"
-    S3 only publishes events for PUT/DELETE operations *after* the notification is configured. Objects uploaded earlier will never arrive via SQS. Either re-upload them, or run a one-shot `task ingest` to let CocoIndex's initial scan pick them up.
+    S3 only publishes events for PUT/DELETE operations *after* the notification is configured. Objects uploaded earlier will never arrive via SQS — but they don't have to: the daemon's startup sweep and its periodic interval sweep both list the bucket, so pre-existing objects are picked up anyway. A one-shot `task ingest` does the same thing immediately.
 
 !!! note "Suffix filters"
     S3 filter rules use OR logic for suffix filters within a single configuration, and you can only have one filter set per notification. Don't try to be clever here — Spektr's `included_patterns` setting handles file-type matching downstream. Leave the S3 filter empty unless you want S3-side cost savings.
@@ -355,7 +361,10 @@ User → **Security credentials** tab → **Create access key** → "Application
 ```bash
 DOCUMENT_SOURCE=s3
 S3_BUCKET_NAME=spektr-prod-documents
+S3_PREFIX=                    # optional: restrict the scan to a key prefix
 S3_SQS_QUEUE_URL=https://sqs.eu-north-1.amazonaws.com/111122223333/spektr-prod-ingest-events
+S3_SQS_DEBOUNCE_SECONDS=5     # coalesce an event burst into a single scan
+S3_FULL_SCAN_INTERVAL_HOURS=24  # safety-net sweep for missed/expired events
 AWS_REGION=eu-north-1
 AWS_ACCESS_KEY_ID=AKIA…
 AWS_SECRET_ACCESS_KEY=…
@@ -365,16 +374,18 @@ AWS_ENDPOINT_URL=
 !!! danger "`.env` comment parsing"
     Pydantic-settings / python-dotenv treats **everything after `=`** as the value when the line has only whitespace before `#`. `AWS_ENDPOINT_URL=   # leave empty for real AWS` ends up as the literal string `"# leave empty for real AWS"`, which boto3 rejects with `Invalid endpoint`. Set the value to an empty string with nothing after it: `AWS_ENDPOINT_URL=`.
 
-The pipeline's `run_pipeline` function exports these into `os.environ` before `cocoindex.init()`, so CocoIndex's Rust S3 SDK (which doesn't see Pydantic Settings) has a region available. You don't have to do this by hand.
+These are read from `Settings` and passed explicitly to the `aiobotocore` S3 and SQS clients — each falling back to the default boto3 credential chain when left empty. Nothing is exported into `os.environ`.
 
 ---
 
 ## Step 7 — Smoke test
 
 ```bash
-task up                       # qdrant + neo4j + postgres
-task ingest-live              # daemon: polls SQS; Ctrl-C to stop
+task up                       # qdrant + neo4j
+task ingest-live              # daemon: startup sweep, then long-polls SQS; Ctrl-C to stop
 ```
+
+The daemon logs `SQS trigger active on <queue-url> (debounce 5.0s, sweep every 24.0h)` once it's watching.
 
 In another shell, upload a PDF:
 
@@ -385,14 +396,16 @@ aws s3 cp tests/fixtures/sample.pdf s3://spektr-prod-documents/sample.pdf
 Within a few seconds you should see:
 
 ```
+SQS trigger: 1 event(s) coalesced
 Processing file: sample.pdf
 Using Docling HybridChunker: N chunks for sample.pdf
-Token usage for sample.pdf: … estimated tokens
 Finished file: sample.pdf in Xms
-RagIngestion.files (change stream): 1/1 source rows: 1 added
+Update finished: 1 added, 0 reprocessed, 0 unchanged, 0 deleted, 0 errors
 ```
 
-Delete the object — same flow but with `1 deleted` at the end, and a `Deleted Qdrant points for sample.pdf` log from `ingestion.target_connector`.
+Delete the object — same flow but with `1 deleted` at the end, plus a `Source file removed, cleaning up graph data for sample.pdf` log from `ingestion.graph_target`. The Qdrant points are deleted by CocoIndex itself, by point id.
+
+Messages are only removed from the queue after an update that reported **zero** errors, so a failed file replays its event rather than dropping it.
 
 You can also peek at the queue directly:
 
@@ -413,8 +426,9 @@ aws sqs get-queue-attributes \
 | `AccessDenied sqs:SendMessage` | SQS policy missing/wrong | Step 2 |
 | `put-bucket-notification-configuration` returns `Unable to validate destination` | Same as above — S3 tested the SQS policy and it failed | Step 2 |
 | `Invalid endpoint: # leave empty…` | `.env` comment bug | Step 6 callout |
-| `A region must be set when sending requests to S3` | Rust SDK doesn't see `.env` | Run via `task ingest` / `task ingest-live`, not raw `python` |
-| `1 source rows: 1 no change` despite new file | CocoIndex has stale tracking; no SQS event fired | `task doctor` → `task doctor-fix` → retry |
+| `NoRegionError` / credential errors | `AWS_REGION` or the key pair is empty **and** no ambient credential chain is available | Set `AWS_REGION` (+ keys, or use an instance role) in `.env` — they're passed straight to the client |
+| Nothing happens for hours after an upload | `S3_SQS_QUEUE_URL` is empty, so the only trigger is the interval sweep | Set the queue URL, or lower `S3_FULL_SCAN_INTERVAL_HOURS` |
+| `0 added, N unchanged` despite a new file | The scan ran but the object is memoized as unchanged | `task doctor`; force with `task ingest -- --full-reprocess` |
 | Pipeline killed with exit 137 | OOM on a huge picture-heavy PDF | Temporarily `GRAPH_ENABLED=false IMAGE_EMBED_STRATEGY=none task ingest`; it's idempotent |
 | Messages piling up in DLQ | A specific file keeps poisoning the pipeline | Inspect a DLQ message body to find the S3 key, then look at logs for that key |
 

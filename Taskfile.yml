@@ -2,104 +2,415 @@ version: '3'
 
 # Spektr — task runner
 # Install go-task: https://taskfile.dev/installation/
-# Run `task --list` to see all available tasks.
+#
+#   task                     grouped overview of the common commands
+#   task --list              full alphabetical list
+#   task --summary <name>    what one task does, when to use it, and its gotchas
 
 tasks:
+  default:
+    desc: "Grouped command overview (same as `task help`)"
+    cmds:
+      - task: help
+
+  help:
+    desc: "Grouped overview of the common commands"
+    summary: |
+      Print the grouped command overview.
+
+      Also what you get from a bare `task`. Use `task --list` for the full
+      alphabetical list, and `task --summary <name>` for detail on one task.
+    silent: true
+    cmds:
+      - |
+        cat <<'EOF'
+        Spektr — common commands
+          task --list             every task, alphabetical
+          task --summary <name>   what one task does, when to use it, gotchas
+
+        FIRST RUN
+          task setup                       install uv + deps (includes the gliner extra)
+          cp .env.example .env             then fill in the keys
+
+        LOCAL STACK  (Qdrant + Neo4j in Docker; app code runs on the host)
+          task up                          start Qdrant + Neo4j
+          task down                        stop them (volumes survive)
+
+        INGEST — Path A, bulk
+          task ingest                      one-shot batch over LOCAL_DOCUMENTS_PATH
+          task ingest -- --full-reprocess  same, but invalidate the memo cache
+          task ingest-live                 long-running watcher / SQS-triggered scan
+          task sharepoint-sync[-once]      mirror SharePoint into the local docs dir
+
+        QUERY & INSPECT
+          task serve                       MCP server (host/port/path from .env)
+          task ask -- 'question'           agent -> MCP -> LLM  (needs `task serve`)
+          task smoke -- 'query'            direct vector_search, no MCP, no LLM
+          task smoke-graph -- 'query'      direct graph_search
+          task kb:list -- --limit 500      list ingested documents
+
+        HEALTH & BACKUP
+          task doctor                      diff the CocoIndex ledger against Qdrant
+          task doctor-fix                  delete undeclared Qdrant points (no prompt)
+          task backup                      snapshot Qdrant + Neo4j + pipeline state
+          task restore -- --from backups/<ts> --target all --yes-i-know-this-wipes-things
+
+        DEV LOOP
+          task check                       lint + typecheck + unit tests
+          task test | test-integration     unit tests / integration tests
+          task lint | format | typecheck   ruff check | ruff format | mypy
+          task eval                        RAGAS generation-quality gate
+          task eval-retrieval              recall@10 / nDCG@10 / MRR
+          task eval-ablation               per-stage retrieval attribution table
+          task docs-serve | docs-build     MkDocs
+
+        PRODUCTION STACK  (docker-compose.prod.yml, reads .env.prod)
+          task prod:build                  build the spektr:latest image
+          task prod:up | prod:down         start / stop the full containerised stack
+          task prod:ps                     show running prod services
+          task prod:logs -- mcp            tail one service
+          task prod:ingest                 one-shot bulk ingest (profile: oneshot)
+          task prod:ask -- 'question'      ask the agent inside the mcp container
+          task prod:kb:list                list documents in the prod knowledge base
+          task prod:doctor                 ledger-vs-Qdrant diff inside the stack
+          task prod:migrate-env            upgrade a pre-CocoIndex-v1 .env.prod
+          task prod:backup | prod:restore  snapshot / restore the prod stack
+          task prod:nuke                   DESTROYS ALL PROD DATA
+        EOF
+
   setup:
-    desc: Install uv and project dependencies
+    desc: Install uv and project dependencies (includes the gliner extra)
+    summary: |
+      Install uv (if missing) and sync the project dependencies.
+
+      Syncs with `--extra gliner` on purpose. `uv sync` is exact by default, so
+      a bare sync removes gliner2 and silently breaks GRAPH_ENGINE=gliner —
+      graph extraction then fails at import time, not at config time.
+
+      Run once after cloning, and again whenever pyproject.toml changes.
     cmds:
       - command -v uv >/dev/null 2>&1 || { echo "Installing uv..."; curl -LsSf https://astral.sh/uv/install.sh | sh; }
-      - uv sync
+      # --extra gliner: GRAPH_ENGINE=gliner needs gliner2, which is an optional
+      # dependency. `uv sync` is exact by default, so a bare sync would remove
+      # it and silently break graph search.
+      - uv sync --extra gliner
 
   up:
-    desc: Start Qdrant, Neo4j, PostgreSQL via docker compose
+    desc: Start Qdrant + Neo4j via docker compose
+    summary: |
+      Start the local data services: Qdrant and Neo4j.
+
+      docker-compose.yml deliberately contains only these two. Application code
+      (ingest, MCP server, agent) runs on the host via uv — that is the local
+      development path. The fully containerised stack is `task prod:up`.
+
+      Access points: Qdrant http://localhost:6333, Neo4j http://localhost:7474.
     cmds:
       - docker compose up -d
 
   down:
     desc: Stop docker compose services
+    summary: |
+      Stop Qdrant and Neo4j.
+
+      Volumes survive, so your vectors and graph are still there on the next
+      `task up`. To wipe them you need `docker compose down -v`, which also
+      means the CocoIndex ledger in state/ no longer matches reality — delete
+      state/cocoindex.db too, or the next ingest will think everything is
+      already indexed.
     cmds:
       - docker compose down
 
   ingest:
     desc: Run the bulk ingestion pipeline (Path A, one-shot batch)
+    summary: |
+      Run one bulk ingestion pass and exit.
+
+      Reads from whatever DOCUMENT_SOURCE points at (local / s3 / sharepoint),
+      chunks and embeds into Qdrant, and writes entities to Neo4j.
+
+      Args:
+        task ingest -- --full-reprocess    ignore the memo cache, redo everything
+
+      Only changed files are processed; unchanged files are skipped via the
+      CocoIndex memoization cache in state/cocoindex.db.
+
+      Per-file failures do not abort the batch and do not raise. The exit code
+      reflects stats().total.num_errors, so check it. A file that fails
+      PIPELINE_MAX_RETRIES times (default 3) is poison-pilled: logged CRITICAL,
+      then skipped permanently. Counts live in state/ingestion_failures.db and
+      reset on success.
+
+      Follow with `task doctor` to confirm Qdrant matches the ledger.
     cmds:
       - uv run python -m ingestion.pipeline
 
   ingest-live:
     desc: "Run the pipeline in live mode (watches SQS for S3 events, stays running)"
+    summary: |
+      Run the ingestion pipeline as a long-running daemon.
+
+      Behaviour depends on DOCUMENT_SOURCE:
+        local — a real filesystem watcher on LOCAL_DOCUMENTS_PATH
+        s3    — SQS is only a *trigger*; each event schedules a debounced
+                catch-up scan, alongside an interval sweep and a startup sweep
+
+      This is the `ingest-live` production service. It is not an HTTP endpoint —
+      that is Path B (`ingestion/live_ingest.py`, port 8001).
+
+      Stays in the foreground. Ctrl-C to stop.
     cmds:
       - uv run python -m ingestion.pipeline --live
 
   sharepoint-sync:
     desc: "Mirror an O365 SharePoint folder into local_documents_path (long-running)"
+    summary: |
+      Continuously mirror a SharePoint folder into the local documents dir.
+
+      Only useful with DOCUMENT_SOURCE=sharepoint and all SHAREPOINT_* settings
+      populated; settings validation fails at startup otherwise. This is a
+      source-side sync daemon — it feeds the local dir that Path A then ingests.
+
+      Polls every SHAREPOINT_SYNC_INTERVAL_SECONDS (default 180).
     cmds:
       - uv run python -m services.sharepoint_sync
 
   sharepoint-sync-once:
     desc: "Run one SharePoint sync pass and exit"
+    summary: |
+      Run a single SharePoint sync pass and exit.
+
+      Same requirements as `task sharepoint-sync`. Useful for a manual catch-up
+      or for testing credentials without leaving a daemon running.
     cmds:
       - uv run python -m services.sharepoint_sync --once
 
   serve:
     desc: Start the MCP server
+    summary: |
+      Start the FastMCP server exposing the search tools to agents.
+
+      Bind address, port, path and transport all come from .env
+      (MCP_HOST / MCP_PORT / MCP_PATH / MCP_TRANSPORT) — check them rather than
+      assuming 8080. Bearer auth is on when MCP_API_KEY is non-empty.
+
+      Exposes seven tools: vector_search, visual_search, graph_search,
+      multi_search, hybrid_search, list_documents, list_document_chunks.
+
+      Stays in the foreground. `task ask` needs this running.
     cmds:
       - uv run python -m server.mcp_server
 
   smoke:
     desc: "Quick vector-search smoke test. Pass queries: task smoke -- 'q1' 'q2'"
+    summary: |
+      Run vector_search directly against Qdrant and print the hits.
+
+      Usage:
+        task smoke -- 'your query'
+        task smoke -- 'query one' 'query two'
+
+      Bypasses the MCP server and the LLM entirely, so it needs neither running.
+      That makes it the fastest way to tell a retrieval problem apart from an
+      agent or transport problem: if this returns sensible hits but `task ask`
+      does not, the issue is above the retrieval layer.
+
+      Needs `task up` and an ingested corpus.
     cmds:
       - uv run python -m scripts.smoke_search {{.CLI_ARGS}}
 
   smoke-graph:
     desc: "Quick graph-search smoke test. Pass queries: task smoke-graph -- 'q1'"
+    summary: |
+      Run graph_search directly against Neo4j and print matching entities.
+
+      Usage:
+        task smoke-graph -- 'your query'
+
+      Like `task smoke`, this needs no MCP server and no LLM. With
+      GRAPH_ENGINE=gliner the first run loads the GLiNER2 model, which takes
+      tens of seconds; later runs are fast.
+
+      Needs `task up` and an ingested corpus.
     cmds:
       - uv run python -m scripts.smoke_graph {{.CLI_ARGS}}
 
   ask:
     desc: "Ask the RAG agent a question (needs MCP server running). Usage: task ask -- 'your question'"
+    summary: |
+      Ask the Pydantic AI agent a question, end to end.
+
+      Usage:
+        task ask -- 'your question'
+
+      Exercises the whole path: agent -> MCP tools -> retrieval -> LLM. Needs
+      `task serve` running in another shell, plus a valid LLM_API_KEY.
+
+      The agent decides whether to search. A vague prompt ("what does this
+      paper say") tends to get a clarifying question instead of a tool call —
+      name the topic if you want retrieval to fire.
+
+      For triage, prefer `task smoke`: it removes the MCP and LLM variables.
     cmds:
       - uv run python -m scripts.ask {{.CLI_ARGS}}
 
   kb:list:
     desc: "List documents in the knowledge base. Pass: task kb:list -- --limit 500 [--json]"
+    summary: |
+      List the documents currently in the knowledge base.
+
+      Usage:
+        task kb:list -- --limit 500
+        task kb:list -- --json
+
+      Reads Qdrant, so it shows what is actually searchable — including Path B
+      live-session points, which the Path A ledger never sees.
     cmds:
       - uv run python -m scripts.list_kb {{.CLI_ARGS}}
 
   doctor:
-    desc: "Diff CocoIndex tracking against Qdrant contents; flag ingestion drift"
+    desc: "Diff CocoIndex's LMDB ledger against Qdrant contents; flag ingestion drift"
+    summary: |
+      Diff the CocoIndex ledger in state/cocoindex.db against Qdrant.
+
+      Reports three things: files the ledger tracks, files present in Qdrant,
+      and the two sets' disagreements. Also flags text chunks missing their
+      sparse vector, which breaks hybrid retrieval.
+
+      Read-only. Run it after every ingest — a clean ingest exit code does not
+      by itself prove Qdrant matches the ledger.
+
+      Use `task doctor-fix` to repair drift.
     cmds:
       - uv run python -m scripts.doctor
 
   doctor-fix:
-    desc: "Repair drift: delete orphan CocoIndex tracking rows so next ingest retries"
+    desc: "Repair drift: delete Qdrant points that no CocoIndex run declared"
+    summary: |
+      Delete Qdrant points that no CocoIndex run declared.
+
+      Targets v0 leftovers, manually inserted points and stale test fixtures.
+      Points with is_live=True are excluded, so Path B live-session data is
+      safe.
+
+      Destructive and unattended: runs with --fix --yes, so there is no
+      confirmation prompt. Run plain `task doctor` first and read the list.
     cmds:
       - uv run python -m scripts.doctor --fix --yes
 
+  retry-stats:
+    desc: "Report how often hybrid_search's relevance gate fires. Pipe logs in or pass -- --from <file>"
+    summary: |
+      Aggregate relevance-gate telemetry from the MCP server's JSON logs.
+
+      Answers whether first-stage retrieval is missing candidates the
+      reranker never gets to see. A high fire rate where the retry also
+      improves the top-1 score means recall is the bottleneck; a high fire
+      rate where it does not means the content is simply absent.
+
+      Needs LOG_FORMAT=json (the default) and traffic served since the
+      instrumentation was deployed. Reads stdin by default:
+
+        docker compose logs mcp | task retry-stats
+        task retry-stats -- --from logs/mcp.log
+
+      Read-only.
+    cmds:
+      - uv run python -m scripts.retry_stats {{.CLI_ARGS}}
+
   backup:
-    desc: "Snapshot Qdrant + Neo4j + Postgres to ./backups/<timestamp>/"
+    desc: "Snapshot Qdrant + Neo4j + CocoIndex state to ./backups/<timestamp>/"
+    summary: |
+      Snapshot Qdrant, Neo4j and the CocoIndex LMDB state, plus a manifest.json.
+
+      Recommended nightly via cron.
+
+      Two caveats. The Neo4j dump needs ~10-30s of downtime, because Community
+      Edition has no online backup. And LMDB has no safe hot-copy: stop the
+      ingest process, or take the backup between ingests.
+
+      Losing the LMDB state costs a full reprocess, not data loss — point ids
+      are deterministic uuid5.
     cmds:
       - uv run python -m scripts.backup {{.CLI_ARGS}}
 
   restore:
     desc: "Restore from a backup dir. Pass: task restore -- --from backups/<ts> --target all --yes-i-know-this-wipes-things"
+    summary: |
+      Restore Qdrant, Neo4j and pipeline state from a backup directory.
+
+      Usage:
+        task restore -- --from backups/<ts> --target all --yes-i-know-this-wipes-things
+
+      Refuses to run without --yes-i-know-this-wipes-things, because it
+      replaces the current contents rather than merging into them.
+
+      --target accepts all, qdrant, neo4j or state.
     cmds:
       - uv run python -m scripts.restore {{.CLI_ARGS}}
 
   test:
     desc: Run unit tests (excludes integration)
+    summary: |
+      Run the unit test suite. Integration tests are excluded.
+
+      Needs no Docker: the ephemeral Neo4j container is autouse but only starts
+      when integration tests were collected.
     cmds:
       - uv run pytest
 
   test-integration:
     desc: Run integration tests (requires docker services running)
+    summary: |
+      Run the integration test suite against real services.
+
+      Isolated from dev data on both sides. Qdrant is redirected to
+      test_documents_dense / test_documents_multivec before config is imported,
+      and Neo4j gets an ephemeral neo4j:5.26-community container via
+      Testcontainers — that container is what makes the per-test
+      `MATCH (n) DETACH DELETE n` safe.
+
+      Never repoint the Neo4j fixtures at the dev instance: it destroys the
+      knowledge graph.
     cmds:
       - uv run pytest -m integration
 
   eval:
     desc: "Run RAG retrieval-quality eval (RAGAS). Needs ingested corpus + LLM key."
+    summary: |
+      Run the RAGAS generation-quality eval.
+
+      Needs an ingested corpus, a valid LLM key, and `uv sync --extra eval`.
+
+      This is the gate for generation quality. PRs touching ingestion/,
+      server/tools/, config/ or the agent must not drop any metric below
+      tests/eval/thresholds.yaml. Thresholds are raised over time, never
+      silently lowered — a drop needs a reason in the commit message.
     cmds:
       - uv run pytest -m eval -v
+
+  eval-retrieval:
+    desc: Retrieval-only quality metrics (recall@10, nDCG@10, MRR)
+    summary: |
+      Measure retrieval quality with no LLM in the loop.
+
+      Scores recall@10, nDCG@10 and MRR against tests/eval/retrieval_set.yaml.
+      Because nothing is generated, the numbers are stable — this is the
+      primary gate for retrieval work, with `task eval` covering generation.
+    cmds:
+      - uv run pytest tests/eval/test_retrieval_metrics.py -v -s -m integration
+
+  eval-ablation:
+    desc: Per-stage retrieval attribution table
+    summary: |
+      Print the per-stage retrieval attribution table.
+
+      Shows what each pipeline stage contributes, which only means anything
+      while hybrid_search keeps delegating its retrieval core to the same code
+      path as multi_search. If those two diverge, the "hybrid is multi plus two
+      stages" contract breaks and this matrix stops being comparable.
+    cmds:
+      - uv run pytest tests/eval/test_retrieval_metrics.py::test_ablation_matrix -v -s -m integration
 
   lint:
     desc: Run ruff lint checks
@@ -118,6 +429,12 @@ tasks:
 
   check:
     desc: Run lint, typecheck, and unit tests
+    summary: |
+      Run lint, typecheck and unit tests in sequence.
+
+      The pre-commit gate. Stops at the first failing step. Integration and
+      eval suites are not included — run those separately when your change
+      touches ingestion, retrieval or the agent.
     cmds:
       - task: lint
       - task: typecheck
@@ -135,26 +452,118 @@ tasks:
 
   prod:build:
     desc: "Build the Spektr production image"
+    summary: |
+      Build the spektr:latest image used by every prod app service.
+
+      One image, shared by mcp, agent-api, ingest-live, ingest and
+      sharepoint-sync — they differ only in their command.
+
+      Reads .env.prod, which must exist and be populated.
     cmds:
       - docker compose -f docker-compose.prod.yml --env-file .env.prod build
 
   prod:up:
     desc: "Start the full production stack (data + app + Caddy)"
+    summary: |
+      Start the fully containerised stack: data services plus app services.
+
+      Unlike `task up`, application code runs in containers here.
+
+      Prerequisites: a populated .env.prod, MCP_PUBLIC_DOMAIN set (the Traefik
+      router rule uses ${MCP_PUBLIC_DOMAIN:?...}, so compose hard-fails without
+      it), and the external proxy network.
+
+      The oneshot and sharepoint profiles stay down unless requested.
     cmds:
       - docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
 
   prod:down:
     desc: "Stop the production stack"
+    summary: |
+      Stop the production stack. Volumes survive — see `task prod:nuke` to wipe.
     cmds:
       - docker compose -f docker-compose.prod.yml --env-file .env.prod down
 
+  prod:migrate-env:
+    desc: "Migrate a pre-CocoIndex-v1 .env.prod to the current schema. Pass -- --write to apply"
+    summary: |
+      Upgrade a .env.prod written for the pre-CocoIndex-v1 stack.
+
+      Usage:
+        task prod:migrate-env                 report only (default)
+        task prod:migrate-env -- --write      rewrite in place, keeps a .bak
+
+      Drops the dead PostgreSQL variables, appends the missing ones with their
+      documented defaults, retunes values that are stale in .env.example
+      itself, and validates that everything required is present. Comments and
+      ordering are preserved; values are never printed, only variable names.
+
+      Exits 1 if the migrated file would still be invalid, so it is safe to
+      gate a deploy on it.
+    cmds:
+      # Plain python3, not `uv run`: this is meant to work on a VM that has
+      # Docker but no project virtualenv. The script is stdlib-only.
+      - python3 scripts/migrate_env.py .env.prod {{.CLI_ARGS}}
+
+  prod:nuke:
+    desc: "DESTROYS ALL PROD DATA (Qdrant + Neo4j + pipeline state). Pass -- --yes-i-know-this-wipes-things"
+    summary: |
+      Destroy all production data: Qdrant, Neo4j and the pipeline state.
+
+      Usage:
+        task prod:nuke -- --yes-i-know-this-wipes-things
+
+      Refuses without that flag. Brings every profile down with -v, then
+      removes the orphaned spektr_postgres_data volume left over from the
+      pre-CocoIndex-v1 stack, which this compose file no longer declares and
+      `down -v` therefore cannot reach.
+
+      There is no undo. Take a `task prod:backup` first.
+    cmds:
+      - |
+        case "{{.CLI_ARGS}}" in
+          *--yes-i-know-this-wipes-things*) ;;
+          *) echo "Refusing: pass -- --yes-i-know-this-wipes-things"; exit 1 ;;
+        esac
+      - docker compose -f docker-compose.prod.yml --env-file .env.prod --profile oneshot --profile sharepoint down -v --remove-orphans
+      # Orphan from the pre-CocoIndex-v1 stack: this compose file no longer
+      # declares postgres_data, so `down -v` cannot remove it.
+      - docker volume rm -f spektr_postgres_data
+      - docker volume ls | grep spektr || echo "all spektr volumes removed"
+
+  prod:doctor:
+    desc: "Diff the CocoIndex ledger against Qdrant inside the prod stack"
+    summary: |
+      Run the ledger-vs-Qdrant drift check inside the prod stack.
+
+      Uses a throwaway `ingest` container from the oneshot profile, so it sees
+      the same volumes and service hostnames the pipeline does. Read-only.
+    cmds:
+      - docker compose -f docker-compose.prod.yml --env-file .env.prod --profile oneshot run --rm ingest python -m scripts.doctor
+
   prod:logs:
     desc: "Tail logs from the production stack. Pass service: task prod:logs -- mcp"
+    summary: |
+      Tail logs from the production stack.
+
+      Usage:
+        task prod:logs                 all services
+        task prod:logs -- mcp          one service
+
+      Service names: mcp, agent-api, ingest-live, qdrant, neo4j, proxy, and
+      (behind profiles) ingest and sharepoint-sync.
     cmds:
       - docker compose -f docker-compose.prod.yml --env-file .env.prod logs -f {{.CLI_ARGS}}
 
   prod:ingest:
     desc: "Run one-shot bulk ingestion in the prod stack (profile: oneshot)"
+    summary: |
+      Run one bulk ingestion pass inside the prod stack, then exit.
+
+      Starts a throwaway `ingest` container from the oneshot profile. The
+      long-running ingest-live service is unaffected — but if both write at
+      once they contend on the same LMDB state, so prefer running this while
+      ingest-live is stopped.
     cmds:
       - docker compose -f docker-compose.prod.yml --env-file .env.prod --profile oneshot run --rm ingest
 
@@ -165,20 +574,54 @@ tasks:
 
   prod:kb:list:
     desc: "List documents in the prod knowledge base. Pass: task prod:kb:list -- --limit 500 [--json]"
+    summary: |
+      List documents in the production knowledge base.
+
+      Usage:
+        task prod:kb:list -- --limit 500
+        task prod:kb:list -- --json
+
+      Runs inside the already-running mcp container, so it needs the stack up.
     cmds:
       - docker compose -f docker-compose.prod.yml --env-file .env.prod exec -T mcp python -m scripts.list_kb {{.CLI_ARGS}}
 
   prod:ask:
     desc: "Ask the prod RAG agent a question (runs inside the mcp container). Usage: task prod:ask -- 'your question'"
+    summary: |
+      Ask the production agent a question from inside the mcp container.
+
+      Usage:
+        task prod:ask -- 'your question'
+
+      Running in-container means it reaches the MCP server over the compose
+      network rather than through Traefik, so it works without public DNS.
+      Needs the stack up.
     cmds:
       - docker compose -f docker-compose.prod.yml --env-file .env.prod exec -T mcp python -m scripts.ask {{.CLI_ARGS}}
 
   prod:backup:
-    desc: "Snapshot the production stack (Qdrant+Neo4j+Postgres) to ./backups/<ts>/"
+    desc: "Snapshot the production stack (Qdrant+Neo4j+CocoIndex state) to ./backups/<ts>/"
+    summary: |
+      Snapshot the production stack to ./backups/<timestamp>/.
+
+      Runs on the host but drives the prod compose file, and pins QDRANT_URL to
+      127.0.0.1:6333 so it reaches the published port rather than whatever the
+      host .env points at.
+
+      Same caveats as `task backup`: brief Neo4j downtime, and LMDB has no safe
+      hot-copy — take it while ingest is stopped.
     cmds:
       - QDRANT_URL=http://127.0.0.1:6333 uv run python -m scripts.backup --compose-file docker-compose.prod.yml {{.CLI_ARGS}}
 
   prod:restore:
     desc: "Restore into the prod stack. Pass --from backups/<ts> --target all --yes-i-know-this-wipes-things"
+    summary: |
+      Restore a backup into the production stack.
+
+      Usage:
+        task prod:restore -- --from backups/<ts> --target all --yes-i-know-this-wipes-things
+
+      Refuses without --yes-i-know-this-wipes-things. Replaces the current
+      contents rather than merging. Stop ingest-live first.
     cmds:
       - QDRANT_URL=http://127.0.0.1:6333 uv run python -m scripts.restore --compose-file docker-compose.prod.yml {{.CLI_ARGS}}

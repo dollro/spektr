@@ -92,6 +92,7 @@ class TestCreateRagAgent:
             mock_settings.llm_model = "claude-sonnet-4-20250514"
             mock_settings.llm_base_url = ""
             mock_settings.mcp_transport = "http"
+            mock_settings.mcp_server_url = ""
             mock_settings.mcp_port = 9999
             mock_settings.mcp_path = "/custom-path"
             mock_settings.mcp_api_key = ""
@@ -156,6 +157,17 @@ class TestSystemPrompt:
     def test_instructs_citation(self):
         """System prompt asks agent to cite sources."""
         assert "cite" in SYSTEM_PROMPT.lower()
+
+
+def test_system_prompt_documents_both_fused_tools() -> None:
+    """The agent knows when to prefer the cheap path over the smart one."""
+    from agent.agent import SYSTEM_PROMPT
+
+    assert "multi_search" in SYSTEM_PROMPT
+    assert "hybrid_search" in SYSTEM_PROMPT
+    # The old split-result vocabulary must be gone.
+    assert "vector_results" not in SYSTEM_PROMPT
+    assert "graph_results" not in SYSTEM_PROMPT
 
 
 # ---------------------------------------------------------------------------

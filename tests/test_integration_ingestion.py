@@ -1,7 +1,12 @@
 """Integration tests for the ingestion pipeline.
 
-Tests the processing functions that the CocoIndex pipeline calls,
-using real Qdrant and Neo4j services (Docker).
+Tests the processing functions that the CocoIndex app calls, using real Qdrant
+and Neo4j services (Docker).
+
+Under CocoIndex v1 these functions *declare* points on a collection target
+rather than upserting them, so ``_DeclaringTarget`` below stands in for the
+real ``CollectionTarget`` and writes each declared point straight to Qdrant —
+the assertions still exercise a real round-trip.
 """
 
 from __future__ import annotations
@@ -13,15 +18,25 @@ import pytest
 from config.constants import DENSE_COLLECTION, MULTIVEC_COLLECTION
 from config.settings import settings
 from ingestion.file_processor import file_to_pages, semantic_chunk
-from ingestion.pipeline import (
-    _process_text_page,
-    _process_visual_page,
-    ingest_file,
-)
+from ingestion.page_processor import _process_text_page, _process_visual_page
+from ingestion.pipeline import process_file_impl
+
+
+class _DeclaringTarget:
+    """Stand-in for a CocoIndex CollectionTarget that writes through to Qdrant."""
+
+    def __init__(self, client, collection: str) -> None:  # type: ignore[no-untyped-def]
+        self._client = client
+        self._collection = collection
+        self.declared: list = []  # type: ignore[type-arg]
+
+    def declare_point(self, point) -> None:  # type: ignore[no-untyped-def]
+        self.declared.append(point)
+        self._client.upsert(collection_name=self._collection, points=[point])
 
 
 def _configure_mock_pipeline_settings(mock_settings) -> None:  # type: ignore[no-untyped-def]
-    """Set the settings attrs ingest_file touches. graph_enabled=False skips Neo4j."""
+    """Set the settings process_file_impl touches. graph_enabled=False skips Neo4j."""
     mock_settings.qdrant_url = "http://localhost:6333"
     mock_settings.document_source = "local"
     mock_settings.multivec_enabled = False
@@ -53,7 +68,7 @@ class TestTextPageIngestion:
             page_number=1,
             mime="text/plain",
             now="2025-01-01T00:00:00",
-            qdrant=qdrant_client,
+            dense=_DeclaringTarget(qdrant_client, DENSE_COLLECTION),
             embedder=mock_embedder,
             graph_engine=None,
         )
@@ -168,7 +183,8 @@ class TestImagePageIngestion:
             content_type="image",
             mime="image/png",
             now="2025-01-01T00:00:00",
-            qdrant=qdrant_client,
+            dense=_DeclaringTarget(qdrant_client, DENSE_COLLECTION),
+            multivec=_DeclaringTarget(qdrant_client, MULTIVEC_COLLECTION),
             embedder=mock_embedder,
         )
 
@@ -198,7 +214,8 @@ class TestImagePageIngestion:
                 content_type="image",
                 mime="image/png",
                 now="2025-01-01T00:00:00",
-                qdrant=qdrant_client,
+                dense=_DeclaringTarget(qdrant_client, DENSE_COLLECTION),
+                multivec=_DeclaringTarget(qdrant_client, MULTIVEC_COLLECTION),
                 embedder=mock_embedder,
             )
 
@@ -235,7 +252,8 @@ class TestPdfIngestion:
                 content_type="pdf_page",
                 mime="application/pdf",
                 now="2025-01-01T00:00:00",
-                qdrant=qdrant_client,
+                dense=_DeclaringTarget(qdrant_client, DENSE_COLLECTION),
+                multivec=_DeclaringTarget(qdrant_client, MULTIVEC_COLLECTION),
                 embedder=mock_embedder,
             )
 
@@ -268,7 +286,7 @@ class TestIdempotency:
                 page_number=1,
                 mime="text/plain",
                 now="2025-01-01T00:00:00",
-                qdrant=qdrant_client,
+                dense=_DeclaringTarget(qdrant_client, DENSE_COLLECTION),
                 embedder=mock_embedder,
                 graph_engine=None,
             )
@@ -297,7 +315,8 @@ class TestIdempotency:
                     content_type="image",
                     mime="image/png",
                     now="2025-01-01T00:00:00",
-                    qdrant=qdrant_client,
+                    dense=_DeclaringTarget(qdrant_client, DENSE_COLLECTION),
+                    multivec=_DeclaringTarget(qdrant_client, MULTIVEC_COLLECTION),
                     embedder=mock_embedder,
                 )
 
@@ -329,7 +348,7 @@ class TestCorruptFiles:
             page_number=1,
             mime="text/plain",
             now="2025-01-01T00:00:00",
-            qdrant=qdrant_client,
+            dense=_DeclaringTarget(qdrant_client, DENSE_COLLECTION),
             embedder=mock_embedder,
             graph_engine=None,
         )
@@ -344,7 +363,7 @@ class TestCorruptFiles:
         result = file_to_pages("data.xyz", b"some binary data")
         assert len(result.pages) == 0
 
-    def test_ingest_file_handles_corrupt_pdf(
+    async def test_process_file_handles_corrupt_pdf(
         self,
         qdrant_client,  # type: ignore[no-untyped-def]
         mock_embedder,  # type: ignore[no-untyped-def]
@@ -352,42 +371,37 @@ class TestCorruptFiles:
         # Corrupt PDF: valid header but invalid content
         corrupt_pdf = b"%PDF-1.4 corrupt data"
 
-        with (
-            patch(
-                "ingestion.pipeline.create_embedder",
-                return_value=mock_embedder,
-            ),
-            patch("ingestion.pipeline.settings") as mock_settings,
-        ):
+        with patch("ingestion.pipeline.settings") as mock_settings:
             _configure_mock_pipeline_settings(mock_settings)
-            # ingest_file should not crash
-            result = ingest_file(corrupt_pdf, "corrupt.pdf")
-            assert result == "corrupt.pdf"
+            # process_file_impl should not crash
+            await process_file_impl(
+                corrupt_pdf,
+                "corrupt.pdf",
+                dense=_DeclaringTarget(qdrant_client, DENSE_COLLECTION),
+                embedder=mock_embedder,
+            )
 
 
 @pytest.mark.integration
-class TestIngestFileEndToEnd:
-    """Test the ingest_file function with real services."""
+class TestProcessFileEndToEnd:
+    """Test process_file_impl with real services."""
 
-    def test_ingest_text_file(
+    async def test_ingest_text_file(
         self,
         qdrant_client,  # type: ignore[no-untyped-def]
         mock_embedder,  # type: ignore[no-untyped-def]
         sample_txt_bytes: bytes,
         sample_txt_name: str,
     ) -> None:
-        with (
-            patch(
-                "ingestion.pipeline.create_embedder",
-                return_value=mock_embedder,
-            ),
-            patch("ingestion.pipeline.settings") as mock_settings,
-        ):
+        with patch("ingestion.pipeline.settings") as mock_settings:
             _configure_mock_pipeline_settings(mock_settings)
 
-            result = ingest_file(sample_txt_bytes, sample_txt_name)
-
-        assert result == sample_txt_name
+            await process_file_impl(
+                sample_txt_bytes,
+                sample_txt_name,
+                dense=_DeclaringTarget(qdrant_client, DENSE_COLLECTION),
+                embedder=mock_embedder,
+            )
 
         # Verify dense points exist
         dense_result = qdrant_client.scroll(
@@ -396,25 +410,22 @@ class TestIngestFileEndToEnd:
         )
         assert len(dense_result[0]) >= 1
 
-    def test_ingest_image_file(
+    async def test_ingest_image_file(
         self,
         qdrant_client,  # type: ignore[no-untyped-def]
         mock_embedder,  # type: ignore[no-untyped-def]
         sample_png_bytes: bytes,
         sample_png_name: str,
     ) -> None:
-        with (
-            patch(
-                "ingestion.pipeline.create_embedder",
-                return_value=mock_embedder,
-            ),
-            patch("ingestion.pipeline.settings") as mock_settings,
-        ):
+        with patch("ingestion.pipeline.settings") as mock_settings:
             _configure_mock_pipeline_settings(mock_settings)
 
-            result = ingest_file(sample_png_bytes, sample_png_name)
-
-        assert result == sample_png_name
+            await process_file_impl(
+                sample_png_bytes,
+                sample_png_name,
+                dense=_DeclaringTarget(qdrant_client, DENSE_COLLECTION),
+                embedder=mock_embedder,
+            )
 
         dense_result = qdrant_client.scroll(
             collection_name=DENSE_COLLECTION,

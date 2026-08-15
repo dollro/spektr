@@ -44,15 +44,20 @@ key is empty, no auth header is sent.
 The built-in system prompt instructs the LLM to pick the right search tool
 for each query type:
 
-| Query type | Tool | When to use |
-|-|-|-|
-| Semantic / keyword | `vector_search` | Find documents by meaning, keyword relevance, or topic |
-| Visual / layout | `visual_search` | Find documents by visual content (ColBERT multi-vector) |
-| Entity / relationship | `graph_search` | Find entities and connections in the knowledge graph |
-| Complex / multi-faceted | `hybrid_search` | Parallel vector + graph search with result fusion |
+| Tool | When to use |
+|-|-|
+| `multi_search` | Fused keyword + semantic search, reranked. Fast and cheap — the default choice. |
+| `hybrid_search` | Same fused pipeline as `multi_search`, plus it splits multi-part questions into sub-queries and retries when results look weak. Use for complex or compound questions. Slower, costs one extra model call. |
+| `vector_search` | Semantic-only search. Use when you specifically want conceptual similarity without keyword matching. |
+| `visual_search` | Finds pages by visual layout — charts, diagrams, tables. |
+| `graph_search` | Entity and relationship facts from the knowledge graph. |
+
+The prompt also explains `multi_search`/`hybrid_search`'s shared response shape — `results` (ranked chunks, with `channels` showing whether a hit came from keyword matching, semantic similarity, or both), `graph_facts` (supporting entity facts, not ranked against the chunks), `live_results` (active-session chunks, when a session is set), and `degraded` (present only when part of the pipeline failed — results are still usable but less complete than normal). See [Search Tools](../server/search-tools.md) for the full schema.
 
 The prompt also instructs the model to always cite source documents and to
 acknowledge when no relevant results are found rather than guessing.
+
+Source: `SYSTEM_PROMPT` in `agent/agent.py`.
 
 ## Model Configuration
 
@@ -77,7 +82,7 @@ OpenAI-compatible server (OpenRouter, Ollama, vLLM, LiteLLM, etc.):
 
 ```bash
 LLM_BASE_URL=https://openrouter.ai/api/v1
-LLM_MODEL=anthropic/claude-sonnet-4-20250514
+LLM_MODEL=anthropic/claude-sonnet-5
 LLM_API_KEY=sk-or-...
 ```
 

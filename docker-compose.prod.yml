@@ -5,8 +5,9 @@
 #   cp .env.example .env.prod  && edit (override hostnames + secrets for prod)
 #   task prod:build && task prod:up
 #
-# Backups: scripts/backup.py shells out to `docker compose exec postgres`
-# and `docker compose run neo4j`; service names below match.
+# Backups: scripts/backup.py shells out to `docker compose run neo4j` and
+# archives the CocoIndex LMDB state from the ingest_state volume; service
+# names below match.
 
 name: spektr
 
@@ -19,7 +20,8 @@ networks:
 volumes:
   qdrant_data:
   neo4j_data:
-  postgres_data:
+  # Holds state/ingestion_failures.db and CocoIndex v1's LMDB ledger
+  # (COCOINDEX_DB_PATH). Mounted on every service that runs the pipeline.
   ingest_state:
   # Shared between sharepoint-sync (writer) and ingest-live (reader, in
   # LocalFile source mode). Used only when ingesting from SharePoint.
@@ -62,25 +64,18 @@ services:
       - neo4j_data:/data
     restart: unless-stopped
 
-  postgres:
-    image: postgres:17.2
-    networks:
-      - spektr-net
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB:-cocoindex}
-      POSTGRES_USER: ${POSTGRES_USER:-cocoindex}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    restart: unless-stopped
-
   mcp:
     <<: *app-image
     command: ["python", "-m", "server.mcp_server"]
     depends_on:
       - qdrant
       - neo4j
-      - postgres
+    volumes:
+      # Not for pipeline state — the sparse channel encodes the *query* with
+      # miniCOIL (retrieval/channels.py -> ingestion.sparse_embedder), so the
+      # server downloads the model too. Sharing this volume lets HF_HOME
+      # (= /app/state/hf) survive container recreates instead of re-fetching.
+      - ingest_state:/app/state
     expose:
       - "8080"
     networks:
@@ -120,18 +115,21 @@ services:
     depends_on:
       - qdrant
       - neo4j
-      - postgres
     volumes:
       - ingest_state:/app/state
-      # Shared with sharepoint-sync. Ignored when S3_BUCKET_NAME +
-      # S3_SQS_QUEUE_URL are set (CocoIndex picks AmazonS3 source instead).
+      # Shared with sharepoint-sync. Ignored when DOCUMENT_SOURCE=s3
+      # (the pipeline reads objects straight from the bucket instead).
       - sharepoint_documents:/app/documents
 
+  # Only meaningful when DOCUMENT_SOURCE=sharepoint: the daemon exits 2 on any
+  # other source (services/sharepoint_sync/main.py), and `restart:
+  # unless-stopped` would turn that into a crash-loop. Gated behind a profile
+  # so a plain `up -d` is correct for the local and s3 sources. Start with:
+  #   docker compose -f docker-compose.prod.yml --profile sharepoint up -d
   sharepoint-sync:
     <<: *app-image
     command: ["python", "-m", "services.sharepoint_sync"]
-    depends_on:
-      - postgres
+    profiles: ["sharepoint"]
     volumes:
       - ingest_state:/app/state
       - sharepoint_documents:/app/documents
@@ -145,7 +143,6 @@ services:
     depends_on:
       - qdrant
       - neo4j
-      - postgres
     volumes:
       - ingest_state:/app/state
       - ./documents:/app/documents:ro

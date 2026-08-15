@@ -41,6 +41,19 @@ def mock_graphiti():
 
 
 @pytest.fixture(autouse=True)
+def _mock_sparse_encoder():
+    """Stub the miniCOIL sparse encoder so tests don't load fastembed's model."""
+    from qdrant_client import models
+
+    fake_sparse = models.SparseVector(indices=[1, 2], values=[0.5, 0.25])
+    with patch(
+        "ingestion.live_ingest.encode_documents",
+        return_value=[fake_sparse],
+    ) as mock:
+        yield mock
+
+
+@pytest.fixture(autouse=True)
 def _reset_active_session():
     """Reset active session state between tests."""
     import ingestion.live_ingest as mod
@@ -257,6 +270,15 @@ class TestIngestChunk:
         assert data["vector_indexed"] is True
         assert data["graph_status"] == "processing"
         mock_qdrant.upsert.assert_called_once()
+
+        # Pin the named-vector shape: documents_dense uses named vectors
+        # ("dense" + "sparse"), so an unnamed `vector=[...]` upsert would be
+        # rejected by real Qdrant with a 400. This must fail against the old
+        # unnamed-vector code.
+        upserted_point = mock_qdrant.upsert.call_args.kwargs["points"][0]
+        assert isinstance(upserted_point.vector, dict)
+        assert set(upserted_point.vector) == {"dense", "sparse"}
+        assert upserted_point.vector["dense"] == [0.1] * 512
 
     @pytest.mark.asyncio
     async def test_graphiti_background_task_called(

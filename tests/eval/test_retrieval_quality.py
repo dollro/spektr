@@ -49,11 +49,11 @@ async def _retrieve(query: str) -> list[str]:
 
     result = await hybrid_search(query, limit=5)
     contexts: list[str] = []
-    for r in result.get("vector_results", []):
-        text = r.get("text") or r.get("text_content") or ""
+    for r in result.get("results", []):
+        text = r.get("text")
         if text:
             contexts.append(text)
-    for r in result.get("graph_results", []):
+    for r in result.get("graph_facts", []):
         fact = r.get("fact")
         if fact:
             contexts.append(fact)

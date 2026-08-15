@@ -36,7 +36,7 @@ Restart your processes. Traces land in the dashboard within seconds.
 | FastAPI | live-ingest endpoints + agent `/query` endpoint (request + response + status) |
 
 Instrumentation is wired in these entrypoints:
-- `ingestion/pipeline.py::run_pipeline`
+- `ingestion/runner.py::run_pipeline`
 - `ingestion/live_ingest.py` (module-level)
 - `server/mcp_server.py`
 - `agent/api.py::lifespan`
@@ -65,6 +65,44 @@ The JSON log formatter (`config/logging.py`) adds two extra keys when an OTEL sp
 ```
 
 Grep by `trace_id` to reconstruct a single operation end-to-end.
+
+## Relevance-gate telemetry
+
+`retrieval/gate.py::log_gate_decision` emits **one INFO record per gated pipeline run** — whether or not the retry fired. Quiet runs are logged deliberately: a count of retries without a denominator cannot answer "how often".
+
+```json
+{
+  "message": "Relevance gate evaluated",
+  "gate_fired": true,
+  "gate_reranked": true,
+  "top_score": -0.12,
+  "top_score_after": 0.31,
+  "gate_widened_to": 30,
+  "retry_helped": true
+}
+```
+
+| Field | Meaning |
+|-|-|
+| `gate_fired` | The retry ran. Present on every record, so it doubles as the marker for gate telemetry |
+| `gate_reranked` | A rerank score was available to test. **When false the run is inert** — see below |
+| `top_score` | Top-1 score before any retry. `null` when the pass returned nothing |
+| `top_score_after` | Top-1 score after the widened pass. Only when fired |
+| `gate_widened_to` | Widened candidate pool size. Only when fired |
+| `retry_helped` | The widened pass beat the first one. Only when fired |
+
+**Inert runs must be excluded from the rate.** When the reranker is disabled or degraded, `FusedResult.score` carries the RRF fusion score instead — always positive, therefore never below the default `RERANK_SCORE_FLOOR` of `0.0`. Such runs cannot fire by construction, and counting them as "gate did not fire" understates the true rate. `gate_reranked` distinguishes them.
+
+Aggregate with `task retry-stats`:
+
+```bash
+docker compose logs mcp | task retry-stats
+task retry-stats -- --from logs/mcp.log
+```
+
+**Reading the result.** `retry_helped` is the diagnostic that matters. A high fire rate where the retry *does* improve top-1 means the right chunk existed but ranked outside the initial pool — a first-stage **recall** problem, addressable with better retrieval (late interaction, a stronger embedding model, a larger `RERANK_CANDIDATES`). A high fire rate where it *does not* means the content is absent or the query is unanswerable — a corpus coverage problem no retrieval change will fix.
+
+Volume is one line per `hybrid_search` call; `multi_search` (`fast_pipeline`) has no gate and emits nothing.
 
 ## Local trace viewer (optional)
 

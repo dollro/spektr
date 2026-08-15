@@ -1,16 +1,45 @@
 # Search Tools
 
+!!! warning "Breaking change — hybrid_search response shape"
+    As of the retrieval upgrade, `hybrid_search` no longer returns
+    `{vector_results, graph_results, live_results, strategy, errors}`. It now
+    returns a single ranked `results` list plus `graph_facts`, and a new
+    `multi_search` tool exists alongside it.
+
+    | Before | After |
+    |-|-|
+    | `vector_results` | `results` |
+    | `graph_results` | `graph_facts` |
+    | `live_results` | `live_results` (unchanged) |
+    | `strategy` | removed |
+    | `errors` | `degraded` (channel names, not messages) |
+
+    Each result gains `id`, `chunk_index`, `fusion_score`, and `channels`.
+    `channels` records which retrieval channel(s) surfaced the hit — `dense`,
+    `sparse`, or both.
+
+    **Migration:** replace `response["vector_results"]` with
+    `response["results"]` and `response["graph_results"]` with
+    `response["graph_facts"]`. Ranking now happens server-side (RRF fusion +
+    reranking), so clients that re-sorted results themselves should stop.
+
+    `degraded` is **omitted entirely** on a healthy run — its presence always
+    means partial failure. An `error` key appears only when both the dense
+    and sparse channels failed, distinguishing "retrieval is down" from
+    "query matched nothing."
+
 The MCP server exposes the following tools. Each returns structured JSON and handles errors gracefully by returning an error object instead of raising exceptions.
 
 | Tool | Use case |
 |-|-|
 | `vector_search` | Best for **specific** questions answered by a few chunks. Vector similarity ranks and truncates. |
 | `graph_search` | Best for **entity / relationship** queries. |
-| `hybrid_search` | Best general-purpose tool: vector + graph in parallel. |
+| `multi_search` | Fast, deterministic dense + sparse fusion with reranking. No LLM calls. The default general-purpose tool. |
+| `hybrid_search` | Same fused pipeline as `multi_search`, plus query decomposition and a relevance-gated retry. Costs one extra LLM call. |
 | `list_documents` | **Discovery** — what's in the knowledge base. |
 | `list_document_chunks` | **Exhaustive enumeration** of one source document — use when vector top-k truncation hides parts of a long document. |
 
-Three of the search tools (`vector_search`, `graph_search`, `hybrid_search`) support an optional `session_id` parameter for session-aware search. When provided, search results combine data from the active live session with bulk KB results.
+Four of the search tools (`vector_search`, `graph_search`, `multi_search`, `hybrid_search`) support an optional `session_id` parameter for session-aware search. When provided, search results combine data from the active live session with bulk KB results.
 
 ---
 
@@ -59,6 +88,11 @@ Returns `list[SearchResult]`:
 ## `visual_search`
 
 ColBERT multi-vector search against the Qdrant `documents_multivec` collection. Best suited for visually rich content: charts, diagrams, tables, and formatted layouts. When `VLM_GENERATION_ENABLED=true`, a VLM-generated answer is prepended to the results.
+
+!!! warning "This tool requires `jina-v4` + `native`"
+    It queries `documents_multivec` with `using="colbert"` and has **no dense fallback**, so it returns nothing unless `MULTIVEC_ENABLED=true` — which only `jina-v4` on the `native` route supports.
+
+    **Searching images does not require this tool.** With `IMAGE_EMBED_STRATEGY=smart|all` on a pair that can embed images (including the default `gemini-2` + `openrouter`), page images become points in `documents_dense` alongside text, in the same vector space. A plain text query therefore retrieves them through `vector_search`, `multi_search`, and `hybrid_search`. `visual_search` adds late-interaction *precision* on top; it is not the only path to image content.
 
 ### Parameters
 
@@ -143,35 +177,90 @@ Returns `list[GraphFact]`:
 
 ---
 
-## `hybrid_search`
+## `multi_search`
 
-Runs `vector_search` and `graph_search` in parallel using `asyncio.create_task`, combining results from both backends. Handles partial failures gracefully -- if one backend fails, results from the other are still returned.
+Deterministic fused search: dense + sparse retrieval, merged with Reciprocal Rank Fusion, then reranked. No LLM calls anywhere in this path — use it when latency and cost matter more than recall on hard multi-part questions.
 
-When `RERANK_ENABLED=true`, vector results are reranked before being included in the response.
+Runs two Qdrant channels concurrently against `documents_dense`'s named vectors: `dense` (semantic similarity) and `sparse` (miniCOIL lexical matching, see [Embeddings](../ingestion/embeddings.md)). The channels never compare scores directly — cosine similarity and miniCOIL scores are not on the same scale. Instead they're fused by rank: [Reciprocal Rank Fusion](https://en.wikipedia.org/wiki/Reciprocal_rank_fusion) with `k=RRF_K` (default 60) scores each hit as `sum(1 / (k + rank))` across every channel that returned it. When `RERANK_ENABLED=true` (default), the top `RERANK_CANDIDATES` (default 50) fused results are rescored by `jina-reranker-v3.5`, a listwise reranker — see the note on its score scale under `hybrid_search` below.
 
-**Graph-vs-vector deduplication.** After both backends return, graph facts whose `source` matches the `source_file` of any vector hit are dropped. This avoids surfacing the same document twice (once as a chunk, once as a graph fact). Dedup is skipped when either backend errored.
+Graph facts are queried in parallel via `graph_search` and returned as separate supporting context — they are not fused into the ranking.
+
+Any channel that fails (dense, sparse, rerank, or graph) is recorded in `degraded` rather than aborting the whole call; the tool still returns whatever channels succeeded.
 
 ### Parameters
 
 | Name | Type | Default | Description |
 |-|-|-|-|
 | `query` | `str` | required | Natural language search query |
-| `limit` | `int` | `10` | Maximum results per backend. Clamped to `[1, 100]` |
-| `session_id` | `str \| None` | `None` | When set, separates live session results into `live_results` and bulk KB results into `vector_results` |
+| `limit` | `int` | `10` | Maximum fused results returned. Clamped to `[1, 100]` |
+| `content_type` | `str \| None` | `None` | MIME type filter (e.g. `application/pdf`) |
+| `source_file` | `str \| None` | `None` | Source file name filter |
+| `session_id` | `str \| None` | `None` | When set, live-session hits are separated into `live_results`; bulk KB hits stay in `results` |
 
 ### Return Schema
 
-Returns `HybridSearchResponse`:
+Returns a dict:
 
 | Field | Type | Description |
 |-|-|-|
-| `vector_results` | `list[SearchResult]` | Dense vector search results (bulk KB) |
-| `live_results` | `list[SearchResult]` | Live session results, sorted chronologically (only populated when `session_id` is set) |
-| `graph_results` | `list[GraphFact]` | Knowledge graph facts (combined from both engines when session-aware) |
+| `results` | `list[FusedResult]` | Fused, reranked KB results, best first |
+| `graph_facts` | `list[GraphFact]` | Knowledge graph facts (see [`graph_search`](#graph_search)); not fused into the ranking |
+| `live_results` | `list[FusedResult]` | Live session hits, separated out when `session_id` is set |
 | `query` | `str` | Original query |
-| `session_id` | `str \| None` | Session ID if session-aware search was used |
-| `strategy` | `str` | Always `"parallel"` |
-| `errors` | `list[str]` | Present only if one or both backends failed |
+| `session_id` | `str \| None` | Session ID if provided |
+| `degraded` | `list[str] \| None` | **Omitted when healthy.** Present only on partial failure — channel names that failed (`dense`, `sparse`, `rerank`, `graph`) |
+| `error` | `str \| None` | Present only when **both** `dense` and `sparse` failed — signals total retrieval outage, distinct from a query that simply matched nothing |
+
+Each `FusedResult`:
+
+| Field | Type | Description |
+|-|-|-|
+| `id` | `str` | Qdrant point ID |
+| `text` | `str` | Matched text chunk |
+| `source_file` | `str` | Original file name |
+| `page_number` | `int` | Page within the source document |
+| `chunk_index` | `int` | Chunk position within the page |
+| `score` | `float` | Rerank score when `RERANK_ENABLED=true`, else equal to `fusion_score` |
+| `fusion_score` | `float` | RRF fusion score across channels |
+| `channels` | `list[str]` | Which retrieval channel(s) surfaced this hit — `["dense"]`, `["sparse"]`, or both |
+| `metadata` | `dict` | Additional payload metadata |
+
+### Example
+
+```json
+{
+  "name": "multi_search",
+  "arguments": {
+    "query": "latest compliance requirements",
+    "limit": 10
+  }
+}
+```
+
+---
+
+## `hybrid_search`
+
+Same fused retrieval core as `multi_search` — dense + sparse -> RRF -> rerank — wrapped in two extra stages: query decomposition before retrieval, and a relevance-gated single retry after reranking. Returns the identical schema, plus `sub_queries` and `retried`. Costs one cheap LLM call for decomposition; use `multi_search` when that cost or latency is unwelcome.
+
+**Decomposition.** When `DECOMPOSE_ENABLED=true` (default), the query is split into up to `DECOMPOSE_MAX_SUBQUERIES` (default 4) sub-queries by one LLM call (`DECOMPOSE_MODEL`, falling back to `LLM_MODEL` when unset). Each sub-query becomes its own dense + sparse channel pair, all fused together in one RRF pass. If decomposition fails or the query is a single ask, it falls back to `[query]` unchanged — a decomposition outage degrades to single-query retrieval rather than an error.
+
+**Relevance-gated retry.** The fused, reranked results are checked against `RERANK_SCORE_FLOOR` (default `0.0`). `jina-reranker-v3.5` is listwise and its scores are unbounded and logit-like, not the pointwise v2 reranker's bounded `[0, 1]` — a strong match scores around `+0.39`, and irrelevant text scores negative. A floor of `0.0` therefore means "retry only when the best candidate was judged actively irrelevant," not "retry on anything less than a great match." When `RETRY_ENABLED=true` (default) and the top score is below the floor, the candidate pool is widened by `RETRY_LIMIT_MULTIPLIER` (default `3`x `limit`) and the whole retrieve-and-rank step runs once more. This targets the failure mode where the right chunk was ranked outside the initial pool.
+
+Every gate evaluation is logged, fired or not, so the retry rate is measurable rather than guessed — see [Relevance-gate telemetry](../operations/observability.md#relevance-gate-telemetry) and `task retry-stats`. The rate is the standing evidence for whether first-stage recall needs investment: retries that fire *and improve* the top-1 score mean the reranker never saw the right candidate.
+
+### Parameters
+
+Identical to [`multi_search`](#multi_search): `query`, `limit`, `content_type`, `source_file`, `session_id`.
+
+### Return Schema
+
+Identical to `multi_search`, plus:
+
+| Field | Type | Description |
+|-|-|-|
+| `sub_queries` | `list[str]` | The sub-queries actually used for retrieval (`[query]` if decomposition was skipped or failed) |
+| `retried` | `bool` | `true` if the relevance gate fired and the candidate pool was widened once |
 
 ### Example
 
@@ -281,7 +370,7 @@ When `len(result) == limit`, more chunks remain — call again with `offset += l
 
 ## Error Handling
 
-All tools catch exceptions internally and return an error object rather than raising:
+`vector_search`, `visual_search`, and `graph_search` catch exceptions internally and return an error object rather than raising:
 
 ```json
 {
@@ -291,4 +380,6 @@ All tools catch exceptions internally and return an error object rather than rai
 }
 ```
 
-This ensures the MCP server remains operational and the calling agent receives a structured error it can reason about.
+`multi_search` and `hybrid_search` use a different, more granular scheme — see their Return Schema sections above. A failed channel is recorded by name in `degraded` and the tool still returns whatever succeeded; a top-level `error` key only appears when both retrieval channels are down. There is no `partial_results` field on these two tools.
+
+Either way, the MCP server remains operational and the calling agent receives a structured signal it can reason about instead of an exception.

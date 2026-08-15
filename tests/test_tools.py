@@ -13,9 +13,12 @@ import pytest
 from config.constants import (
     DENSE_COLLECTION,
     DENSE_DIM,
+    DENSE_VECTOR_NAME,
     MULTIVEC_COLLECTION,
     MULTIVEC_DIM,
 )
+from retrieval.models import FusedResult
+from retrieval.pipeline import PipelineOutput
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -32,7 +35,7 @@ def _make_dense_point(
     """Build a Qdrant point payload dict for the dense collection."""
     return {
         "id": idx,
-        "vector": [0.1 * (idx + 1)] * DENSE_DIM,
+        "vector": {DENSE_VECTOR_NAME: [0.1 * (idx + 1)] * DENSE_DIM},
         "payload": {
             "text": text,
             "source_file": source_file,
@@ -326,14 +329,26 @@ class TestHybridSearch:
     """Tests for the hybrid_search tool."""
 
     async def test_returns_both_results(self):
-        """Returns both vector_results and graph_results."""
-        mock_vector = AsyncMock(return_value=[{"score": 0.9, "text": "result"}])
+        """Returns both a fused results list and graph_facts."""
+        fused = PipelineOutput(
+            results=[
+                FusedResult(
+                    id="1",
+                    text="result",
+                    source_file="d.pdf",
+                    score=0.9,
+                    fusion_score=0.03,
+                    channels=["dense"],
+                )
+            ]
+        )
+        mock_pipeline = AsyncMock(return_value=fused)
         mock_graph = AsyncMock(return_value=[{"entity": "X", "type": "CONCEPT"}])
 
         with (
             patch(
-                "server.tools.hybrid_search.vector_search",
-                mock_vector,
+                "server.tools.hybrid_search.smart_pipeline",
+                mock_pipeline,
             ),
             patch(
                 "server.tools.hybrid_search.graph_search",
@@ -344,42 +359,31 @@ class TestHybridSearch:
 
             result = await hybrid_search("test query")
 
-        assert len(result["vector_results"]) == 1
-        assert len(result["graph_results"]) == 1
+        assert len(result["results"]) == 1
+        assert len(result["graph_facts"]) == 1
         assert result["query"] == "test query"
-        assert result["strategy"] == "parallel"
-
-    async def test_partial_failure_vector(self):
-        """If vector search fails, graph results still returned."""
-        mock_vector = AsyncMock(side_effect=RuntimeError("Qdrant down"))
-        mock_graph = AsyncMock(return_value=[{"entity": "X"}])
-
-        with (
-            patch(
-                "server.tools.hybrid_search.vector_search",
-                mock_vector,
-            ),
-            patch(
-                "server.tools.hybrid_search.graph_search",
-                mock_graph,
-            ),
-        ):
-            from server.tools.hybrid_search import hybrid_search
-
-            result = await hybrid_search("test")
-
-        assert result["vector_results"][0]["error"]
-        assert len(result["graph_results"]) == 1
 
     async def test_partial_failure_graph(self):
-        """If graph search fails, vector results still returned."""
-        mock_vector = AsyncMock(return_value=[{"score": 0.9}])
+        """If graph search fails, fused results still returned and graph is degraded."""
+        fused = PipelineOutput(
+            results=[
+                FusedResult(
+                    id="1",
+                    text="result",
+                    source_file="d.pdf",
+                    score=0.9,
+                    fusion_score=0.03,
+                    channels=["dense"],
+                )
+            ]
+        )
+        mock_pipeline = AsyncMock(return_value=fused)
         mock_graph = AsyncMock(side_effect=RuntimeError("Neo4j down"))
 
         with (
             patch(
-                "server.tools.hybrid_search.vector_search",
-                mock_vector,
+                "server.tools.hybrid_search.smart_pipeline",
+                mock_pipeline,
             ),
             patch(
                 "server.tools.hybrid_search.graph_search",
@@ -390,8 +394,9 @@ class TestHybridSearch:
 
             result = await hybrid_search("test")
 
-        assert len(result["vector_results"]) == 1
-        assert result["graph_results"][0]["error"]
+        assert len(result["results"]) == 1
+        assert result["graph_facts"] == []
+        assert "graph" in result["degraded"]
 
 
 # ---------------------------------------------------------------------------
@@ -412,6 +417,7 @@ class TestMCPServer:
             "vector_search",
             "graph_search",
             "hybrid_search",
+            "multi_search",
             "list_documents",
             "list_document_chunks",
         } <= tool_names
@@ -421,6 +427,27 @@ class TestMCPServer:
             assert "visual_search" in tool_names
         else:
             assert "visual_search" not in tool_names
+
+    async def test_no_tool_exposes_a_private_parameter(self):
+        """Underscore-prefixed params must never reach a tool's public schema.
+
+        FastMCP marks keyword-only parameters as *required* regardless of their
+        default, so a `*`-guarded internal flag becomes mandatory for every MCP
+        client and makes the tool uncallable. `vector_search._skip_rerank` did
+        exactly that and no test caught it: the suite calls these functions
+        directly, where the default applies normally, so the break was only
+        visible across the MCP boundary.
+        """
+        from server.mcp_server import mcp
+
+        # FastMCP's server-side FunctionTool exposes the JSON schema as
+        # `.parameters`; `inputSchema` is the wire name a *client* sees.
+        offenders = {
+            t.name: leaked
+            for t in await mcp.list_tools()
+            if (leaked := [p for p in t.parameters.get("required", []) if p.startswith("_")])
+        }
+        assert not offenders, f"private parameters exposed as required: {offenders}"
 
 
 # ---------------------------------------------------------------------------
@@ -549,6 +576,57 @@ class TestBearerAuth:
         assert result == "ok"
         call_next.assert_awaited_once()
 
+    async def test_bearer_auth_middleware_gates_tools_list(self):
+        """tools/list is protected too, not just tools/call.
+
+        It returns every tool name, description and input schema, so leaving it
+        open lets an unauthenticated caller enumerate the whole surface.
+        """
+        from server.mcp_server import BearerAuthMiddleware
+
+        middleware = BearerAuthMiddleware()
+
+        mock_request = MagicMock()
+        mock_request.headers = {}
+        mock_req_ctx = MagicMock()
+        mock_req_ctx.request = mock_request
+        mock_fastmcp_ctx = MagicMock()
+        mock_fastmcp_ctx.request_context = mock_req_ctx
+
+        context = MagicMock()
+        context.method = "tools/list"
+        context.fastmcp_context = mock_fastmcp_ctx
+
+        call_next = AsyncMock()
+
+        with patch("server.mcp_server.settings") as mock_settings:
+            mock_settings.mcp_api_key = "secret-key"
+            with pytest.raises(PermissionError, match="Authentication"):
+                await middleware(context, call_next)
+
+    async def test_bearer_auth_middleware_leaves_initialize_open(self):
+        """The handshake stays unauthenticated by design.
+
+        A client must complete `initialize` before it can be told anything, and
+        the response carries no information of ours. Pinning this stops a future
+        widening of _PROTECTED_METHODS from silently breaking every client.
+        """
+        from server.mcp_server import BearerAuthMiddleware
+
+        middleware = BearerAuthMiddleware()
+
+        context = MagicMock()
+        context.method = "initialize"
+
+        call_next = AsyncMock(return_value="ok")
+
+        with patch("server.mcp_server.settings") as mock_settings:
+            mock_settings.mcp_api_key = "secret-key"
+            result = await middleware(context, call_next)
+
+        assert result == "ok"
+        call_next.assert_awaited_once()
+
     async def test_bearer_auth_skipped_when_no_key_configured(self):
         """When mcp_api_key is empty, all requests pass through."""
 
@@ -595,8 +673,8 @@ class TestInputValidation:
         from server.tools.hybrid_search import hybrid_search
 
         result = await hybrid_search("")
-        assert result["vector_results"] == []
-        assert result["graph_results"] == []
+        assert result["results"] == []
+        assert result["graph_facts"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -619,13 +697,13 @@ class TestReranker:
         ]
 
         with patch(
-            "server.tools.reranker._rerank_request",
+            "retrieval.rerank._rerank_request",
             new_callable=AsyncMock,
             return_value=mock_api_results,
         ):
-            from server.tools.reranker import rerank
+            from retrieval.rerank import rerank_dicts
 
-            reranked = await rerank("query", results, top_k=2)
+            reranked = await rerank_dicts("query", results, top_k=2)
 
         assert len(reranked) == 2
         assert reranked[0]["score"] == 0.9
@@ -634,9 +712,9 @@ class TestReranker:
 
     async def test_rerank_empty_results(self):
         """Empty input returns empty output."""
-        from server.tools.reranker import rerank
+        from retrieval.rerank import rerank_dicts
 
-        result = await rerank("query", [], top_k=5)
+        result = await rerank_dicts("query", [], top_k=5)
         assert result == []
 
     async def test_rerank_fallback_on_failure(self):
@@ -647,13 +725,13 @@ class TestReranker:
         ]
 
         with patch(
-            "server.tools.reranker._rerank_request",
+            "retrieval.rerank._rerank_request",
             new_callable=AsyncMock,
             side_effect=RuntimeError("API down"),
         ):
-            from server.tools.reranker import rerank
+            from retrieval.rerank import rerank_dicts
 
-            reranked = await rerank("query", results, top_k=1)
+            reranked = await rerank_dicts("query", results, top_k=1)
 
         assert len(reranked) == 1
         assert reranked[0]["text"] == "doc"
@@ -763,11 +841,11 @@ class TestLiveIngestModels:
         )
         assert resp.status == "accepted"
 
-    def test_hybrid_search_response_with_session(self) -> None:
-        """HybridSearchResponse supports session_id and live_results."""
-        from server.models import HybridSearchResponse
+    def test_fused_search_response_with_session(self) -> None:
+        """FusedSearchResponse supports session_id and live_results."""
+        from server.models import FusedSearchResponse
 
-        resp = HybridSearchResponse(
+        resp = FusedSearchResponse(
             query="test",
             session_id="session-1",
             live_results=[],
@@ -829,6 +907,58 @@ class TestSessionAwareVectorSearch:
 
         assert len(results) == 2
         assert mock_qdrant.query_points.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_vector_search_kb_filter_admits_points_missing_is_live(self) -> None:
+        """KB half of the dual query must match bulk points that have no
+        `is_live` key at all (ingestion/pipeline.py never writes one).
+
+        Regression test for a bug where the KB filter used
+        `should=[is_live==False, is_null(is_live)]`. Qdrant's IsNullCondition
+        matches an explicit JSON null, not a missing key, so that clause
+        matched zero real bulk-KB points and the KB half of every
+        session-scoped vector_search call silently returned nothing.
+
+        We can't exercise real Qdrant filtering against a MagicMock client,
+        so this inspects the actual filter object passed to the KB
+        query_points call and asserts it uses `must_not: is_live == True`
+        (which naturally treats a missing field as "not True"), matching the
+        pattern already proven correct in list_documents.py /
+        list_document_chunks.py / retrieval/channels.py's build_kb_filter.
+        """
+        from qdrant_client import models
+
+        mock_embedder = MagicMock()
+        mock_embedder.embed_text_query = AsyncMock(return_value=[0.1] * 512)
+
+        mock_response = MagicMock()
+        mock_response.points = []
+
+        mock_qdrant = MagicMock()
+        mock_qdrant.query_points = MagicMock(return_value=mock_response)
+
+        with (
+            patch("server.tools.vector_search._qdrant_client", mock_qdrant),
+            patch("server.tools.vector_search._embedder", mock_embedder),
+        ):
+            from server.tools.vector_search import vector_search
+
+            await vector_search("contract", session_id="session-1")
+
+        assert mock_qdrant.query_points.call_count == 2
+        # Second call is the KB query (first is the live-session query).
+        kb_call = mock_qdrant.query_points.call_args_list[1]
+        kb_filter = kb_call.kwargs["query_filter"]
+
+        assert kb_filter.must_not is not None
+        assert len(kb_filter.must_not) == 1
+        condition = kb_filter.must_not[0]
+        assert isinstance(condition, models.FieldCondition)
+        assert condition.key == "is_live"
+        assert condition.match.value is True
+
+        # Must not fall back to the broken should/IsNullCondition shape.
+        assert not kb_filter.should
 
     @pytest.mark.asyncio
     async def test_vector_search_without_session_unchanged(self) -> None:
@@ -928,30 +1058,43 @@ class TestSessionAwareGraphSearch:
 class TestSessionAwareHybridSearch:
     @pytest.mark.asyncio
     async def test_hybrid_search_with_session_id(self) -> None:
-        """Hybrid search passes session_id to both sub-searches."""
-        mock_vector = AsyncMock(
-            return_value=[
-                {
-                    "score": 0.9,
-                    "text": "live chunk",
-                    "metadata": {"source_type": "live"},
-                },
-                {"score": 0.8, "text": "kb doc", "metadata": {}},
-            ]
+        """Hybrid search passes session_id to both smart_pipeline and graph_search."""
+        fused = PipelineOutput(
+            results=[
+                FusedResult(
+                    id="2",
+                    text="kb doc",
+                    source_file="d.pdf",
+                    score=0.8,
+                    fusion_score=0.02,
+                    metadata={},
+                ),
+            ],
+            live_results=[
+                FusedResult(
+                    id="1",
+                    text="live chunk",
+                    source_file="d.pdf",
+                    score=0.9,
+                    fusion_score=0.03,
+                    metadata={},
+                ),
+            ],
         )
+        mock_pipeline = AsyncMock(return_value=fused)
         mock_graph = AsyncMock(return_value=[{"fact": "X related Y"}])
 
         with (
-            patch("server.tools.hybrid_search.vector_search", mock_vector),
+            patch("server.tools.hybrid_search.smart_pipeline", mock_pipeline),
             patch("server.tools.hybrid_search.graph_search", mock_graph),
         ):
             from server.tools.hybrid_search import hybrid_search
 
             result = await hybrid_search("test", session_id="session-1")
 
-        # vector_search should receive session_id
-        mock_vector.assert_called_once()
-        assert mock_vector.call_args.kwargs.get("session_id") == "session-1"
+        # smart_pipeline should receive session_id
+        mock_pipeline.assert_called_once()
+        assert mock_pipeline.call_args.kwargs.get("session_id") == "session-1"
         # graph_search should receive session_id
         mock_graph.assert_called_once()
         assert mock_graph.call_args.kwargs.get("session_id") == "session-1"
@@ -959,21 +1102,43 @@ class TestSessionAwareHybridSearch:
 
     @pytest.mark.asyncio
     async def test_hybrid_search_separates_live_results(self) -> None:
-        """Hybrid search separates live chunks from KB results."""
-        mock_vector = AsyncMock(
-            return_value=[
-                {
-                    "score": 0.9,
-                    "text": "live chunk",
-                    "metadata": {"source_type": "live"},
-                },
-                {"score": 0.8, "text": "kb doc", "metadata": {}},
-            ]
+        """Hybrid search separates live chunks from KB results.
+
+        The KB/live split is owned by the pipeline (dual retrieval via
+        PipelineOutput.results / .live_results — see retrieval/pipeline.py),
+        not derived by hybrid_search from result metadata. A prior version
+        of this fixture put both hits in `results` and tagged one with
+        `metadata={"source_type": "live"}`, which real Qdrant payloads never
+        carry (ingestion/live_ingest.py writes metadata={}) — that let the
+        session_id dual-retrieval bug ship undetected.
+        """
+        fused = PipelineOutput(
+            results=[
+                FusedResult(
+                    id="2",
+                    text="kb doc",
+                    source_file="d.pdf",
+                    score=0.8,
+                    fusion_score=0.02,
+                    metadata={},
+                ),
+            ],
+            live_results=[
+                FusedResult(
+                    id="1",
+                    text="live chunk",
+                    source_file="d.pdf",
+                    score=0.9,
+                    fusion_score=0.03,
+                    metadata={},
+                ),
+            ],
         )
+        mock_pipeline = AsyncMock(return_value=fused)
         mock_graph = AsyncMock(return_value=[])
 
         with (
-            patch("server.tools.hybrid_search.vector_search", mock_vector),
+            patch("server.tools.hybrid_search.smart_pipeline", mock_pipeline),
             patch("server.tools.hybrid_search.graph_search", mock_graph),
         ):
             from server.tools.hybrid_search import hybrid_search
@@ -981,4 +1146,4 @@ class TestSessionAwareHybridSearch:
             result = await hybrid_search("test", session_id="session-1")
 
         assert len(result["live_results"]) == 1
-        assert len(result["vector_results"]) == 1
+        assert len(result["results"]) == 1

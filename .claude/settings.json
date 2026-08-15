@@ -1,0 +1,43 @@
+{
+  "extraKnownMarketplaces": {
+    "held-marketplace": {
+      "source": {
+        "source": "github",
+        "repo": "dollro/held-skills-marketplace"
+      },
+      "autoUpdate": true
+    },
+    "claude-plugins-official": {
+      "source": {
+        "source": "github",
+        "repo": "anthropics/claude-plugins-official"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "chrome-devtools-mcp@claude-plugins-official": true,
+    "claude-md-management@claude-plugins-official": true,
+    "frontend-design@claude-plugins-official": true,
+    "skill-creator@claude-plugins-official": true,
+    "superpowers@claude-plugins-official": true,
+    "agent-team@held-marketplace": true,
+    "ai-dev@held-marketplace": true,
+    "braindump2spec@held-marketplace": true,
+    "brainstorming@held-marketplace": true,
+    "branch@held-marketplace": true,
+    "code-review@held-marketplace": true,
+    "design-parity@held-marketplace": true,
+    "electron-dev@held-marketplace": true,
+    "equity-research@held-marketplace": true,
+    "fullstack-dev@held-marketplace": true,
+    "investment-memo@held-marketplace": true,
+    "pencil-pen-generator@held-marketplace": true,
+    "prompt-engineering@held-marketplace": true,
+    "spec2plan@held-marketplace": true,
+    "uiux-design-penpot@held-marketplace": true,
+    "uiux-design-system@held-marketplace": true,
+    "uiux-design-tailwindv4@held-marketplace": true,
+    "uiux-design-vue3@held-marketplace": true,
+    "uiux-image2design@held-marketplace": true
+  }
+}

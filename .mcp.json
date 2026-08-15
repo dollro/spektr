@@ -1,0 +1,40 @@
+{
+  "mcpServers": {
+    "spektr": {
+      "type": "http",
+      "url": "${SPEKTR_MCP_URL:-http://localhost:8090/mcp}",
+      "headers": {
+        "Authorization": "Bearer ${SPEKTR_MCP_BEARER}"
+      }
+    },
+    "serena": {
+      "type": "stdio",
+      "command": "uv",
+      "args": [
+        "tool",
+        "run",
+        "--from",
+        "git+https://github.com/oraios/serena",
+        "serena",
+        "start-mcp-server",
+        "--context",
+        "ide-assistant"
+      ]
+    },
+    "context7": {
+      "type": "http",
+      "url": "https://mcp.context7.com/mcp",
+      "headers": { "CONTEXT7_API_KEY": "${CONTEXT7_API_KEY}" }
+    },
+    "grep.app": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "https://mcp.grep.app"]
+    },
+    "chrome-devtools": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "chrome-devtools-mcp@1.6.0"]
+    }
+  }
+}

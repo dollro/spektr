@@ -1,0 +1,113 @@
+# Labelled retrieval golden set. Each query lists the chunks that SHOULD be
+# retrieved. Used by task eval-retrieval for recall@10 / nDCG@10 / MRR.
+#
+# STATUS: smoke-level set. The corpus is two documents, so these metrics
+# validate that the harness works — they are NOT a meaningful benchmark and
+# the thresholds below are non-gating. Expand to 40+ queries across a real
+# multi-document corpus before treating recall/nDCG movements as signal.
+# Tracking: see docs/eval/golden-set.md "Expanding the retrieval set".
+#
+# Coverage targets — aim for roughly even thirds:
+#   exact_id   : part numbers, error codes, section refs, proper nouns.
+#                These are what the sparse channel exists for.
+#   multi_hop  : questions needing two or more chunks, ideally across
+#                documents. These are what decomposition exists for.
+#   semantic   : paraphrased questions with no lexical overlap. These are
+#                what the dense channel exists for.
+#
+# Corpus notes (read before adding entries):
+#   - sample.pdf is a 2-page placeholder fixture whose only text is literally
+#     "Page 1" / "Page 2" — no real content to query. It could not honestly
+#     support any of the three categories, so every entry below is drawn from
+#     arxiv.pdf (the multi-robot exploration paper), verified by reading the
+#     real ingested chunks via list_document_chunks.
+#   - Only one genuinely honest multi_hop example was found. arxiv.pdf is a
+#     single paper — most candidate "two-fact" questions turned out to be
+#     answerable from one chunk once the full text was read, which would
+#     make the multi_hop label dishonest. The one entry below needs two
+#     chunks that are genuinely non-adjacent and never restated together.
+#   - `relevant` entries here include `page_number` in addition to
+#     `source_file`/`chunk_index`, and test_retrieval_metrics.py's `_doc_key`
+#     keys on all three. The corpus's chunk_index resets per page (see
+#     ingestion/pipeline.py's `_make_chunk_id(source_file, page_number,
+#     chunk_index)`), so `source_file#chunk_index` alone collides across
+#     pages — e.g. arxiv.pdf has a real chunk_index=0 on every one of its 5
+#     pages. Keying on page_number too is a verified deviation from the
+#     brief's example key; see the comment on `_doc_key` in
+#     test_retrieval_metrics.py.
+#   - Labels were first captured against an intermediate ingestion state
+#     (46 real arxiv.pdf chunks) and re-verified read-only against the final
+#     stable ingest (66 chunks — this corpus is written by two overlapping
+#     chunkers, a coarse paragraph-sized pass and a fixed ~512-char pass, so
+#     point count isn't 1:1 with "chunk" in the everyday sense). Re-ingestion
+#     moved some chunk_index assignments; three labels below were updated to
+#     match:
+#       - "battery-related operating modes" moved from (page 2, chunk 6) to
+#         (page 2, chunk 8) — chunk 6 now holds unrelated communication-range
+#         text; the EXP/CHR sentence relocated to chunk 8.
+#       - "central coordinator" moved from (page 1, chunk 2)+(page 1, chunk
+#         5) to (page 1, chunk 1)+(page 1, chunk 2) — the abstract (chunk 1)
+#         and intro (chunk 2) both restate the centralized-control claim
+#         verbatim; chunk 5 no longer contains it.
+#       - "real-world exploration scenario / physical dangers" moved from
+#         (page 1, chunk 4) to (page 1, chunk 2) — the lava-tubes hazard
+#         sentence and the centralized-control sentence ended up merged into
+#         the same coarse chunk, so chunk 2 answers both queries above.
+#     The other four labels (retries=5, five trials/20% increase, A* routing,
+#     the two-component multi_hop pair) were unaffected — verified byte-for-
+#     byte identical text at the same (page, chunk_index).
+queries:
+  - query: "What is the maximum number of retries allowed for LLM API calls before falling back to the baseline destination-selection method?"
+    category: exact_id
+    relevant:
+      - source_file: "arxiv.pdf"
+        page_number: 3
+        chunk_index: 5
+
+  - query: "How many independent trials were the reported results averaged over, and what percentage increase in explored area did the LLM-based method achieve over the baseline?"
+    category: exact_id
+    relevant:
+      - source_file: "arxiv.pdf"
+        page_number: 4
+        chunk_index: 2
+
+  - query: "What are the two battery-related operating modes a robot switches between?"
+    category: exact_id
+    relevant:
+      - source_file: "arxiv.pdf"
+        page_number: 2
+        chunk_index: 8
+
+  - query: "Why can't the robot swarm rely on a central coordinator during exploration?"
+    category: semantic
+    relevant:
+      - source_file: "arxiv.pdf"
+        page_number: 1
+        chunk_index: 1
+      - source_file: "arxiv.pdf"
+        page_number: 1
+        chunk_index: 2
+
+  - query: "What real-world exploration scenario originally motivated this approach, given the physical dangers involved?"
+    category: semantic
+    relevant:
+      - source_file: "arxiv.pdf"
+        page_number: 1
+        chunk_index: 2
+
+  - query: "How does each robot decide which path to take toward its assigned target location?"
+    category: semantic
+    relevant:
+      - source_file: "arxiv.pdf"
+        page_number: 2
+        chunk_index: 4
+
+  - query: "What are the two algorithmic components of the proposed exploration system, and how many independent trials was its performance evaluated over?"
+    category: multi_hop
+    relevant:
+      - source_file: "arxiv.pdf"
+        page_number: 5
+        chunk_index: 3
+      - source_file: "arxiv.pdf"
+        page_number: 4
+        chunk_index: 2
