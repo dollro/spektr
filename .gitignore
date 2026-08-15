@@ -1,5 +1,9 @@
 .env
 .env.prod
+# Backups of env files hold the same live credentials.
+.env.bak
+.env.*.bak
+*.env.bak
 __pycache__/
 .venv/
 *.pyc
