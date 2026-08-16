@@ -186,6 +186,12 @@ async def main(fix: bool = False, yes: bool = False) -> int:
         print(f"Tracked by CocoIndex : {len(tracked)}")
         print(f"Present in Qdrant    : {len(indexed)}")
         print(f"In sync              : {len(both)}")
+    # Always show which ledger was read, not only when it fails to open. A
+    # doctor run whose STATE_DIR differs from the ingest's reads an unrelated
+    # (or empty) ledger and reports the entire corpus as orphaned — the
+    # `--fix` guard below refuses that, but the diagnosis is only obvious if
+    # you can see the path it actually used.
+    print(f"Ledger               : {settings.cocoindex_db_path}")
     print()
 
     if both:

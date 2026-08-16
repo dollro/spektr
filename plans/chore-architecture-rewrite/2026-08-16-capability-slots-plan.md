@@ -258,6 +258,24 @@ class Reranker(Protocol):
 
 ## Follow-ups found during the test ingest
 
+**Test ingest, 2026-08-16 — results.** `documents/` (3 PDFs) ingested clean: 140 points, all `jina-embeddings-v4` @ 512d, 0 errored files, 81s with Docling, 0 rate-limit errors. `task doctor` reports 3/3 in sync.
+
+`task eval-retrieval` baseline against the committed fixture (32 points, arxiv.pdf + sample.pdf, jina-v4 512d — already matching the active config, so no regeneration needed):
+
+| config | recall@10 | ndcg@10 | mrr |
+|-|-|-|-|
+| dense-only | 0.429 | 0.272 | 0.230 |
+| dense+sparse | 0.429 | 0.376 | 0.357 |
+| **dense+rerank** | **0.429** | **0.429** | **0.429** |
+| all | 0.429 | 0.357 | 0.333 |
+
+This is the **Phase 1 exit evidence**: the refactored reranker works end to end against the live Jina API and is the single biggest ranking contributor (mrr 0.230 → 0.429 over dense-only). Recall is flat across configs because a 10-limit over a 32-point corpus retrieves the same pool every time — only ordering moves, which is exactly what a reranker changes.
+
+⚠ **`all` is worse than `dense+rerank`** (mrr 0.333 vs 0.429): adding the sparse channel *degrades* the reranked ordering here. Do not act on this yet — 7 queries over a 32-point corpus, and the set's own header calls itself smoke-level and non-gating. It is worth re-measuring the moment the corpus grows, because if it holds it means RRF is feeding the reranker noise.
+
+**Verified, no change needed:** `doctor --fix` already refuses when the ledger tracks nothing at all, so a `STATE_DIR` mismatch cannot wipe the corpus — confirmed live (guard fired, all 140 points intact). Doctor now always prints which ledger it read, so the mismatch is visible rather than inferred.
+
+
 - [ ] **D10 — `*_MAX_CONCURRENT` bounds concurrency per event loop, not per process.** Every provider client creates its RPM/TPM `TokenBucket`s once in `__init__` (process-wide) but its `asyncio.Semaphore` inside `_ensure_loop_resources` (per loop), because a semaphore is loop-bound. CocoIndex runs file components on several worker threads each with its own loop, so the effective ceiling is roughly `*_MAX_CONCURRENT x PIPELINE_MAX_CONCURRENT_FILES`. Observed live: `JINA_MAX_CONCURRENT=4` with 4 in-flight files drew `RATE_CONCURRENCY_LIMIT_EXCEEDED: 2/2 concurrent` from Jina 6 times and 12 twenty-second all-limiter pauses — four minutes of pure stalling before the first document finished. Documented in `ingestion/embedder.py` and `.env.example` for now; the real fix is a cross-loop concurrency gate (the `TokenBucket` pattern already is loop-agnostic — `asyncio.sleep` works on any loop — so concurrency could follow it), which is a careful piece of work with deadlock risk and does not belong in a config commit. Affects `jina.py`, `voyage.py`, `openrouter.py` and `local.py` identically.
 
 - [ ] **The Docling -> PyMuPDF fallback is invisible in the corpus.** Observed live: `libxcb.so.1` was missing, so `cv2` failed to import inside docling's table model and every PDF fell back to PyMuPDF. `file_processor.py` logs ERROR, but the file still *succeeds*, so the run reported `0 errored files` and produced a full 173-point corpus — chunked by the fallback path, which segments differently from docling's `HybridChunker`. Nothing in Qdrant records which processor produced a point, so `task doctor` cannot see it and the golden set (built against docling chunks) silently stops matching. Suggest a `processor: docling|pymupdf` payload field, and a doctor check that flags a corpus with mixed values or an unexpected one. Note this also means the fallback is a *quality* cliff that a green ingest hides.
