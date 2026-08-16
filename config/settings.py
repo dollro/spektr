@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Literal, Self
 
 from pydantic import field_validator, model_validator
@@ -87,10 +88,33 @@ class Settings(BaseSettings):
     neo4j_user: str = "neo4j"
     neo4j_password: str
 
+    # Root for every piece of mutable runtime state. ONE knob, because the
+    # three paths below are otherwise independently overridable and it only
+    # takes forgetting one to write into a tree you meant to leave alone.
+    #
+    # It defaults inside the repo (gitignored) because local dev runs the app
+    # on the host via uv — `task up` starts only Qdrant and Neo4j. That is
+    # convenient and wrong the moment the working tree is shared: a sandbox,
+    # a CI checkout, or a second worktree all inherit the host's ledger and
+    # can delete it. Point STATE_DIR outside the tree in those environments.
+    #
+    # In the containerised stack this is already covered — the `ingest_state`
+    # NAMED volume is mounted at /app/state on every pipeline service. Keep it
+    # named rather than a bind mount: LMDB is mmap-based, and Docker Desktop's
+    # file-sharing layer on macOS/Windows does not give correct mmap
+    # semantics, so a bind-mounted ledger can corrupt rather than merely be
+    # slow.
+    state_dir: str = "state"
+
     # CocoIndex internal state (v1 stores the target-state ledger, memoization
     # cache and component tree in a local LMDB directory — no PostgreSQL).
-    # Lives under state/ so the existing `ingest_state` volume covers it.
-    cocoindex_db_path: str = "state/cocoindex.db"
+    # Empty -> {STATE_DIR}/cocoindex.db, resolved in place by a validator so
+    # every consumer still reads a concrete path.
+    cocoindex_db_path: str = ""
+    # Empty -> {STATE_DIR}/ingestion_failures.db. Was a module constant in
+    # `ingestion/_failure_tracker.py`, which made it the one state path
+    # STATE_DIR could not move.
+    failure_db_path: str = ""
 
     # Document Source — exactly one of: local, s3, sharepoint
     document_source: Literal["local", "s3", "sharepoint"] = "local"
@@ -119,7 +143,7 @@ class Settings(BaseSettings):
     sharepoint_root_folder_path: str = ""  # e.g. "/Engineering/Specs"
     sharepoint_local_subdir: str = "sharepoint"
     sharepoint_sync_interval_seconds: int = 180
-    sharepoint_state_dir: str = "state/sharepoint"
+    sharepoint_state_dir: str = ""  # empty -> {STATE_DIR}/sharepoint
 
     # LLM
     llm_api_type: str = "anthropic"
@@ -421,6 +445,28 @@ class Settings(BaseSettings):
                 "ROOT_FOLDER_PATH."
             )
             raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def _resolve_state_paths(self) -> Self:
+        """Derive the three state paths from STATE_DIR unless pinned.
+
+        Resolved in place — the same shape as `embedding_route` above — so
+        consumers (`ingestion/app.py`, `scripts/backup.py`, the failure
+        tracker) keep reading a concrete path and never have to know that
+        STATE_DIR exists.
+
+        An explicitly set path still wins, which is what keeps existing
+        `.env` files with `COCOINDEX_DB_PATH=state/cocoindex.db` working
+        unchanged.
+        """
+        root = Path(self.state_dir)
+        if not self.cocoindex_db_path:
+            self.cocoindex_db_path = str(root / "cocoindex.db")
+        if not self.failure_db_path:
+            self.failure_db_path = str(root / "ingestion_failures.db")
+        if not self.sharepoint_state_dir:
+            self.sharepoint_state_dir = str(root / "sharepoint")
         return self
 
     @model_validator(mode="after")

@@ -193,7 +193,10 @@ These are load-bearing invariants introduced by the `feat/prod-hardening` work. 
 - `QDRANT_DB` / `_PROVIDER_NAME` context-key strings are part of persistent tracking keys. Renaming them orphans the ledger and re-declares everything.
 
 **Pipeline state:**
-- CocoIndex v1 stores its ledger, memo cache and component tree in an LMDB directory (`COCOINDEX_DB_PATH`, default `state/cocoindex.db`). No PostgreSQL, no `DATABASE_URL`, no `ragingestion__cocoindex_tracking` table.
+- `STATE_DIR` (default `state/`) is the single root for ALL mutable runtime state: the CocoIndex LMDB ledger, the poison-pill failure DB and the SharePoint delta token. `COCOINDEX_DB_PATH` / `FAILURE_DB_PATH` / `SHAREPOINT_STATE_DIR` derive from it when empty and are resolved in place by a validator, so consumers always read a concrete path.
+- **Point `STATE_DIR` outside the repo whenever the working tree is shared** — a container sandbox, CI, or a second worktree. The default lives inside the (gitignored) tree because local dev runs the app on the host via uv, which means a shared tree hands another process your ledger. Losing it costs a full reprocess, not data loss.
+- The prod `ingest_state` volume must stay a **named** volume, never a bind mount: LMDB is mmap-based and Docker Desktop's file sharing on macOS/Windows does not give correct mmap semantics.
+- CocoIndex v1 stores its ledger, memo cache and component tree in an LMDB directory. No PostgreSQL, no `DATABASE_URL`, no `ragingestion__cocoindex_tracking` table.
 - `PIPELINE_MAX_CONCURRENT_FILES` (default 4) caps `max_inflight_components`; CocoIndex's own default of 1024 would blow past embedding rate limits.
 - Forcing reprocessing = `task ingest -- --full-reprocess`, or deleting the state directory. Losing that directory costs a full reprocess, not data loss (point ids are deterministic uuid5).
 

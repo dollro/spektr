@@ -6,8 +6,8 @@ blocking the batch. A file that fails N times in a row becomes a
 marks it processed so the rest of the batch proceeds.
 
 Counts persist across process restarts in a SQLite file under
-`./state/ingestion_failures.db`. Successful ingestion resets the
-count for that file.
+`{STATE_DIR}/ingestion_failures.db` (`FAILURE_DB_PATH` to pin it
+directly). Successful ingestion resets the count for that file.
 """
 
 from __future__ import annotations
@@ -17,10 +17,25 @@ import sqlite3
 import threading
 from pathlib import Path
 
+from config.settings import settings
+
 logger = logging.getLogger(__name__)
 
-_DEFAULT_DB_PATH = Path("state") / "ingestion_failures.db"
 _lock = threading.Lock()
+
+
+def _default_db_path() -> Path:
+    """Resolve the tracker's path from settings, at call time.
+
+    This was a module-level `Path("state") / "ingestion_failures.db"`
+    constant, which made it the one piece of runtime state `STATE_DIR` could
+    not relocate — so a sandbox or CI checkout that redirected everything
+    else still wrote its poison-pill counts into the shared tree.
+
+    Resolved per call rather than at import so a test (or a process that
+    reconfigures settings before first use) is not bound by import order.
+    """
+    return Path(settings.failure_db_path)
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
@@ -41,7 +56,7 @@ class FailureTracker:
     """Sqlite-backed failure counter. Thread-safe via a module lock."""
 
     def __init__(self, db_path: Path | None = None) -> None:
-        self._db_path = db_path or _DEFAULT_DB_PATH
+        self._db_path = db_path or _default_db_path()
 
     def record_failure(self, source_file: str, error: str = "") -> int:
         """Increment the fail count for `source_file`; return the new count."""
