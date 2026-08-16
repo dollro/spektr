@@ -351,7 +351,7 @@ class TestHybridSearch:
                 mock_pipeline,
             ),
             patch(
-                "server.tools.hybrid_search.graph_search",
+                "server.tools.hybrid_search.search_graph",
                 mock_graph,
             ),
         ):
@@ -386,7 +386,7 @@ class TestHybridSearch:
                 mock_pipeline,
             ),
             patch(
-                "server.tools.hybrid_search.graph_search",
+                "server.tools.hybrid_search.search_graph",
                 mock_graph,
             ),
         ):
@@ -1085,7 +1085,7 @@ class TestSessionAwareHybridSearch:
 
         with (
             patch("server.tools.hybrid_search.smart_pipeline", mock_pipeline),
-            patch("server.tools.hybrid_search.graph_search", mock_graph),
+            patch("server.tools.hybrid_search.search_graph", mock_graph),
         ):
             from server.tools.hybrid_search import hybrid_search
 
@@ -1138,7 +1138,7 @@ class TestSessionAwareHybridSearch:
 
         with (
             patch("server.tools.hybrid_search.smart_pipeline", mock_pipeline),
-            patch("server.tools.hybrid_search.graph_search", mock_graph),
+            patch("server.tools.hybrid_search.search_graph", mock_graph),
         ):
             from server.tools.hybrid_search import hybrid_search
 

@@ -15,7 +15,7 @@ import asyncio
 import logging
 
 from retrieval.pipeline import smart_pipeline
-from server.tools.graph_search import graph_search
+from server.tools.graph_search import search_graph
 from server.tools.multi_search import _empty, run_graph, shape_response
 
 logger = logging.getLogger(__name__)
@@ -57,7 +57,7 @@ async def hybrid_search(
             session_id=session_id,
         )
     )
-    graph_task = asyncio.create_task(run_graph(graph_search, query, limit, session_id))
+    graph_task = asyncio.create_task(run_graph(search_graph, query, limit, session_id))
 
     output = await pipeline_task
     graph_facts, graph_failed = await graph_task
