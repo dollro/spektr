@@ -7,6 +7,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from config.constants import DENSE_COLLECTION, MULTIVEC_COLLECTION
 from config.embedding_models import EmbeddingModel, EmbeddingRoute, spec
+from config.multivec_models import MultivecRoute
+from config.multivec_models import spec as multivec_spec
 from config.rerank_models import RerankRoute
 from config.rerank_models import spec as rerank_spec
 
@@ -60,6 +62,18 @@ class Settings(BaseSettings):
     openrouter_max_concurrent: int = 10
     openrouter_http_referer: str = ""  # optional, for openrouter.ai rankings
     openrouter_x_title: str = ""  # optional, for openrouter.ai rankings
+
+    # Self-hosted embedding endpoint (only when embedding_route = "local").
+    # An OpenAI-compatible /v1/embeddings server: TEI, vLLM or Infinity.
+    # This is the route that makes a sovereign deployment expressible — the
+    # other three are all vendor APIs.
+    local_embed_api_url: str = ""
+    local_embed_api_key: str = ""  # usually unset; TEI is typically unauthenticated
+    # No RPM bucket on this route: a local server has no request quota, it has
+    # finite GPU memory. Concurrency is the real constraint, so it is the only
+    # one bounded here.
+    local_max_concurrent: int = 8
+    local_batch_size: int = 32
 
     # Qdrant
     qdrant_url: str = "http://localhost:6333"
@@ -169,6 +183,15 @@ class Settings(BaseSettings):
     decompose_max_subqueries: int = 4
 
     vlm_generation_enabled: bool = False
+    # Late-interaction slot. Empty = unfilled = `visual_search` unavailable.
+    # Independent of EMBEDDING_MODEL: this collection shares no vector space
+    # with documents_dense, so the two choices were never actually coupled.
+    multivec_model: str = ""
+    multivec_route: MultivecRoute | Literal[""] = ""
+    # Replaced by MULTIVEC_MODEL. Declared so a stale value fails loudly
+    # rather than being dropped by `extra="ignore"` — the same reasoning as
+    # embedding_provider above. A silently ignored `true` here would leave
+    # visual_search dark on a deployment that thought it was enabled.
     multivec_enabled: bool = False
     graph_enabled: bool = True
     graph_semaphore_limit: int = 10  # SEMAPHORE_LIMIT for Graphiti LLM concurrency
@@ -184,6 +207,14 @@ class Settings(BaseSettings):
     schema_induction_model: str = ""  # empty -> fall back to llm_model
     schema_cache_ttl: int = 3600  # seconds
     image_embed_strategy: Literal["smart", "all", "none"] = "smart"
+    # Longest-side cap applied before an image is embedded. `.env.example`
+    # documented this key for a long time while no field existed to receive
+    # it, so `extra="ignore"` swallowed it and nothing ever resized: pages
+    # render at 150 DPI (ingestion/file_processor.py), so an A4 page reached
+    # the embedding API at roughly 1240x1754. That is billed area on every
+    # provider and, on Jina's tile-based meter, ~28k estimated tokens per
+    # page against a default TPM of 100k. 0 disables the cap.
+    image_embed_max_px: int = 400
 
     # Observability
     log_level: str = "INFO"
@@ -214,10 +245,23 @@ class Settings(BaseSettings):
 
     @property
     def embedding_model_id(self) -> str:
-        """Wire-level model id for the active model+route pair."""
+        """Wire-level model id for the active model+route pair.
+
+        The per-vendor dict at the end covers only the two models with a
+        native client. Anything else must be handled by a branch above it —
+        it raises `KeyError` rather than returning something plausible,
+        because a wrong model id produces vectors from the wrong space
+        rather than an error.
+        """
         s = spec(self.embedding_model)
         if self.embedding_route == "openrouter":
             return s.openrouter_text_id
+        if self.embedding_route == "local":
+            # The checkpoint the TEI/vLLM container serves. Sent on the wire
+            # by servers that accept a `model` field, and recorded in the
+            # Qdrant payload's `embedder_model` either way — which is what
+            # scripts/doctor.py reads to spot a mixed index.
+            return s.local_model_id
         return {"jina-v4": self.jina_model, "voyage-4": self.voyage_text_model}[
             self.embedding_model
         ]
@@ -233,6 +277,12 @@ class Settings(BaseSettings):
         s = spec(self.embedding_model)
         if self.embedding_route == "openrouter":
             return s.openrouter_image_id or s.openrouter_text_id
+        if self.embedding_route == "local":
+            # No self-hosted model in the registry embeds images today, and
+            # `supports_image_embedding` is False for all of them, so this is
+            # unreachable via the validated paths. Return the text id rather
+            # than a vendor field that has nothing to do with this route.
+            return s.local_model_id
         return self.voyage_multimodal_model
 
     @property
@@ -253,6 +303,24 @@ class Settings(BaseSettings):
         if isinstance(value, str) and not value.strip():
             return None
         return value
+
+    @property
+    def multivec_slot_filled(self) -> bool:
+        """True when a late-interaction model is configured.
+
+        Replaces the `multivec_enabled` boolean. Read this rather than the
+        model string so callers do not have to know that "" means off.
+        """
+        return bool(self.multivec_model)
+
+    @property
+    def multivec_dimensions(self) -> int:
+        """Per-token vector width for `documents_multivec`.
+
+        Sourced from the active model rather than the old `MULTIVEC_DIM`
+        constant, which could not vary with the model it was sizing.
+        """
+        return multivec_spec(self.multivec_model).dimensions
 
     @property
     def resolved_score_floor(self) -> float:
@@ -325,14 +393,11 @@ class Settings(BaseSettings):
                 f"Available routes: {', '.join(s.routes)}."
             )
             raise ValueError(msg)
-        if self.multivec_enabled and self.embedding_route not in s.multivector_routes:
-            msg = (
-                f"ColBERT multi-vector is not available for "
-                f"{self.embedding_model} via {self.embedding_route}. "
-                "Set MULTIVEC_ENABLED=false, or use EMBEDDING_MODEL=jina-v4 "
-                "with EMBEDDING_ROUTE=native."
-            )
-            raise ValueError(msg)
+        # The MULTIVEC_ENABLED cross-slot check that used to live here is
+        # gone: it rejected multi-vector unless the DENSE model happened to
+        # emit ColBERT, which made changing the text embedder silently remove
+        # the visual_search tool. The slot validates its own route instead —
+        # see _validate_multivec_selection.
         # Catches the silent-drop failure mode: `smart` asks for image
         # embeddings that the active client raises NotImplementedError for,
         # which the page-level try/except then swallows.
@@ -354,6 +419,34 @@ class Settings(BaseSettings):
                 "DOCUMENT_SOURCE=sharepoint requires all SHAREPOINT_* fields to "
                 "be set: TENANT_ID, CLIENT_ID, CLIENT_SECRET, SITE_ID, DRIVE_ID, "
                 "ROOT_FOLDER_PATH."
+            )
+            raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def _validate_multivec_selection(self) -> Self:
+        """Resolve the late-interaction route, and reject the retired flag."""
+        if self.multivec_enabled:
+            msg = (
+                "MULTIVEC_ENABLED has been replaced by MULTIVEC_MODEL, which "
+                "selects the late-interaction model independently of "
+                "EMBEDDING_MODEL — the two were never actually coupled. "
+                "Migrate: MULTIVEC_ENABLED=true -> "
+                "MULTIVEC_MODEL=jina-v4-colbert (identical behaviour); "
+                "MULTIVEC_ENABLED=false -> leave MULTIVEC_MODEL empty. "
+                "Then remove MULTIVEC_ENABLED."
+            )
+            raise ValueError(msg)
+        if not self.multivec_model:
+            return self
+        s = multivec_spec(self.multivec_model)
+        if not self.multivec_route:
+            self.multivec_route = s.default_route
+        if self.multivec_route not in s.routes:
+            msg = (
+                f"MULTIVEC_MODEL={self.multivec_model} is not served via "
+                f"MULTIVEC_ROUTE={self.multivec_route}. "
+                f"Available routes: {', '.join(s.routes)}."
             )
             raise ValueError(msg)
         return self
@@ -391,6 +484,26 @@ class Settings(BaseSettings):
                 f"Available routes: {', '.join(s.routes)}."
             )
             raise ValueError(msg)
+
+        # An explicit floor can still be on the wrong scale. The registry
+        # default follows the model, but an operator who pinned 0.0 in the
+        # jina era and later switched to a unit-scaled reranker keeps that
+        # value — and a [0,1] score can never fall below 0.0, so the gate
+        # goes dark exactly as if the default had carried over. Catching only
+        # the unset case would leave the more likely mistake uncaught.
+        if s.score_scale == "unit" and self.rerank_score_floor is not None:
+            floor = self.rerank_score_floor
+            if not 0.0 < floor < 1.0:
+                msg = (
+                    f"RERANK_SCORE_FLOOR={floor} is unreachable for "
+                    f"{self.rerank_model}, which emits scores in [0, 1]: the "
+                    "relevance gate would "
+                    + ("never fire" if floor <= 0.0 else "always fire")
+                    + ". Leave RERANK_SCORE_FLOOR empty to adopt the model's "
+                    f"default of {s.default_score_floor}, or set a value "
+                    "strictly between 0 and 1."
+                )
+                raise ValueError(msg)
 
         base_url, api_key = self.rerank_endpoint
         if not base_url:

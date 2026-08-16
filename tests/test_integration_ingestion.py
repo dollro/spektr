@@ -39,7 +39,7 @@ def _configure_mock_pipeline_settings(mock_settings) -> None:  # type: ignore[no
     """Set the settings process_file_impl touches. graph_enabled=False skips Neo4j."""
     mock_settings.qdrant_url = "http://localhost:6333"
     mock_settings.document_source = "local"
-    mock_settings.multivec_enabled = False
+    mock_settings.multivec_slot_filled = False
     mock_settings.image_embed_strategy = "smart"
     mock_settings.vlm_generation_enabled = False
     mock_settings.graph_enabled = False
@@ -206,7 +206,7 @@ class TestImagePageIngestion:
         result = file_to_pages(sample_png_name, sample_png_bytes)
         pages = result.pages
 
-        with patch.object(settings, "multivec_enabled", True):
+        with patch.object(settings, "multivec_slot_filled", True):
             await _process_visual_page(
                 source_file=sample_png_name,
                 image_bytes=pages[0].image_bytes,
@@ -306,7 +306,7 @@ class TestIdempotency:
         sample_png_bytes: bytes,
         sample_png_name: str,
     ) -> None:
-        with patch.object(settings, "multivec_enabled", True):
+        with patch.object(settings, "multivec_slot_filled", True):
             for _ in range(2):
                 await _process_visual_page(
                     source_file=sample_png_name,

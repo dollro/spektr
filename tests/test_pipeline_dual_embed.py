@@ -27,7 +27,7 @@ class TestDualEmbedMixedPages:
 
         with patch("ingestion.page_processor.settings") as mock_settings:
             mock_settings.image_embed_strategy = "all"
-            mock_settings.multivec_enabled = False
+            mock_settings.multivec_slot_filled = False
             mock_settings.vlm_generation_enabled = False
 
             tasks = _build_page_tasks(
@@ -58,7 +58,7 @@ class TestDualEmbedMixedPages:
 
         with patch("ingestion.page_processor.settings") as mock_settings:
             mock_settings.image_embed_strategy = "smart"
-            mock_settings.multivec_enabled = False
+            mock_settings.multivec_slot_filled = False
             mock_settings.vlm_generation_enabled = False
 
             tasks = _build_page_tasks(
@@ -87,7 +87,7 @@ class TestDualEmbedMixedPages:
         )
 
         with patch("ingestion.page_processor.settings") as mock_settings:
-            mock_settings.multivec_enabled = False
+            mock_settings.multivec_slot_filled = False
             mock_settings.vlm_generation_enabled = False
 
             tasks = _build_page_tasks(
@@ -116,7 +116,7 @@ class TestDualEmbedMixedPages:
         )
 
         with patch("ingestion.page_processor.settings") as mock_settings:
-            mock_settings.multivec_enabled = False
+            mock_settings.multivec_slot_filled = False
             mock_settings.vlm_generation_enabled = False
 
             tasks = _build_page_tasks(
@@ -151,7 +151,7 @@ class TestImageEmbedStrategy:
 
         with patch("ingestion.page_processor.settings") as mock_settings:
             mock_settings.image_embed_strategy = "smart"
-            mock_settings.multivec_enabled = False
+            mock_settings.multivec_slot_filled = False
             mock_settings.vlm_generation_enabled = False
 
             tasks = _build_page_tasks(
@@ -182,7 +182,7 @@ class TestImageEmbedStrategy:
 
         with patch("ingestion.page_processor.settings") as mock_settings:
             mock_settings.image_embed_strategy = "smart"
-            mock_settings.multivec_enabled = False
+            mock_settings.multivec_slot_filled = False
             mock_settings.vlm_generation_enabled = False
 
             tasks = _build_page_tasks(
@@ -213,7 +213,7 @@ class TestImageEmbedStrategy:
 
         with patch("ingestion.page_processor.settings") as mock_settings:
             mock_settings.image_embed_strategy = "all"
-            mock_settings.multivec_enabled = False
+            mock_settings.multivec_slot_filled = False
             mock_settings.vlm_generation_enabled = False
 
             tasks = _build_page_tasks(

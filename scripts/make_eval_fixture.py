@@ -24,7 +24,7 @@ from typing import Any
 
 from qdrant_client import QdrantClient
 
-from config.constants import DENSE_COLLECTION, DENSE_DIM
+from config.constants import DENSE_COLLECTION
 from config.settings import settings
 
 OUT_PATH = Path("tests/eval/fixtures/retrieval_corpus.json.gz")
@@ -72,7 +72,7 @@ def export() -> None:
     if not points:
         raise SystemExit(f"collection {DENSE_COLLECTION!r} is empty — nothing to freeze")
 
-    records = [
+    records: list[dict[str, Any]] = [
         {
             "id": str(point.id),
             "payload": point.payload,
@@ -80,10 +80,13 @@ def export() -> None:
         }
         for point in points
     ]
-    sources = sorted({str(r["payload"].get("source_file", "")) for r in records})  # type: ignore[union-attr]
+    sources = sorted({str(r["payload"].get("source_file", "")) for r in records})
 
     blob = {
-        "dense_dim": DENSE_DIM,
+        # From the ACTIVE model, not the DENSE_DIM constant: that constant
+        # is a Jina-era 512 that no production path reads any more, so the
+        # fixture was recording a width the index does not use.
+        "dense_dim": settings.dense_dimensions,
         "source_collection": DENSE_COLLECTION,
         "sources": sources,
         "points": records,
@@ -99,7 +102,7 @@ def export() -> None:
         f"{len(sources)} sources, {size_kb:.0f} KB"
     )
     for source in sources:
-        count = sum(1 for r in records if r["payload"].get("source_file") == source)  # type: ignore[union-attr]
+        count = sum(1 for r in records if r["payload"].get("source_file") == source)
         print(f"  {source}: {count} points")
 
 

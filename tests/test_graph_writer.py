@@ -119,10 +119,7 @@ async def test_upsert_relationship(writer: GraphWriter) -> None:
 
     async with writer.driver.session() as session:
         result = await session.run(
-            "MATCH (s:Entity {name: 'Google'})"
-            "-[r:uses]->"
-            "(t:Entity {name: 'Python'}) "
-            "RETURN r"
+            "MATCH (s:Entity {name: 'Google'})-[r:uses]->(t:Entity {name: 'Python'}) RETURN r"
         )
         record = await result.single()
     assert record is not None

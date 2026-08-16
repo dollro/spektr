@@ -38,14 +38,16 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
 def golden_set() -> list[dict[str, Any]]:
     """Parsed Q&A fixtures."""
     with (FIXTURES / "golden_set.yaml").open() as fh:
-        return yaml.safe_load(fh)["items"]
+        items: list[dict[str, Any]] = yaml.safe_load(fh)["items"]
+    return items
 
 
 @pytest.fixture(scope="session")
 def thresholds() -> dict[str, float]:
     """Minimum per-metric scores for a green run."""
     with (EVAL_DIR / "thresholds.yaml").open() as fh:
-        return yaml.safe_load(fh)
+        values: dict[str, float] = yaml.safe_load(fh)
+    return values
 
 
 @pytest.fixture(scope="session")

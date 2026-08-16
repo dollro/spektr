@@ -27,6 +27,7 @@ from qdrant_client import models
 from config.constants import DENSE_VECTOR_NAME, SPARSE_VECTOR_NAME
 from config.logging import get_logger
 from config.settings import settings
+from ingestion._utils import cap_image_size
 from ingestion.embedder import Embedder
 from ingestion.file_processor import TextChunk, semantic_chunk
 from ingestion.graph_engine import GraphEngine
@@ -283,11 +284,16 @@ async def _process_visual_page(
     """Process an image/PDF page: dense + optional multivec embedding."""
     page_key = f"{source_file}::p{page_number}"
 
+    # Cap before embedding, not before rendering: the full-resolution bitmap
+    # is still what a VLM caption reads, and `multivec` wants patch detail.
+    # Only the dense call pays per-pixel here.
+    embed_bytes = cap_image_size(image_bytes, settings.image_embed_max_px)
+
     # Dense embedding. Failures propagate for the same reason as in
     # _process_text_page: a point we do not declare is a point CocoIndex
     # deletes.
     try:
-        vector = await embedder.embed_image(image_bytes)
+        vector = await embedder.embed_image(embed_bytes)
         dense.declare_point(
             models.PointStruct(
                 id=make_point_id(page_key),
@@ -317,7 +323,7 @@ async def _process_visual_page(
         raise
 
     # ColBERT multi-vector (requires jina-colbert-v2)
-    if settings.multivec_enabled and multivec is not None:
+    if settings.multivec_slot_filled and multivec is not None:
         try:
             vectors = await embedder.embed_multi_vector(image_bytes)
             img = Image.open(io.BytesIO(image_bytes))

@@ -36,7 +36,25 @@ logger = logging.getLogger(__name__)
 
 
 class _JinaGraphitiEmbedder(EmbedderClient):
-    """Adapts our JinaV4Embedder to Graphiti's EmbedderClient interface."""
+    """Adapts the configured embedder to Graphiti's EmbedderClient interface.
+
+    Named for Jina because that was the only provider when it was written; it
+    delegates to whatever `create_embedder()` returns, so graph embeddings
+    share the project's rate limiters and API quota rather than opening a
+    second client.
+
+    **Both methods pass `task="query"`, including the indexing one.** That is
+    deliberate, and it is the opposite of the passage/query asymmetry this
+    codebase treats as load-bearing elsewhere (see `_INPUT_TYPE` in
+    `ingestion/embedders/openrouter.py`, where the two modes differ by cos
+    0.82). Graphiti compares a search query against stored *entity names*, so
+    both sides want the same short-text encoding — an asymmetric pair would
+    compare a query-mode vector against a passage-mode one and lose
+    similarity. It is symmetric on purpose, not by omission.
+
+    Changing it re-embeds every `name_embedding` in the graph, so it is not a
+    drop-in adjustment.
+    """
 
     def __init__(self) -> None:
         self._embedder = create_embedder()
@@ -48,12 +66,23 @@ class _JinaGraphitiEmbedder(EmbedderClient):
         if isinstance(input_data, str):
             texts = [input_data]
         elif isinstance(input_data, list) and input_data and isinstance(input_data[0], str):
-            texts = input_data  # type: ignore[assignment]
+            texts = input_data
         else:
-            texts = [str(i) for i in input_data if i is not None]  # type: ignore[union-attr]
+            texts = [str(i) for i in input_data if i is not None]
 
         if not texts:
             return []
+        # Graphiti's EmbedderClient.create contract returns ONE vector, so a
+        # multi-item input can only yield the first. Embedding just texts[0]
+        # would be cheaper, but the extra items are what a caller passing a
+        # list expects to influence the result — warn rather than silently
+        # discard, so a misuse is visible instead of merely wrong.
+        if len(texts) > 1:
+            logger.warning(
+                "Graphiti embedder received %d inputs but returns one vector; "
+                "using the first and discarding the rest",
+                len(texts),
+            )
         vectors = await self._embedder.embed_text(texts, task="query")
         return vectors[0]
 

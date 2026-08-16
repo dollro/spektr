@@ -69,8 +69,7 @@ def encode_documents(texts: list[str]) -> list[SparseVector]:
 
     embeddings = _get_model().embed(texts)
     return [
-        models.SparseVector(indices=list(e.indices), values=list(e.values))
-        for e in embeddings
+        models.SparseVector(indices=list(e.indices), values=list(e.values)) for e in embeddings
     ]
 
 
@@ -84,6 +83,4 @@ def encode_query(text: str) -> SparseVector:
         A single SparseVector.
     """
     embedding = next(iter(_get_model().query_embed(text)))
-    return models.SparseVector(
-        indices=list(embedding.indices), values=list(embedding.values)
-    )
+    return models.SparseVector(indices=list(embedding.indices), values=list(embedding.values))

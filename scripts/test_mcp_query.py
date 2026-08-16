@@ -13,13 +13,14 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from typing import Any
 
 from server.tools.graph_search import graph_search
 from server.tools.hybrid_search import hybrid_search
 from server.tools.vector_search import vector_search
 
 
-def _pretty(label: str, data: list | dict) -> None:
+def _pretty(label: str, data: list[Any] | dict[str, Any]) -> None:
     print(f"\n{'=' * 60}")
     print(f"  {label}")
     print("=" * 60)

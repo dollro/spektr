@@ -70,9 +70,7 @@ async def test_decompose_disabled_returns_identity() -> None:
 @pytest.mark.asyncio
 async def test_decompose_llm_failure_returns_identity() -> None:
     """An LLM error degrades to the original query."""
-    with patch(
-        "retrieval.decompose._call_llm", AsyncMock(side_effect=RuntimeError("boom"))
-    ):
+    with patch("retrieval.decompose._call_llm", AsyncMock(side_effect=RuntimeError("boom"))):
         assert await decompose("a and b") == ["a and b"]
 
 

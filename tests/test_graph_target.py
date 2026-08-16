@@ -55,9 +55,7 @@ class TestReconcileExistence:
         out = handler.reconcile("report.pdf", _state("fp-1"), ["fp-1"], True)
         assert out is not None
 
-    def test_known_converged_empty_state_is_a_noop(
-        self, handler: GraphSourceHandler
-    ) -> None:
+    def test_known_converged_empty_state_is_a_noop(self, handler: GraphSourceHandler) -> None:
         """No prior records *and* certainty about it means already converged.
 
         Matches the built-in Qdrant connector's ``_PointHandler.reconcile``

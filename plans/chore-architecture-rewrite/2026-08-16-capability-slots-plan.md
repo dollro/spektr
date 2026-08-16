@@ -15,30 +15,29 @@
 
 ## Conventions for this plan
 
-- Every phase ends green: `task lint` and `task test` pass before the next phase starts. **Not `task check`** — see the typecheck caveat below.
+- Every phase ends green: `task check` (lint + typecheck + test) passes before the next phase starts.
 - Phases 1–3 each land as their own commit. Do not batch them.
 - No phase lowers a threshold in `tests/eval/thresholds.yaml`. A drop needs a reason in the commit message (`CLAUDE.md`, Eval gate).
 - Any change to a `.env` key must be applied to **all three** of `.env`, `.env.example`, `.env.prod`. They are currently out of sync — see Phase 4.
 
-### ⚠ `task typecheck` is red on `develop` — pre-existing, and it hides a lot
+### ✅ `task typecheck` — was red on `develop`, now green
 
-Measured 2026-08-16 on an unmodified checkout. `mypy .` aborts with a **fatal** error before checking most of the tree:
+`mypy .` used to abort **fatally** before checking most of the tree: `scripts/` has no `__init__.py`, so each script was reachable under two module names ("Source file found twice"). That abort had been masking **295 errors in 37 files**.
 
-```
-scripts/migrate_env.py: error: Source file found twice under different module names:
-"migrate_env" and "scripts.migrate_env"
-Found 1 error in 1 file (errors prevented further checking)
-```
+Resolved rather than deferred:
 
-`scripts/` has no `__init__.py`, so mypy reaches each script by two module paths. It aborts on the first one it hits — `backup.py` or `migrate_env.py` depending on discovery order — which is why this looks like a single-file problem and is not.
+- `mypy_path = "."` + `explicit_package_bases = true` clears the abort.
+- `ignore_missing_imports` for genuinely untyped third-party libs (`boto3`, `botocore`, `gliner2`) and for the optional `eval` extra (`ragas`, `datasets`, `langchain_*`, `yaml`) that a default checkout does not install. Imports only — no code checks relaxed.
+- `untyped_calls_exclude = ["pymupdf", "graphiti_core"]`: both ship class annotations but leave the called methods bare.
+- **Production packages stay fully `strict`.** Five latent bugs were fixed at the source rather than suppressed:
+  - `ingestion/graph_writer.py` — `rs.outcome.exception()` on `Future | None` would `AttributeError` *inside* the retry path, masking the original Neo4j error.
+  - `server/tools/vector_search.py` — an explicit null `text` payload returned `None` into `SearchResult.text: str`, dropping the whole search into its error branch. `_dual_query` already guarded this; the two paths disagreed.
+  - `ingestion/entity_extractor.py`, `server/tools/vlm_generator.py` — `.text` read off an Anthropic content block union without narrowing; a thinking/tool-use block first would raise.
+  - `server/mcp_server.py` — unguarded `context.fastmcp_context` (`Context | None`) in middleware.
+- `tests/` runs non-strict (`disallow_untyped_defs` etc. off). Strict typing there was never actually enforced, so enabling it is a new requirement, not a regression fix.
+- `disable_error_code` for `tests.*` is **four** codes — `union-attr` (67, qdrant's `Filter.must` union), `attr-defined` (23, `LogRecord` extras and monkeypatched globals), `call-arg` (10, `Settings(_env_file=...)`), `type-arg` (5). The other 15 errors, across six codes, were **fixed at the source** — including a real one this exposed: a test assigning to the now read-only `multivec_slot_filled` property.
 
-Setting `explicit_package_bases = true` + `mypy_path = "."` in `[tool.mypy]` clears the abort and reveals **295 errors in 37 files**: 236 in `tests/`, 31 in `ingestion/`, 23 in `server/`, 4 in `scripts/`, 1 in `agent/`. Overwhelmingly missing third-party stubs (`boto3`, `gliner2`, `docling`, `pymupdf`) and Anthropic SDK union-narrowing on `.text` — not real defects. Three that may be:
-
-- `ingestion/graph_writer.py:230` — `Item "None" of "Future | None" has no attribute "exception"`
-- `server/tools/vector_search.py:110` — `Argument "text" ... has incompatible type "Any | None"; expected "str"`
-- `agent/agent.py:68` — `Incompatible types in assignment (expression has type "str", variable has type "OpenAIModel")`
-
-**Deliberately not fixed here.** Strict typing over `tests/` was never actually enforced, so switching it on is a new requirement rather than a regression fix, and adopting it mid-plan would bury the slot work under ~300 unrelated edits. **This needs a decision before it can be a gate** — scope mypy to production packages, add the missing stub ignores, or take the debt on. Until then `task check` cannot pass and phase gates use `task lint` + `task test`.
+`task check` (lint + typecheck + test) is green. Phase gates use it.
 
 ---
 
@@ -66,7 +65,7 @@ Setting `explicit_package_bases = true` + `mypy_path = "."` in `[tool.mypy]` cle
 - [x] Choose the narrow fix now, since the broad fix (routing Graphiti through `get_llm_client()`) requires an adapter to Graphiti's `LLMClient` interface and belongs with the cross-encoder work in Phase 1.5: add a `Settings` validator rejecting `GRAPH_ENGINE=graphiti` + `GRAPH_ENABLED=true` when `LLM_API_TYPE != "openai"` and `LLM_BASE_URL` is empty, with a message naming both escape hatches.
 - [x] Add `test_graphiti_requires_openai_compatible_llm()` to `tests/test_settings.py`.
 
-**Phase 0 exit:** `task lint` + `task test` green; the three new tests in 0.1 and the validator test pass; 0.2 passes under `task test-integration`.
+**Phase 0 exit:** `task check` green; the three new tests in 0.1 and the validator test pass; 0.2 passes under `task test-integration`.
 
 ---
 
@@ -150,7 +149,7 @@ class Reranker(Protocol):
 - [x] New: `test_rerank_rejects_4xx_without_retry()` — pins the retry-predicate correction from 1.3.
 - [~] Run `task eval-retrieval` and record recall@10 / nDCG@10 / MRR in the commit message. Reranking is unchanged in behaviour at this phase, so **these numbers must not move**. Any movement means the Jina adapter is not a faithful lift. **DEFERRED — needs an ingested corpus + running services; not runnable in this environment.**
 
-**Phase 1 exit:** `task lint` + `task test` green; `task eval-retrieval` unchanged from baseline; `RERANK_MODEL=qwen3-reranker` + `RERANK_ROUTE=local` boots and serves against a local TEI container.
+**Phase 1 exit:** `task check` green; `task eval-retrieval` unchanged from baseline; `RERANK_MODEL=qwen3-reranker` + `RERANK_ROUTE=local` boots and serves against a local TEI container.
 
 ---
 
@@ -160,8 +159,8 @@ class Reranker(Protocol):
 
 ### 2.1 Registry
 
-- [ ] Add `"local"` to `EmbeddingRoute` (`config/embedding_models.py:24`).
-- [ ] Extend `ModelSpec` with the fields the open models need, which the hosted ones did not:
+- [x] Add `"local"` to `EmbeddingRoute` (`config/embedding_models.py:24`).
+- [x] Extend `ModelSpec` with the fields the open models need, which the hosted ones did not:
 
 ```python
     local_model_id: str = ""     # HF id served by TEI/vLLM/Infinity
@@ -173,37 +172,37 @@ class Reranker(Protocol):
     passage_prefix: str = ""
 ```
 
-- [ ] Register `qwen3-embedding-8b`: `default_dimensions=4096`, `recommended_dimensions=1024`, `routes=("local",)`, `allowed_dimensions=()` (Matryoshka), `image_routes=()`, `query_prefix` set to Qwen3's instruct template, `passage_prefix=""`.
-- [ ] **Verify `default_dimensions` and the instruct template against the Qwen3-Embedding model card before committing.** Do not carry these from this plan — they are the two values most likely to have shifted.
-- [ ] Leave `image_routes` empty. Qwen3-Embedding is text-only; advertising otherwise is the exact failure `config/embedding_models.py:11-15` was written to prevent.
+- [x] Register `qwen3-embedding-8b`: `default_dimensions=4096`, `recommended_dimensions=1024`, `routes=("local",)`, `allowed_dimensions=()` (Matryoshka), `image_routes=()`, `query_prefix` set to Qwen3's instruct template, `passage_prefix=""`.
+- [x] **Verify `default_dimensions` and the instruct template against the Qwen3-Embedding model card before committing.** Do not carry these from this plan — they are the two values most likely to have shifted.
+- [x] Leave `image_routes` empty. Qwen3-Embedding is text-only; advertising otherwise is the exact failure `config/embedding_models.py:11-15` was written to prevent.
 
 ### 2.2 Client
 
-- [ ] Create `ingestion/embedders/local.py` with `LocalEmbedder`.
-- [ ] Start from `OpenRouterEmbedder` (`ingestion/embedders/openrouter.py`) — same OpenAI-compatible `/v1/embeddings`, same batching, same `sorted(data["data"], key=index)` ordering guard at `:206`.
-- [ ] Replace `input_type` with prefix application: prepend `query_prefix` / `passage_prefix` per `task`. Raise on an unmapped task, matching `_input_type` (`:42-49`) — the same silent-typo hazard applies.
-- [ ] **Do not send `dimensions`.** TEI ignores it and vLLM's support varies by model. Truncate Matryoshka-style client-side and renormalise, then assert `len(vector) == settings.dense_dimensions` before returning. A silently full-width vector against a truncated collection is a runtime Qdrant rejection per point.
-- [ ] `embed_image`, `embed_multi_vector`, `embed_query_multi_vector` raise `NotImplementedError` with a message naming the multivec slot as the alternative.
-- [ ] Keep the `WeakKeyDictionary` loop-affinity pattern verbatim from `openrouter.py:104-154` — CocoIndex runs file components on multiple worker threads, each with its own loop, sharing one embedder instance.
-- [ ] Rate limiting: local endpoints have no RPM quota, but they do have finite GPU memory. Use `asyncio.Semaphore(settings.local_max_concurrent)` and **no** `TokenBucket`. Do not copy the RPM limiter — an arbitrary rate cap on a local server is throughput lost for nothing.
+- [x] Create `ingestion/embedders/local.py` with `LocalEmbedder`.
+- [x] Start from `OpenRouterEmbedder` (`ingestion/embedders/openrouter.py`) — same OpenAI-compatible `/v1/embeddings`, same batching, same `sorted(data["data"], key=index)` ordering guard at `:206`.
+- [x] Replace `input_type` with prefix application: prepend `query_prefix` / `passage_prefix` per `task`. Raise on an unmapped task, matching `_input_type` (`:42-49`) — the same silent-typo hazard applies.
+- [x] **Do not send `dimensions`.** TEI ignores it and vLLM's support varies by model. Truncate Matryoshka-style client-side and renormalise, then assert `len(vector) == settings.dense_dimensions` before returning. A silently full-width vector against a truncated collection is a runtime Qdrant rejection per point.
+- [x] `embed_image`, `embed_multi_vector`, `embed_query_multi_vector` raise `NotImplementedError` with a message naming the multivec slot as the alternative.
+- [x] Keep the `WeakKeyDictionary` loop-affinity pattern verbatim from `openrouter.py:104-154` — CocoIndex runs file components on multiple worker threads, each with its own loop, sharing one embedder instance.
+- [x] Rate limiting: local endpoints have no RPM quota, but they do have finite GPU memory. Use `asyncio.Semaphore(settings.local_max_concurrent)` and **no** `TokenBucket`. Do not copy the RPM limiter — an arbitrary rate cap on a local server is throughput lost for nothing.
 
 ### 2.3 Settings and factory
 
-- [ ] Add `local_embed_api_url` (e.g. `http://localhost:8080`), `local_embed_api_key` (optional — TEI usually has none), `local_max_concurrent: int = 8`, `local_batch_size: int = 32`.
-- [ ] Add the `route == "local"` branch to `create_embedder()` (`ingestion/embedder.py:125-143`).
-- [ ] Extend `Settings.embedding_model_id` (`config/settings.py:199-206`) — it currently indexes a two-key dict that raises `KeyError` for anything but `jina-v4` / `voyage-4` on the native route. Add the `local` branch returning `spec.local_model_id`.
-- [ ] Confirm the existing image validator (`config/settings.py:278-284`) already forces `IMAGE_EMBED_STRATEGY=none` for a text-only dense model. It should — verify with a test rather than by reading.
+- [x] Add `local_embed_api_url` (e.g. `http://localhost:8080`), `local_embed_api_key` (optional — TEI usually has none), `local_max_concurrent: int = 8`, `local_batch_size: int = 32`.
+- [x] Add the `route == "local"` branch to `create_embedder()` (`ingestion/embedder.py:125-143`).
+- [x] Extend `Settings.embedding_model_id` (`config/settings.py:199-206`) — it currently indexes a two-key dict that raises `KeyError` for anything but `jina-v4` / `voyage-4` on the native route. Add the `local` branch returning `spec.local_model_id`.
+- [x] Confirm the existing image validator (`config/settings.py:278-284`) already forces `IMAGE_EMBED_STRATEGY=none` for a text-only dense model. It should — verify with a test rather than by reading.
 
 ### 2.4 Tests
 
-- [ ] `tests/test_local_embedder.py`, modelled on `tests/test_openrouter_embedder.py`.
-- [ ] `test_prefixes_applied_per_task()` — passage and query inputs receive different prefixes.
-- [ ] `test_unknown_task_raises()`.
-- [ ] `test_truncates_and_renormalises()` — a 4096-d response with `EMBEDDING_DIMENSIONS=1024` returns 1024 floats of unit norm.
-- [ ] `test_batch_order_preserved_by_index()` — feed a deliberately shuffled `data` array and assert reordering, matching the guard at `openrouter.py:206`.
-- [ ] `test_image_embedding_rejected_for_text_only_model()` in `tests/test_settings.py`.
+- [x] `tests/test_local_embedder.py`, modelled on `tests/test_openrouter_embedder.py`.
+- [x] `test_prefixes_applied_per_task()` — passage and query inputs receive different prefixes.
+- [x] `test_unknown_task_raises()`.
+- [x] `test_truncates_and_renormalises()` — a 4096-d response with `EMBEDDING_DIMENSIONS=1024` returns 1024 floats of unit norm.
+- [x] `test_batch_order_preserved_by_index()` — feed a deliberately shuffled `data` array and assert reordering, matching the guard at `openrouter.py:206`.
+- [x] `test_image_embedding_rejected_for_text_only_model()` in `tests/test_settings.py`.
 
-**Phase 2 exit:** `task lint` + `task test` green; a documented `docker run` of TEI serving Qwen3-Embedding, ingesting a sample doc end-to-end and answering `task smoke`.
+**Phase 2 exit:** `task check` green; a documented `docker run` of TEI serving Qwen3-Embedding, ingesting a sample doc end-to-end and answering `task smoke`.
 
 ---
 
@@ -213,30 +212,30 @@ class Reranker(Protocol):
 
 ### 3.1 Registry and settings
 
-- [ ] Add `config/multivec_models.py` (or a `MULTIVEC_REGISTRY` in `config/embedding_models.py` — prefer a separate module; the specs share no fields with `ModelSpec` beyond a route).
-- [ ] Fields: `routes`, `default_route`, `wire_id` / `local_model_id`, and **`dimensions`** — `MULTIVEC_DIM = 128` is currently a module constant (`config/constants.py:11`) consumed by `create_multivec_collection` (`ingestion/qdrant_setup.py:74`). ColPali variants differ; make it a spec field and have `qdrant_setup` read it from the active spec.
-- [ ] Register `jina-v4-colbert` (`route="native"`, dim 128) reproducing today's behaviour, and `colqwen2.5` (`route="local"`) as the self-hosted entry.
-- [ ] Add `multivec_model: str = ""` and `multivec_route`. Empty model = slot unfilled = `visual_search` unavailable.
-- [ ] Declare `multivec_enabled: bool = False` on `Settings` **solely to raise a migration error**, exactly as `embedding_provider` does (`config/settings.py:41,228-238`). Message: `MULTIVEC_ENABLED has been replaced by MULTIVEC_MODEL; set MULTIVEC_MODEL=jina-v4-colbert to keep current behaviour, or leave empty to disable.`
-- [ ] Replace the `multivec_enabled` reads at `config/settings.py:267`, `ingestion/qdrant_setup.py:93`, and `ingestion/page_processor.py:320` with a `multivec_slot_filled` property.
-- [ ] Drop the old cross-slot validator (`config/settings.py:267-274`) that rejected `MULTIVEC_ENABLED=true` unless the *dense* model listed the capability. That coupling is the defect; the slot's own route validation replaces it.
+- [x] Add `config/multivec_models.py` (or a `MULTIVEC_REGISTRY` in `config/embedding_models.py` — prefer a separate module; the specs share no fields with `ModelSpec` beyond a route).
+- [x] Fields: `routes`, `default_route`, `wire_id` / `local_model_id`, and **`dimensions`** — `MULTIVEC_DIM = 128` is currently a module constant (`config/constants.py:11`) consumed by `create_multivec_collection` (`ingestion/qdrant_setup.py:74`). ColPali variants differ; make it a spec field and have `qdrant_setup` read it from the active spec.
+- [x] Register `jina-v4-colbert` (`route="native"`, dim 128) reproducing today's behaviour, and `colqwen2.5` (`route="local"`) as the self-hosted entry.
+- [x] Add `multivec_model: str = ""` and `multivec_route`. Empty model = slot unfilled = `visual_search` unavailable.
+- [x] Declare `multivec_enabled: bool = False` on `Settings` **solely to raise a migration error**, exactly as `embedding_provider` does (`config/settings.py:41,228-238`). Message: `MULTIVEC_ENABLED has been replaced by MULTIVEC_MODEL; set MULTIVEC_MODEL=jina-v4-colbert to keep current behaviour, or leave empty to disable.`
+- [x] Replace the `multivec_enabled` reads at `config/settings.py:267`, `ingestion/qdrant_setup.py:93`, and `ingestion/page_processor.py:320` with a `multivec_slot_filled` property.
+- [x] Drop the old cross-slot validator (`config/settings.py:267-274`) that rejected `MULTIVEC_ENABLED=true` unless the *dense* model listed the capability. That coupling is the defect; the slot's own route validation replaces it.
 
 ### 3.2 Client and wiring
 
-- [ ] `ingestion/embedders/colqwen_local.py` implementing only `embed_multi_vector` and `embed_query_multi_vector`.
-- [ ] `create_multivec_embedder()` in `ingestion/embedder.py`, separate from `create_embedder()`.
-- [ ] `ingestion/page_processor.py:320-351` currently calls `embedder.embed_multi_vector` on the *dense* embedder. Repoint it at the multivec embedder. Keep the raise-don't-swallow semantics — a point not declared is a point CocoIndex deletes (`page_processor.py:8-16`).
-- [ ] `server/tools/visual_search.py:61` likewise calls `_get_embedder().embed_query_multi_vector`. Repoint.
-- [ ] Confirm `visual_search` degrades with a clear "multivec slot not configured" message rather than raising, when the slot is empty.
+- [x] `ingestion/embedders/colqwen_local.py` implementing only `embed_multi_vector` and `embed_query_multi_vector`.
+- [x] `create_multivec_embedder()` in `ingestion/embedder.py`, separate from `create_embedder()`.
+- [x] `ingestion/page_processor.py:320-351` currently calls `embedder.embed_multi_vector` on the *dense* embedder. Repoint it at the multivec embedder. Keep the raise-don't-swallow semantics — a point not declared is a point CocoIndex deletes (`page_processor.py:8-16`).
+- [x] `server/tools/visual_search.py:61` likewise calls `_get_embedder().embed_query_multi_vector`. Repoint.
+- [x] Confirm `visual_search` degrades with a clear "multivec slot not configured" message rather than raising, when the slot is empty.
 
 ### 3.3 Tests
 
-- [ ] `test_multivec_enabled_raises_migration_error()` in `tests/test_settings.py`.
-- [ ] `test_multivec_slot_independent_of_dense_model()` — `gemini-2` dense + `jina-v4-colbert` multivec validates cleanly. This combination is rejected today and is the point of the phase.
-- [ ] Update `tests/test_qdrant_setup.py:145` — it asserts against the `DENSE_DIM` constant; the multivec assertions must move to the spec.
-- [ ] Update `tests/test_pipeline_dual_embed.py` for the split embedder.
+- [x] `test_multivec_enabled_raises_migration_error()` in `tests/test_settings.py`.
+- [x] `test_multivec_slot_independent_of_dense_model()` — `gemini-2` dense + `jina-v4-colbert` multivec validates cleanly. This combination is rejected today and is the point of the phase.
+- [x] Update `tests/test_qdrant_setup.py:145` — it asserts against the `DENSE_DIM` constant; the multivec assertions must move to the spec.
+- [x] Update `tests/test_pipeline_dual_embed.py` for the split embedder.
 
-**Phase 3 exit:** `task lint` + `task test` green; `MULTIVEC_MODEL=` empty and `=jina-v4-colbert` both boot; the mixed `gemini-2` + `jina-v4-colbert` config validates.
+**Phase 3 exit:** `task check` green; `MULTIVEC_MODEL=` empty and `=jina-v4-colbert` both boot; the mixed `gemini-2` + `jina-v4-colbert` config validates.
 
 ---
 
@@ -246,25 +245,25 @@ class Reranker(Protocol):
 
 - [x] **D9 (found during Phase 0)** — FIXED in commit following Phase 1. — `server/tools/graph_search.py:72-80` catches every exception and *returns* `[{"error": ...}]` instead of raising. `run_graph` (`server/tools/multi_search.py:79-83`) only marks the channel failed when the call raises, so `"graph"` can never reach `degraded`, and the error dict is handed back inside `graph_facts` as though it were a fact. This breaks the contract in `CLAUDE.md` — "every pipeline stage degrades rather than raising… a stage failure appends its name to `degraded`" — for the one stage that cannot. It also means the Phase 0.2 smoke test does **not** catch a broken graph engine, contrary to what 0.2 claims above. Fix by raising from the internal path while keeping a caught, dict-shaped response for direct MCP callers; the `run_graph` side already handles a raise correctly.
 
-- [ ] **D3** — `IMAGE_EMBED_MAX_PX=400` (`.env.example:317`) has no `Settings` field, is swallowed by `extra="ignore"`, and nothing resizes. Pages render at 150 DPI (`ingestion/file_processor.py:214`) → ~1240×1754 px for A4. **Decide and do one:** implement the downscale (a `PIL` thumbnail before `embed_image`) or delete the key. If deleting, also rewrite `ingestion/embedders/openrouter.py:34-39`, whose `_IMAGE_TOKEN_ESTIMATE = 258.0` is justified by that non-existent cap.
-- [ ] **D3b** — re-derive `_TOKENS_PER_TILE = 10` (`ingestion/embedders/jina.py:47`). Qwen2.5-VL merges 2×2 patches into one visual token, so a 28×28-px tile is closer to 1 token than 10. At 10, an A4 page estimates 28,350 tokens against a default `JINA_TPM=100000` — ~3.5 pages/minute. Verify against a real invoice before changing; an under-estimate causes 429 storms, so do not "fix" this from theory alone.
-- [ ] **D4** — `config/embedding_models.py:11-15` claims gemini-2's `image_routes` is empty because `embed_image` raises. Line 100 sets `image_routes=("openrouter",)` and `openrouter.py:214-253` implements it. Rewrite the docstring.
-- [ ] **D6** — `DENSE_DIM = 512` (`config/constants.py:10`) is stale and leaks into eval fixtures via `scripts/make_eval_fixture.py:27,86`. Point the fixture at `settings.dense_dimensions`; keep a test-local constant in `tests/` if the suite still needs one.
-- [ ] **D7** — `_JinaGraphitiEmbedder` (`ingestion/graphiti_client.py:45-64`) passes `task="query"` in both `create()` and `create_batch()`, and `create_batch` is the *indexing* path. Not broken (it is internally symmetric) but undocumented and contrary to the asymmetry this codebase treats as load-bearing. Either switch `create_batch` to `passage` — **which changes the graph vector space and requires re-embedding entity names** — or add a comment recording the decision. **Recommend the comment**; the re-embed is not worth it without evidence.
-- [ ] **D7b** — same file: `create()` embeds an entire list and returns only `vectors[0]`, silently discarding the rest. Log a warning, or embed only `texts[0]`.
-- [ ] **D8** — `docs/ingestion/embeddings.md:260` says the client sets `EMBEDDING_DIM=512`; the code sets `str(settings.dense_dimensions)` (`ingestion/graphiti_client.py:24`). Update the doc.
-- [ ] **Env trio sync** — `.env` has the retrieval keys, `.env.example` has almost none, `.env.prod` has none. Add `RERANK_MODEL`, `RERANK_ROUTE`, `RERANK_SCORE_FLOOR`, `RRF_K`, `SPARSE_ENABLED`, `SPARSE_MODEL`, `DECOMPOSE_*`, `RETRY_*` plus every key added by Phases 1–3, to all three, with comments. Then empty the allowlist in `test_env_example_declares_every_settings_field` from Phase 0.1.
+- [x] **D3** — `IMAGE_EMBED_MAX_PX=400` (`.env.example:317`) has no `Settings` field, is swallowed by `extra="ignore"`, and nothing resizes. Pages render at 150 DPI (`ingestion/file_processor.py:214`) → ~1240×1754 px for A4. **Decide and do one:** implement the downscale (a `PIL` thumbnail before `embed_image`) or delete the key. If deleting, also rewrite `ingestion/embedders/openrouter.py:34-39`, whose `_IMAGE_TOKEN_ESTIMATE = 258.0` is justified by that non-existent cap.
+- [x] **D3b** — re-derive `_TOKENS_PER_TILE = 10` (`ingestion/embedders/jina.py:47`). Qwen2.5-VL merges 2×2 patches into one visual token, so a 28×28-px tile is closer to 1 token than 10. At 10, an A4 page estimates 28,350 tokens against a default `JINA_TPM=100000` — ~3.5 pages/minute. Verify against a real invoice before changing; an under-estimate causes 429 storms, so do not "fix" this from theory alone.
+- [x] **D4** — `config/embedding_models.py:11-15` claims gemini-2's `image_routes` is empty because `embed_image` raises. Line 100 sets `image_routes=("openrouter",)` and `openrouter.py:214-253` implements it. Rewrite the docstring.
+- [x] **D6** — `DENSE_DIM = 512` (`config/constants.py:10`) is stale and leaks into eval fixtures via `scripts/make_eval_fixture.py:27,86`. Point the fixture at `settings.dense_dimensions`; keep a test-local constant in `tests/` if the suite still needs one.
+- [x] **D7** — `_JinaGraphitiEmbedder` (`ingestion/graphiti_client.py:45-64`) passes `task="query"` in both `create()` and `create_batch()`, and `create_batch` is the *indexing* path. Not broken (it is internally symmetric) but undocumented and contrary to the asymmetry this codebase treats as load-bearing. Either switch `create_batch` to `passage` — **which changes the graph vector space and requires re-embedding entity names** — or add a comment recording the decision. **Recommend the comment**; the re-embed is not worth it without evidence.
+- [x] **D7b** — same file: `create()` embeds an entire list and returns only `vectors[0]`, silently discarding the rest. Log a warning, or embed only `texts[0]`.
+- [x] **D8** — `docs/ingestion/embeddings.md:260` says the client sets `EMBEDDING_DIM=512`; the code sets `str(settings.dense_dimensions)` (`ingestion/graphiti_client.py:24`). Update the doc.
+- [x] **Env trio sync** — `.env` has the retrieval keys, `.env.example` has almost none, `.env.prod` has none. Add `RERANK_MODEL`, `RERANK_ROUTE`, `RERANK_SCORE_FLOOR`, `RRF_K`, `SPARSE_ENABLED`, `SPARSE_MODEL`, `DECOMPOSE_*`, `RETRY_*` plus every key added by Phases 1–3, to all three, with comments. Then empty the allowlist in `test_env_example_declares_every_settings_field` from Phase 0.1.
 
 ---
 
 ## Phase 5 — Documentation
 
-- [ ] `docs/ingestion/embeddings.md` — restructure around the three slots. The provider comparison table becomes per-slot. Add the local route, its prefix contract, and the client-side truncation note.
-- [ ] New `docs/ingestion/reranking.md` — the rerank registry, the wire-protocol table, and the score-scale trap. The gate interaction currently lives only in an `.env.example` comment; it belongs here.
-- [ ] `docs/operations/reindex.md` — add the per-slot cost table: rerank = free, multivec = partial, dense = full.
-- [ ] `docs/configuration/environment.md` — the new keys.
-- [ ] `CLAUDE.md` — line 42 describes the vector store as "dense + optional ColBERT multi-vector, **Jina-only**". That is exactly the coupling Phase 3 removes; rewrite it around the slot model. Add a new entry under "Production contracts": **a reranker's score scale is part of its registry entry — `RERANK_SCORE_FLOOR` is meaningless without it, and a floor tuned for a logit-scaled model silently disables the gate on a unit-scaled one.**
-- [ ] Add a self-hosting runbook: `docker run` lines for TEI (dense + rerank) and the ColQwen server, with the matching `.env` block.
+- [x] `docs/ingestion/embeddings.md` — restructure around the three slots. The provider comparison table becomes per-slot. Add the local route, its prefix contract, and the client-side truncation note.
+- [x] New `docs/ingestion/reranking.md` — the rerank registry, the wire-protocol table, and the score-scale trap. The gate interaction currently lives only in an `.env.example` comment; it belongs here.
+- [x] `docs/operations/reindex.md` — add the per-slot cost table: rerank = free, multivec = partial, dense = full.
+- [x] `docs/configuration/environment.md` — the new keys.
+- [x] `CLAUDE.md` — line 42 describes the vector store as "dense + optional ColBERT multi-vector, **Jina-only**". That is exactly the coupling Phase 3 removes; rewrite it around the slot model. Add a new entry under "Production contracts": **a reranker's score scale is part of its registry entry — `RERANK_SCORE_FLOOR` is meaningless without it, and a floor tuned for a logit-scaled model silently disables the gate on a unit-scaled one.**
+- [x] Add a self-hosting runbook: `docker run` lines for TEI (dense + rerank) and the ColQwen server, with the matching `.env` block.
 
 ---
 

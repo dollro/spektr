@@ -7,6 +7,15 @@ import os
 # `config.settings` derives its own fields from these; keep this the source.
 DENSE_COLLECTION = os.getenv("QDRANT_DENSE_COLLECTION", "documents_dense")
 MULTIVEC_COLLECTION = os.getenv("QDRANT_MULTIVEC_COLLECTION", "documents_multivec")
+# TEST FIXTURE WIDTHS — not production values, and not read by any runtime
+# path. Production sizes collections from `settings.dense_dimensions` and
+# `settings.multivec_dimensions`, which follow the active model; these two are
+# fixed so the suite can build vectors of a known length without a live model.
+#
+# DENSE_DIM was the Jina-era production default and outlived it: with the
+# current `gemini-2` default at 768 it named a width nothing used, while
+# `scripts/make_eval_fixture.py` still wrote it into the fixture as the
+# corpus's `dense_dim`. Do not reintroduce either as a runtime source.
 DENSE_DIM = 512
 MULTIVEC_DIM = 128
 

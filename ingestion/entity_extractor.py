@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, cast
 
 from pydantic import BaseModel, field_validator
 
@@ -53,7 +53,7 @@ class LLMClient(Protocol):
     async def chat(
         self,
         messages: list[dict[str, str]],
-        response_format: dict | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> str: ...
 
 
@@ -76,14 +76,22 @@ class AnthropicClient:
     async def chat(
         self,
         messages: list[dict[str, str]],
-        response_format: dict | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> str:
+        from anthropic.types import MessageParam, TextBlock
+
         response = await self._client.messages.create(
             model=self._model,
             max_tokens=4096,
-            messages=messages,
+            messages=cast("list[MessageParam]", messages),
         )
-        return response.content[0].text
+        # `content[0]` is a union of block types; only TextBlock has `.text`.
+        # A thinking or tool-use block first would be an AttributeError here.
+        block = response.content[0]
+        if not isinstance(block, TextBlock):
+            msg = f"Expected a text block from Anthropic, got {type(block).__name__}"
+            raise TypeError(msg)
+        return block.text
 
 
 class OpenAIClient:
@@ -105,7 +113,7 @@ class OpenAIClient:
     async def chat(
         self,
         messages: list[dict[str, str]],
-        response_format: dict | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> str:
         kwargs: dict[str, Any] = {
             "model": self._model,

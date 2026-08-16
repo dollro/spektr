@@ -210,6 +210,7 @@ from neo4j.exceptions import (  # noqa: E402
     TransientError,
 )
 from tenacity import (  # noqa: E402
+    RetryCallState,
     retry,
     retry_if_exception_type,
     stop_after_attempt,
@@ -218,17 +219,31 @@ from tenacity import (  # noqa: E402
 
 from ingestion.entity_extractor import Entity, ExtractionResult  # noqa: E402
 
+
+def _log_neo4j_retry(retry_state: RetryCallState) -> None:
+    """Log a Neo4j retry attempt.
+
+    ``RetryCallState.outcome`` is ``Future | None`` — it is None until the
+    first attempt has finished. tenacity only calls ``before_sleep`` after a
+    failed attempt, so it is set in practice, but an unguarded
+    ``.exception()`` would turn any deviation into an AttributeError raised
+    from inside the retry path, masking the original Neo4j error.
+    """
+    outcome = retry_state.outcome
+    logger.warning(
+        "Neo4j retry attempt %d after %s",
+        retry_state.attempt_number,
+        outcome.exception() if outcome is not None else "unknown error",
+    )
+
+
 _NEO4J_RETRY = retry(
     wait=wait_exponential(multiplier=1, min=1, max=15),
     stop=stop_after_attempt(settings.max_retries),
     retry=retry_if_exception_type(
         (ServiceUnavailable, TransientError, OSError),
     ),
-    before_sleep=lambda rs: logger.warning(
-        "Neo4j retry attempt %d after %s",
-        rs.attempt_number,
-        rs.outcome.exception(),
-    ),
+    before_sleep=_log_neo4j_retry,
 )
 
 

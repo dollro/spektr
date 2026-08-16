@@ -195,9 +195,7 @@ class GLiNEREngine:
         if self._driver is None or self._driver_loop is not loop:
             if self._driver is not None:
                 logger.debug("Event loop changed; rebuilding Neo4j driver.")
-            self._driver = AsyncGraphDatabase.driver(
-                self._neo4j_uri, auth=self._neo4j_auth
-            )
+            self._driver = AsyncGraphDatabase.driver(self._neo4j_uri, auth=self._neo4j_auth)
             self._driver_loop = loop
         return self._driver
 

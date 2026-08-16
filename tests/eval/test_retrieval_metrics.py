@@ -34,10 +34,7 @@ def ndcg_at_k(retrieved: list[str], relevant: set[str], k: int) -> float:
         for rank, doc in enumerate(retrieved[:k], start=1)
         if doc in relevant
     )
-    ideal = sum(
-        1.0 / math.log2(rank + 1)
-        for rank in range(1, min(len(relevant), k) + 1)
-    )
+    ideal = sum(1.0 / math.log2(rank + 1) for rank in range(1, min(len(relevant), k) + 1))
     return dcg / ideal if ideal else 0.0
 
 
@@ -139,9 +136,7 @@ async def test_retrieval_quality_meets_thresholds(frozen_corpus: int) -> None:
     from server.tools.multi_search import multi_search
 
     data = yaml.safe_load(SET_PATH.read_text())
-    thresholds = yaml.safe_load(
-        (Path(__file__).parent / "thresholds.yaml").read_text()
-    )
+    thresholds = yaml.safe_load((Path(__file__).parent / "thresholds.yaml").read_text())
 
     recalls: list[float] = []
     ndcgs: list[float] = []
@@ -208,8 +203,8 @@ async def test_ablation_matrix(frozen_corpus: int) -> None:
                 rrs.append(mrr(retrieved, relevant))
             n = len(recalls)
             print(
-                f"| {name} | {sum(recalls)/n:.3f} | "
-                f"{sum(ndcgs)/n:.3f} | {sum(rrs)/n:.3f} |"
+                f"| {name} | {sum(recalls) / n:.3f} | "
+                f"{sum(ndcgs) / n:.3f} | {sum(rrs) / n:.3f} |"
             )
         finally:
             for p in patches:

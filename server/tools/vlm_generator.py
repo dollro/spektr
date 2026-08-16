@@ -64,30 +64,41 @@ async def _ask_vlm(query: str, images: list[tuple[bytes, str]]) -> str:
 
     if provider == "anthropic":
         import anthropic
+        from anthropic.types import TextBlock
 
-        client = anthropic.AsyncAnthropic(
+        anthropic_client = anthropic.AsyncAnthropic(
             api_key=settings.llm_api_key,
             base_url=settings.llm_base_url or None,
         )
-        resp = await client.messages.create(
+        anthropic_resp = await anthropic_client.messages.create(
             model=settings.llm_model,
             max_tokens=1024,
-            messages=[{"role": "user", "content": content}],
+            # `content` is assembled as plain dicts above; the SDK accepts
+            # them, but they don't match the ContentBlockParam TypedDicts.
+            messages=[{"role": "user", "content": content}],  # type: ignore[typeddict-item]
         )
-        return resp.content[0].text
+        # `content[0]` is a union of block types; only TextBlock has `.text`.
+        # A thinking or tool-use block first would be an AttributeError here.
+        block = anthropic_resp.content[0]
+        if not isinstance(block, TextBlock):
+            msg = f"Expected a text block from Anthropic, got {type(block).__name__}"
+            raise TypeError(msg)
+        return block.text
     else:
         import openai
 
-        client = openai.AsyncOpenAI(
+        openai_client = openai.AsyncOpenAI(
             api_key=settings.llm_api_key,
             base_url=settings.llm_base_url or None,
         )
-        resp = await client.chat.completions.create(
+        openai_resp = await openai_client.chat.completions.create(
             model=settings.llm_model,
             max_tokens=1024,
-            messages=[{"role": "user", "content": content}],
+            # Same plain-dict message as the Anthropic branch: valid at
+            # runtime, but not resolvable to one ChatCompletionMessageParam.
+            messages=[{"role": "user", "content": content}],  # type: ignore[misc,list-item]
         )
-        return resp.choices[0].message.content or ""
+        return openai_resp.choices[0].message.content or ""
 
 
 async def generate_visual_answer(

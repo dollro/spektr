@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastmcp import FastMCP
-from fastmcp.server.middleware import Middleware, MiddlewareContext
+from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 
 from config.logging import get_logger, setup_logging
 from config.observability import setup_observability
@@ -36,12 +36,16 @@ class BearerAuthMiddleware(Middleware):
 
     async def __call__(
         self,
-        context: MiddlewareContext,
-        call_next,  # type: ignore[no-untyped-def]
-    ):  # type: ignore[no-untyped-def]
+        context: MiddlewareContext[Any],
+        call_next: CallNext[Any, Any],
+    ) -> Any:
         if settings.mcp_api_key and context.method in _PROTECTED_METHODS:
+            # `fastmcp_context` is None for transports that carry no HTTP
+            # request (stdio). Guarding it keeps the existing posture — no HTTP
+            # request means no bearer header to check — instead of raising an
+            # AttributeError from inside the middleware.
             ctx = context.fastmcp_context
-            if ctx.request_context and ctx.request_context.request:
+            if ctx is not None and ctx.request_context and ctx.request_context.request:
                 auth = ctx.request_context.request.headers.get(
                     "Authorization",
                 )
@@ -72,7 +76,7 @@ _REGISTERED_TOOLS = [
     "list_document_chunks",
 ]
 
-if settings.multivec_enabled:
+if settings.multivec_slot_filled:
     mcp.tool()(visual_search)
     _REGISTERED_TOOLS.append("visual_search")
 

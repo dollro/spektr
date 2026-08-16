@@ -8,7 +8,6 @@ from config.constants import (
     DENSE_COLLECTION,
     DENSE_VECTOR_NAME,
     MULTIVEC_COLLECTION,
-    MULTIVEC_DIM,
     SPARSE_VECTOR_NAME,
 )
 from config.settings import settings
@@ -71,7 +70,7 @@ def create_multivec_collection(client: QdrantClient) -> None:
         collection_name=MULTIVEC_COLLECTION,
         vectors_config={
             "colbert": models.VectorParams(
-                size=MULTIVEC_DIM,
+                size=settings.multivec_dimensions,
                 distance=models.Distance.COSINE,
                 multivector_config=models.MultiVectorConfig(
                     comparator=models.MultiVectorComparator.MAX_SIM,
@@ -90,5 +89,5 @@ def create_multivec_collection(client: QdrantClient) -> None:
 def ensure_collections(client: QdrantClient) -> None:
     """Create dense (and optionally multivec) collections (idempotent)."""
     create_dense_collection(client)
-    if settings.multivec_enabled:
+    if settings.multivec_slot_filled:
         create_multivec_collection(client)

@@ -196,7 +196,9 @@ def test_build_kb_filter_excludes_live_but_admits_missing_is_live() -> None:
     a missing key, so that shape matches zero real KB points).
     """
     f = build_kb_filter(content_type=None, source_file=None)
-    assert f.must_not is not None
+    # qdrant types must/must_not as `list | single-condition | None`; asserting
+    # the list form is what the rest of the test indexes into.
+    assert isinstance(f.must_not, list)
     assert len(f.must_not) == 1
     condition = f.must_not[0]
     assert condition.key == "is_live"
@@ -214,7 +216,7 @@ def test_build_kb_filter_scopes_content_type_and_source_file_by_key() -> None:
 def test_build_live_filter_scopes_to_session_id() -> None:
     """Live filter matches only the given session_id, at the payload top level."""
     f = build_live_filter("s1")
-    assert f.must is not None
+    assert isinstance(f.must, list)
     assert len(f.must) == 1
     condition = f.must[0]
     assert condition.key == "session_id"

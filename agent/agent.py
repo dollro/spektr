@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pydantic_ai import Agent
 from pydantic_ai.mcp import MCPServerSSE, MCPServerStreamableHTTP
+from pydantic_ai.models import Model
 from pydantic_ai.models.openai import OpenAIModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
@@ -56,6 +57,9 @@ async def create_rag_agent() -> tuple[Agent, MCPServer]:
     else:
         server = MCPServerStreamableHTTP(url, headers=headers)
 
+    # Either a constructed model object (custom base URL) or a
+    # `<provider>:<model>` string that pydantic-ai resolves itself.
+    model: Model | str
     if settings.llm_base_url:
         model = OpenAIModel(
             settings.llm_model,

@@ -31,7 +31,7 @@ from config.constants import (  # noqa: E402
     MULTIVEC_COLLECTION,
     MULTIVEC_DIM,
 )
-from ingestion.entity_extractor import ExtractionResult  # noqa: E402
+from ingestion.entity_extractor import Entity, ExtractionResult  # noqa: E402
 
 FIXTURES_DIR = pathlib.Path(__file__).parent / "fixtures"
 
@@ -104,11 +104,7 @@ def _make_mock_extraction() -> ExtractionResult:
     """Return a deterministic ExtractionResult for testing."""
     return ExtractionResult(
         entities=[
-            {
-                "name": "Test Entity",
-                "type": "concept",
-                "description": "A test entity",
-            },
+            Entity(name="Test Entity", type="concept", description="A test entity"),
         ],
         relationships=[],
     )

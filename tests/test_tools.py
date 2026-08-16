@@ -6,6 +6,7 @@ seeded Qdrant and Neo4j instances.
 
 from __future__ import annotations
 
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -423,7 +424,7 @@ class TestMCPServer:
         } <= tool_names
         from config.settings import settings
 
-        if settings.multivec_enabled:
+        if settings.multivec_slot_filled:
             assert "visual_search" in tool_names
         else:
             assert "visual_search" not in tool_names
@@ -804,13 +805,16 @@ class TestLiveIngestModels:
         """LiveChunk validates required fields."""
         from server.models import LiveChunk
 
+        # The string is deliberate: this is the shape the HTTP layer sends,
+        # and the point of the test is that pydantic coerces it to datetime.
         chunk = LiveChunk(
             session_id="session-1",
             text="text content one",
-            timestamp="2026-03-06T14:30:00Z",
+            timestamp="2026-03-06T14:30:00Z",  # type: ignore[arg-type]
         )
         assert chunk.session_id == "session-1"
         assert chunk.text == "text content one"
+        assert isinstance(chunk.timestamp, datetime), "ISO-8601 string is coerced"
 
     def test_session_start_request(self) -> None:
         """SessionStartRequest validates fields."""

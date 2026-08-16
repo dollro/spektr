@@ -43,7 +43,7 @@ _KEY_DECLARATION = re.compile(r"^[ \t]*#?[ \t]*([A-Z][A-Z0-9_]*)=")
 # EMBEDDING_PROVIDER is non-empty. Shipping them in .env.example would hand
 # every fresh deployment the very error they exist to raise, so their absence
 # is the correct state. This set is permanent; it is NOT the Phase 4 backlog.
-RETIRED_KEYS = frozenset({"EMBEDDING_PROVIDER"})
+RETIRED_KEYS = frozenset({"EMBEDDING_PROVIDER", "MULTIVEC_ENABLED"})
 
 # Settings fields `.env.example` does not declare today. Determined
 # empirically against the current tree, not from the plan's prose.

@@ -112,13 +112,15 @@ async def v1_app(tmp_path: pathlib.Path, qdrant_client: QdrantClient) -> Any:
         settings.cocoindex_db_path,
         settings.document_source,
         settings.graph_enabled,
-        settings.multivec_enabled,
+        # The underlying field, not the derived `multivec_slot_filled`
+        # property — that one is read-only.
+        settings.multivec_model,
     )
     settings.local_documents_path = str(docs)
     settings.cocoindex_db_path = str(tmp_path / "state" / "cocoindex.db")
     settings.document_source = "local"
     settings.graph_enabled = False
-    settings.multivec_enabled = False
+    settings.multivec_model = ""  # empty = slot unfilled
 
     with (
         patch.object(app_mod, "create_embedder", lambda *a, **k: _StubEmbedder(dim)),
@@ -132,7 +134,7 @@ async def v1_app(tmp_path: pathlib.Path, qdrant_client: QdrantClient) -> Any:
         settings.cocoindex_db_path,
         settings.document_source,
         settings.graph_enabled,
-        settings.multivec_enabled,
+        settings.multivec_model,
     ) = originals
 
 

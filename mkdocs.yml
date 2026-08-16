@@ -41,7 +41,8 @@ nav:
   - Ingestion Pipeline:
     - Overview: ingestion/overview.md
     - File Processing: ingestion/file-processing.md
-    - Embeddings (Jina v4): ingestion/embeddings.md
+    - Embeddings: ingestion/embeddings.md
+    - Reranking: ingestion/reranking.md
     - Knowledge Graph: ingestion/knowledge-graph.md
     - CocoIndex Pipeline: ingestion/cocoindex.md
     - S3 + SQS Setup: ingestion/s3-sqs-setup.md

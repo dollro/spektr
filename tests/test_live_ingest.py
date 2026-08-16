@@ -131,9 +131,7 @@ class TestRequireIngestApiKey:
         from ingestion.live_ingest import _require_ingest_api_key
 
         with patch.object(settings, "ingest_api_key", _TEST_API_KEY):
-            _require_ingest_api_key(
-                _fake_request(f"Bearer {_TEST_API_KEY}")
-            )  # no error
+            _require_ingest_api_key(_fake_request(f"Bearer {_TEST_API_KEY}"))  # no error
 
 
 class TestRequireSessionToken:
@@ -177,9 +175,7 @@ class TestRequireSessionToken:
             "session_token": "real-token",
         }
         with patch.object(settings, "ingest_api_key", _TEST_API_KEY):
-            _require_session_token(
-                _fake_request("Bearer real-token")
-            )  # no error
+            _require_session_token(_fake_request("Bearer real-token"))  # no error
 
 
 class TestSessionStart:
@@ -581,9 +577,7 @@ class TestSessionAuth:
         assert resp.status_code == 403
 
     @pytest.mark.asyncio
-    async def test_full_auth_flow(
-        self, mock_qdrant, mock_embedder, mock_graphiti
-    ) -> None:
+    async def test_full_auth_flow(self, mock_qdrant, mock_embedder, mock_graphiti) -> None:
         """Full flow: start with API key, ingest with session token, end with session token."""
         with (
             patch("ingestion.live_ingest._get_qdrant_client", return_value=mock_qdrant),

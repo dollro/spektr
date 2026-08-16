@@ -128,6 +128,14 @@ def create_embedder(api_key: str | None = None) -> Embedder:
 
         return OpenRouterEmbedder(api_key=api_key)
 
+    if route == "local":
+        # Self-hosted OpenAI-compatible endpoint (TEI / vLLM / Infinity).
+        # One client for every model on this route: unlike `native`, the
+        # route really is the protocol here.
+        from ingestion.embedders.local import LocalEmbedder
+
+        return LocalEmbedder(api_key=api_key)
+
     # route == "native": one client per vendor API.
     if settings.embedding_model == "jina-v4":
         from ingestion.embedders.jina import JinaV4Embedder
