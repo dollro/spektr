@@ -15,10 +15,30 @@
 
 ## Conventions for this plan
 
-- Every phase ends green: `task check` (lint + typecheck + test) passes before the next phase starts.
+- Every phase ends green: `task lint` and `task test` pass before the next phase starts. **Not `task check`** — see the typecheck caveat below.
 - Phases 1–3 each land as their own commit. Do not batch them.
 - No phase lowers a threshold in `tests/eval/thresholds.yaml`. A drop needs a reason in the commit message (`CLAUDE.md`, Eval gate).
 - Any change to a `.env` key must be applied to **all three** of `.env`, `.env.example`, `.env.prod`. They are currently out of sync — see Phase 4.
+
+### ⚠ `task typecheck` is red on `develop` — pre-existing, and it hides a lot
+
+Measured 2026-08-16 on an unmodified checkout. `mypy .` aborts with a **fatal** error before checking most of the tree:
+
+```
+scripts/migrate_env.py: error: Source file found twice under different module names:
+"migrate_env" and "scripts.migrate_env"
+Found 1 error in 1 file (errors prevented further checking)
+```
+
+`scripts/` has no `__init__.py`, so mypy reaches each script by two module paths. It aborts on the first one it hits — `backup.py` or `migrate_env.py` depending on discovery order — which is why this looks like a single-file problem and is not.
+
+Setting `explicit_package_bases = true` + `mypy_path = "."` in `[tool.mypy]` clears the abort and reveals **295 errors in 37 files**: 236 in `tests/`, 31 in `ingestion/`, 23 in `server/`, 4 in `scripts/`, 1 in `agent/`. Overwhelmingly missing third-party stubs (`boto3`, `gliner2`, `docling`, `pymupdf`) and Anthropic SDK union-narrowing on `.text` — not real defects. Three that may be:
+
+- `ingestion/graph_writer.py:230` — `Item "None" of "Future | None" has no attribute "exception"`
+- `server/tools/vector_search.py:110` — `Argument "text" ... has incompatible type "Any | None"; expected "str"`
+- `agent/agent.py:68` — `Incompatible types in assignment (expression has type "str", variable has type "OpenAIModel")`
+
+**Deliberately not fixed here.** Strict typing over `tests/` was never actually enforced, so switching it on is a new requirement rather than a regression fix, and adopting it mid-plan would bury the slot work under ~300 unrelated edits. **This needs a decision before it can be a gate** — scope mypy to production packages, add the missing stub ignores, or take the debt on. Until then `task check` cannot pass and phase gates use `task lint` + `task test`.
 
 ---
 
@@ -28,25 +48,25 @@
 
 ### 0.1 Boot test for the shipped example config
 
-- [ ] Add `tests/test_default_config.py`.
-- [ ] `test_env_example_loads()` — construct `Settings(_env_file=".env.example")` and assert it does not raise. This alone catches any validator that the example config violates.
-- [ ] `test_env_example_declares_every_settings_field()` — for each field on `Settings` that is not a computed property, assert the uppercase key appears in `.env.example`. Expect this to fail initially: `RERANK_MODEL`, `RERANK_SCORE_FLOOR`, `RRF_K`, `SPARSE_ENABLED`, `SPARSE_MODEL`, `DECOMPOSE_*` and `RETRY_*` are all absent despite `RERANK_MODEL` being named in `.env.example:322`'s own comment. Mark the known gaps with an explicit allowlist that Phase 4 empties.
-- [ ] `test_rerank_credentials_present_when_enabled()` — assert that a config with `RERANK_ENABLED=true` resolves a non-empty API key. **This is the D1 regression test.** It must fail against the current tree.
+- [x] Add `tests/test_default_config.py`.
+- [x] `test_env_example_loads()` — construct `Settings(_env_file=".env.example")` and assert it does not raise. This alone catches any validator that the example config violates.
+- [x] `test_env_example_declares_every_settings_field()` — for each field on `Settings` that is not a computed property, assert the uppercase key appears in `.env.example`. Expect this to fail initially: `RERANK_MODEL`, `RERANK_SCORE_FLOOR`, `RRF_K`, `SPARSE_ENABLED`, `SPARSE_MODEL`, `DECOMPOSE_*` and `RETRY_*` are all absent despite `RERANK_MODEL` being named in `.env.example:322`'s own comment. Mark the known gaps with an explicit allowlist that Phase 4 empties.
+- [x] `test_rerank_credentials_present_when_enabled()` — assert that a config with `RERANK_ENABLED=true` resolves a non-empty API key. **This is the D1 regression test.** It must fail against the current tree.
 
 ### 0.2 Degradation smoke test
 
-- [ ] Add `tests/test_integration_default_path.py`, marked `integration`.
-- [ ] Seed two points into the test collections, run `multi_search("...")`, and assert `"degraded" not in response`. This is the end-to-end form of the same guarantee — it catches a broken rerank, a broken channel, or a broken graph engine as one assertion.
-- [ ] Confirm it uses the redirected test collections from `tests/conftest.py` and the ephemeral Neo4j container. **Do not** point the fixtures at the dev instance — per `CLAUDE.md` that destroys the knowledge graph.
+- [x] Add `tests/test_integration_default_path.py`, marked `integration`.
+- [x] Seed two points into the test collections, run `multi_search("...")`, and assert `"degraded" not in response`. This is the end-to-end form of the same guarantee — it catches a broken rerank, a broken channel, or a broken graph engine as one assertion.
+- [x] Confirm it uses the redirected test collections from `tests/conftest.py` and the ephemeral Neo4j container. **Do not** point the fixtures at the dev instance — per `CLAUDE.md` that destroys the knowledge graph.
 
 ### 0.3 Fix D2 — Graphiti ignores `LLM_API_TYPE`
 
-- [ ] `ingestion/graphiti_client.py:79-92` constructs `OpenAIGenericClient` and `OpenAIRerankerClient` unconditionally, while `ingestion/entity_extractor.py:120-129` dispatches on `settings.llm_api_type` correctly.
-- [ ] With shipped defaults (`LLM_API_TYPE=anthropic`, `LLM_MODEL=claude-haiku-4.5`, `LLM_BASE_URL=""`, `GRAPH_ENGINE=graphiti`) this sends a Claude model id to `api.openai.com` with an Anthropic key.
-- [ ] Choose the narrow fix now, since the broad fix (routing Graphiti through `get_llm_client()`) requires an adapter to Graphiti's `LLMClient` interface and belongs with the cross-encoder work in Phase 1.5: add a `Settings` validator rejecting `GRAPH_ENGINE=graphiti` + `GRAPH_ENABLED=true` when `LLM_API_TYPE != "openai"` and `LLM_BASE_URL` is empty, with a message naming both escape hatches.
-- [ ] Add `test_graphiti_requires_openai_compatible_llm()` to `tests/test_settings.py`.
+- [x] `ingestion/graphiti_client.py:79-92` constructs `OpenAIGenericClient` and `OpenAIRerankerClient` unconditionally, while `ingestion/entity_extractor.py:120-129` dispatches on `settings.llm_api_type` correctly.
+- [x] With shipped defaults (`LLM_API_TYPE=anthropic`, `LLM_MODEL=claude-haiku-4.5`, `LLM_BASE_URL=""`, `GRAPH_ENGINE=graphiti`) this sends a Claude model id to `api.openai.com` with an Anthropic key.
+- [x] Choose the narrow fix now, since the broad fix (routing Graphiti through `get_llm_client()`) requires an adapter to Graphiti's `LLMClient` interface and belongs with the cross-encoder work in Phase 1.5: add a `Settings` validator rejecting `GRAPH_ENGINE=graphiti` + `GRAPH_ENABLED=true` when `LLM_API_TYPE != "openai"` and `LLM_BASE_URL` is empty, with a message naming both escape hatches.
+- [x] Add `test_graphiti_requires_openai_compatible_llm()` to `tests/test_settings.py`.
 
-**Phase 0 exit:** `task check` green; the three new tests in 0.1 and the validator test pass; 0.2 passes under `task test-integration`.
+**Phase 0 exit:** `task lint` + `task test` green; the three new tests in 0.1 and the validator test pass; 0.2 passes under `task test-integration`.
 
 ---
 
@@ -56,7 +76,7 @@
 
 ### 1.1 Rerank registry
 
-- [ ] Create `config/rerank_models.py`, mirroring `config/embedding_models.py`.
+- [x] Create `config/rerank_models.py`, mirroring `config/embedding_models.py`.
 
 ```python
 RerankProtocol = Literal["jina", "cohere", "voyage", "tei"]
@@ -76,22 +96,22 @@ class RerankSpec:
     default_score_floor: float
 ```
 
-- [ ] Seed the registry with `jina-reranker-v3.5` (`protocol="jina"`, `score_scale="logit"`, `default_score_floor=0.0`) so today's behaviour is the default and reproduces exactly.
-- [ ] Add `qwen3-reranker` (`protocol="tei"`, `routes=("local",)`, `score_scale="unit"`, `default_score_floor≈0.5`) as the first self-hosted entry. Treat the floor as provisional — Phase 1.6 calibrates it.
-- [ ] Add `spec(model)` raising `ValueError` on an unknown name, matching `config/embedding_models.py:106-113`.
+- [x] Seed the registry with `jina-reranker-v3.5` (`protocol="jina"`, `score_scale="logit"`, `default_score_floor=0.0`) so today's behaviour is the default and reproduces exactly.
+- [x] Add `qwen3-reranker` (`protocol="tei"`, `routes=("local",)`, `score_scale="unit"`, `default_score_floor≈0.5`) as the first self-hosted entry. Treat the floor as provisional — Phase 1.6 calibrates it.
+- [x] Add `spec(model)` raising `ValueError` on an unknown name, matching `config/embedding_models.py:106-113`.
 
 ### 1.2 Settings
 
-- [ ] Add `rerank_route: RerankRoute | Literal[""] = ""` — empty resolves to the model's `default_route`, mirroring `embedding_route` (`config/settings.py:32,242-243`).
-- [ ] Add `rerank_api_key: str = ""` and `rerank_api_url: str = ""`. Both empty fall back per route: `native` + `protocol="jina"` → `jina_api_key` / `jina_api_url`, preserving current behaviour for existing `.env` files.
-- [ ] **Change `rerank_score_floor` from `float = 0.0` to `float | None = None`.** `0.0` cannot be the unset sentinel because it is a legitimate floor for a logit-scaled model. Add a property `resolved_score_floor` returning the override or the spec's default.
-- [ ] Extend `_validate_embedding_selection` (or add a sibling validator) to reject: an unknown `RERANK_MODEL`; a `RERANK_ROUTE` not in the spec's `routes`; and `RERANK_ENABLED=true` with no resolvable API key **or** no resolvable base URL. That last clause is the D1 fix.
-- [ ] Keep `RERANK_ENABLED` — it is a genuine off switch with documented gate interaction (`.env.example:322-328`).
+- [x] Add `rerank_route: RerankRoute | Literal[""] = ""` — empty resolves to the model's `default_route`, mirroring `embedding_route` (`config/settings.py:32,242-243`).
+- [x] Add `rerank_api_key: str = ""` and `rerank_api_url: str = ""`. Both empty fall back per route: `native` + `protocol="jina"` → `jina_api_key` / `jina_api_url`, preserving current behaviour for existing `.env` files.
+- [x] **Change `rerank_score_floor` from `float = 0.0` to `float | None = None`.** `0.0` cannot be the unset sentinel because it is a legitimate floor for a logit-scaled model. Add a property `resolved_score_floor` returning the override or the spec's default.
+- [x] Extend `_validate_embedding_selection` (or add a sibling validator) to reject: an unknown `RERANK_MODEL`; a `RERANK_ROUTE` not in the spec's `routes`; and `RERANK_ENABLED=true` with no resolvable API key **or** no resolvable base URL. That last clause is the D1 fix.
+- [x] Keep `RERANK_ENABLED` — it is a genuine off switch with documented gate interaction (`.env.example:322-328`).
 
 ### 1.3 Reranker adapters
 
-- [ ] Create `retrieval/rerankers/__init__.py`.
-- [ ] Define the protocol in `retrieval/rerank.py` (keep it next to its only consumers; `retrieval/` must not import from `server/` or `fastmcp`, per `CLAUDE.md`):
+- [x] Create `retrieval/rerankers/__init__.py`.
+- [x] Define the protocol in `retrieval/rerank.py` (keep it next to its only consumers; `retrieval/` must not import from `server/` or `fastmcp`, per `CLAUDE.md`):
 
 ```python
 @runtime_checkable
@@ -102,35 +122,35 @@ class Reranker(Protocol):
     async def close(self) -> None: ...
 ```
 
-- [ ] `retrieval/rerankers/jina.py` — `POST {base}/v1/rerank`, body `{model, query, documents, top_n}`, read `resp["results"][i]["index"]` and `["relevance_score"]`. This is a lift of the existing `_rerank_request` (`retrieval/rerank.py:39-72`) with the response mapped to tuples.
-- [ ] `retrieval/rerankers/tei.py` — `POST {base}/rerank`, body `{query, texts, raw_scores: false}`, response is a bare list of `{index, score}`.
-- [ ] Defer `cohere.py` and `voyage.py`. The registry makes them a ~30-line addition each; adding them now means shipping untested wire code. Note the deferral in the registry docstring so it does not read as an oversight.
-- [ ] Carry the retry shape across unchanged: `wait_exponential(multiplier=1, min=2, max=15)`, `stop_after_attempt(settings.max_retries)`. **Correct one thing while moving it:** the current retry predicate is `retry_if_exception_type((httpx.HTTPStatusError,))`, which retries 4xx as eagerly as 5xx. Use the `_is_retryable` shape already proven in `ingestion/embedders/openrouter.py:52-69` (429 + 5xx + transient network, and note that `httpx.TimeoutException` is a *sibling* of `NetworkError`, not a subclass of `ConnectError`).
+- [x] `retrieval/rerankers/jina.py` — `POST {base}/v1/rerank`, body `{model, query, documents, top_n}`, read `resp["results"][i]["index"]` and `["relevance_score"]`. This is a lift of the existing `_rerank_request` (`retrieval/rerank.py:39-72`) with the response mapped to tuples.
+- [x] `retrieval/rerankers/tei.py` — `POST {base}/rerank`, body `{query, texts, raw_scores: false}`, response is a bare list of `{index, score}`.
+- [x] Defer `cohere.py` and `voyage.py`. The registry makes them a ~30-line addition each; adding them now means shipping untested wire code. Note the deferral in the registry docstring so it does not read as an oversight.
+- [x] Carry the retry shape across unchanged: `wait_exponential(multiplier=1, min=2, max=15)`, `stop_after_attempt(settings.max_retries)`. **Correct one thing while moving it:** the current retry predicate is `retry_if_exception_type((httpx.HTTPStatusError,))`, which retries 4xx as eagerly as 5xx. Use the `_is_retryable` shape already proven in `ingestion/embedders/openrouter.py:52-69` (429 + 5xx + transient network, and note that `httpx.TimeoutException` is a *sibling* of `NetworkError`, not a subclass of `ConnectError`).
 
 ### 1.4 Factory and call-site rewiring
 
-- [ ] Add `create_reranker() -> Reranker` to `retrieval/rerank.py`, dispatching on `spec(settings.rerank_model).protocol`. Lazy-import each adapter, matching `create_embedder()` (`ingestion/embedder.py:115-143`).
-- [ ] **Delete the module-level `RERANK_URL`** (`retrieval/rerank.py:32`). It is computed from `settings.jina_api_url` at import time, which is precisely what makes the reranker unswappable. `tests/test_rerank.py:13` imports it — update that test.
-- [ ] Rewrite `rerank()` and `rerank_dicts()` to call the factory. Their public signatures and their `RerankError` / degradation semantics do not change — `retrieval/pipeline.py:113-117` and `server/tools/vector_search.py:119-121` must need no edit.
-- [ ] Cache the reranker instance at module level behind a `_get_reranker()`, mirroring `_get_embedder()` in `retrieval/channels.py:34-38`. Add a `reset_reranker()` test hook, mirroring `ingestion/sparse_embedder.py:52-55`.
+- [x] Add `create_reranker() -> Reranker` to `retrieval/rerank.py`, dispatching on `spec(settings.rerank_model).protocol`. Lazy-import each adapter, matching `create_embedder()` (`ingestion/embedder.py:115-143`).
+- [x] **Delete the module-level `RERANK_URL`** (`retrieval/rerank.py:32`). It is computed from `settings.jina_api_url` at import time, which is precisely what makes the reranker unswappable. `tests/test_rerank.py:13` imports it — update that test.
+- [x] Rewrite `rerank()` and `rerank_dicts()` to call the factory. Their public signatures and their `RerankError` / degradation semantics do not change — `retrieval/pipeline.py:113-117` and `server/tools/vector_search.py:119-121` must need no edit.
+- [x] Cache the reranker instance at module level behind a `_get_reranker()`, mirroring `_get_embedder()` in `retrieval/channels.py:34-38`. Add a `reset_reranker()` test hook, mirroring `ingestion/sparse_embedder.py:52-55`.
 
 > **Loop affinity.** `retrieval/rerank.py` currently opens a fresh `httpx.AsyncClient` per call (`:50`), so it has never had the cross-loop problem the embedders solved with `WeakKeyDictionary` (`ingestion/embedders/jina.py:94-142`). If an adapter caches its client, it inherits that problem. Either keep per-call clients (simplest; reranking is one call per query, not per chunk) or copy the `_ensure_loop_resources` pattern wholesale. **Recommend per-call** — do not invent a third approach.
 
 ### 1.5 Graphiti cross-encoder
 
-- [ ] `ingestion/graphiti_client.py:91` passes `OpenAIRerankerClient` — a second hosted reranker in the ingestion path, unaffected by `RERANK_MODEL`.
-- [ ] Add a `_SlotCrossEncoder` adapting `create_reranker()` to Graphiti's `CrossEncoderClient` interface, mirroring `_JinaGraphitiEmbedder` (`ingestion/graphiti_client.py:39-67`).
-- [ ] Verify the installed `graphiti_core`'s cross-encoder method signature before writing the adapter — read it from the installed wheel, do not assume it matches the embedder's shape.
+- [x] `ingestion/graphiti_client.py:91` passes `OpenAIRerankerClient` — a second hosted reranker in the ingestion path, unaffected by `RERANK_MODEL`.
+- [x] Add a `_SlotCrossEncoder` adapting `create_reranker()` to Graphiti's `CrossEncoderClient` interface, mirroring `_JinaGraphitiEmbedder` (`ingestion/graphiti_client.py:39-67`).
+- [x] Verify the installed `graphiti_core`'s cross-encoder method signature before writing the adapter — read it from the installed wheel, do not assume it matches the embedder's shape.
 
 ### 1.6 Tests
 
-- [ ] `tests/test_rerank.py` — keep every existing assertion; update the `RERANK_URL` import. Parametrise the response-parsing tests across the `jina` and `tei` adapters.
-- [ ] New: `test_score_floor_follows_model()` — assert an unset `RERANK_SCORE_FLOOR` yields the spec default, and that switching model changes it.
-- [ ] New: `test_unit_scale_gate_fires()` in `tests/test_gate.py` — a unit-scaled reranker with its own default floor must still be able to fire the gate. This is the regression test for the silent-gate-disable failure the design doc identifies.
-- [ ] New: `test_rerank_rejects_4xx_without_retry()` — pins the retry-predicate correction from 1.3.
-- [ ] Run `task eval-retrieval` and record recall@10 / nDCG@10 / MRR in the commit message. Reranking is unchanged in behaviour at this phase, so **these numbers must not move**. Any movement means the Jina adapter is not a faithful lift.
+- [x] `tests/test_rerank.py` — keep every existing assertion; update the `RERANK_URL` import. Parametrise the response-parsing tests across the `jina` and `tei` adapters.
+- [x] New: `test_score_floor_follows_model()` — assert an unset `RERANK_SCORE_FLOOR` yields the spec default, and that switching model changes it.
+- [x] New: `test_unit_scale_gate_fires()` in `tests/test_gate.py` — a unit-scaled reranker with its own default floor must still be able to fire the gate. This is the regression test for the silent-gate-disable failure the design doc identifies.
+- [x] New: `test_rerank_rejects_4xx_without_retry()` — pins the retry-predicate correction from 1.3.
+- [~] Run `task eval-retrieval` and record recall@10 / nDCG@10 / MRR in the commit message. Reranking is unchanged in behaviour at this phase, so **these numbers must not move**. Any movement means the Jina adapter is not a faithful lift. **DEFERRED — needs an ingested corpus + running services; not runnable in this environment.**
 
-**Phase 1 exit:** `task check` green; `task eval-retrieval` unchanged from baseline; `RERANK_MODEL=qwen3-reranker` + `RERANK_ROUTE=local` boots and serves against a local TEI container.
+**Phase 1 exit:** `task lint` + `task test` green; `task eval-retrieval` unchanged from baseline; `RERANK_MODEL=qwen3-reranker` + `RERANK_ROUTE=local` boots and serves against a local TEI container.
 
 ---
 
@@ -183,7 +203,7 @@ class Reranker(Protocol):
 - [ ] `test_batch_order_preserved_by_index()` — feed a deliberately shuffled `data` array and assert reordering, matching the guard at `openrouter.py:206`.
 - [ ] `test_image_embedding_rejected_for_text_only_model()` in `tests/test_settings.py`.
 
-**Phase 2 exit:** `task check` green; a documented `docker run` of TEI serving Qwen3-Embedding, ingesting a sample doc end-to-end and answering `task smoke`.
+**Phase 2 exit:** `task lint` + `task test` green; a documented `docker run` of TEI serving Qwen3-Embedding, ingesting a sample doc end-to-end and answering `task smoke`.
 
 ---
 
@@ -216,13 +236,15 @@ class Reranker(Protocol):
 - [ ] Update `tests/test_qdrant_setup.py:145` — it asserts against the `DENSE_DIM` constant; the multivec assertions must move to the spec.
 - [ ] Update `tests/test_pipeline_dual_embed.py` for the split embedder.
 
-**Phase 3 exit:** `task check` green; `MULTIVEC_MODEL=` empty and `=jina-v4-colbert` both boot; the mixed `gemini-2` + `jina-v4-colbert` config validates.
+**Phase 3 exit:** `task lint` + `task test` green; `MULTIVEC_MODEL=` empty and `=jina-v4-colbert` both boot; the mixed `gemini-2` + `jina-v4-colbert` config validates.
 
 ---
 
 ## Phase 4 — Audit cleanup
 
 > Small, independent, same files. One commit.
+
+- [ ] **D9 (found during Phase 0)** — `server/tools/graph_search.py:72-80` catches every exception and *returns* `[{"error": ...}]` instead of raising. `run_graph` (`server/tools/multi_search.py:79-83`) only marks the channel failed when the call raises, so `"graph"` can never reach `degraded`, and the error dict is handed back inside `graph_facts` as though it were a fact. This breaks the contract in `CLAUDE.md` — "every pipeline stage degrades rather than raising… a stage failure appends its name to `degraded`" — for the one stage that cannot. It also means the Phase 0.2 smoke test does **not** catch a broken graph engine, contrary to what 0.2 claims above. Fix by raising from the internal path while keeping a caught, dict-shaped response for direct MCP callers; the `run_graph` side already handles a raise correctly.
 
 - [ ] **D3** — `IMAGE_EMBED_MAX_PX=400` (`.env.example:317`) has no `Settings` field, is swallowed by `extra="ignore"`, and nothing resizes. Pages render at 150 DPI (`ingestion/file_processor.py:214`) → ~1240×1754 px for A4. **Decide and do one:** implement the downscale (a `PIL` thumbnail before `embed_image`) or delete the key. If deleting, also rewrite `ingestion/embedders/openrouter.py:34-39`, whose `_IMAGE_TOKEN_ESTIMATE = 258.0` is justified by that non-existent cap.
 - [ ] **D3b** — re-derive `_TOKENS_PER_TILE = 10` (`ingestion/embedders/jina.py:47`). Qwen2.5-VL merges 2×2 patches into one visual token, so a 28×28-px tile is closer to 1 token than 10. At 10, an A4 page estimates 28,350 tokens against a default `JINA_TPM=100000` — ~3.5 pages/minute. Verify against a real invoice before changing; an under-estimate causes 429 storms, so do not "fix" this from theory alone.

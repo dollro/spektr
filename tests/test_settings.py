@@ -279,3 +279,67 @@ class TestEmbeddingSelection:
         """extra=ignore would otherwise boot prod on the wrong model."""
         with pytest.raises(ValidationError, match="EMBEDDING_PROVIDER has been replaced"):
             self._settings(embedding_provider="openrouter")
+
+
+class TestGraphEngineLlmSelection:
+    """Graphiti only speaks OpenAI; the config must not promise otherwise."""
+
+    def _settings(self, **kw: object):  # type: ignore[no-untyped-def]
+        from config.settings import Settings
+
+        # Every LLM/graph field is pinned: conftest's load_dotenv() leaks the
+        # developer's .env into os.environ, which _env_file=None does not
+        # shadow, and these four fields are exactly what is under test.
+        base = dict(
+            neo4j_password="test",
+            openrouter_api_key="test",
+            image_embed_strategy="none",
+            embedding_dimensions=0,
+            graph_enabled=True,
+            graph_engine="graphiti",
+            llm_api_type="anthropic",
+            llm_model="claude-haiku-4.5",
+            llm_base_url="",
+            _env_file=None,
+        )
+        base.update(kw)
+        return Settings(**base)  # type: ignore[arg-type]
+
+    def test_graphiti_requires_openai_compatible_llm(self) -> None:
+        """The shipped default combination is a silent cross-provider call.
+
+        graphiti_client builds OpenAIGenericClient unconditionally and an
+        empty base_url resolves to api.openai.com inside the OpenAI SDK, so
+        this would post a Claude model id there with an Anthropic key.
+        """
+        with pytest.raises(ValidationError) as exc:
+            self._settings()
+        message = str(exc.value)
+        assert "GRAPH_ENGINE=graphiti" in message
+        assert "LLM_API_TYPE=anthropic" in message
+        # Both escape hatches must be named, or the error is not actionable.
+        assert "LLM_BASE_URL" in message
+        assert "GRAPH_ENGINE=gliner" in message
+
+    @pytest.mark.parametrize(
+        ("overrides", "reason"),
+        [
+            ({"graph_engine": "gliner"}, "local CPU extraction needs no LLM"),
+            ({"graph_enabled": False}, "no graph, no Graphiti LLM calls"),
+            ({"llm_api_type": "openai"}, "the OpenAI client is the right client"),
+            (
+                {"llm_base_url": "https://openrouter.ai/api/v1"},
+                "an OpenAI-compatible gateway can serve a Claude model id",
+            ),
+        ],
+    )
+    def test_valid_combinations_still_pass(
+        self, overrides: dict[str, object], reason: str
+    ) -> None:
+        s = self._settings(**overrides)
+        assert s.neo4j_password == "test", reason
+
+    def test_api_type_match_is_case_insensitive(self) -> None:
+        """get_llm_client() lowercases llm_api_type; this must agree with it."""
+        s = self._settings(llm_api_type="OpenAI")
+        assert s.llm_api_type == "OpenAI"

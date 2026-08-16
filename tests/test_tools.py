@@ -691,13 +691,13 @@ class TestReranker:
             {"score": 0.5, "text": "first doc"},
             {"score": 0.3, "text": "second doc"},
         ]
-        mock_api_results = [
-            {"index": 1, "relevance_score": 0.9},
-            {"index": 0, "relevance_score": 0.7},
-        ]
+        # `_score` normalises every protocol's envelope to (index, score)
+        # pairs, so the vendor-specific `relevance_score`/`score` key names
+        # stop at the adapter boundary — see retrieval/rerankers/.
+        mock_api_results = [(1, 0.9), (0, 0.7)]
 
         with patch(
-            "retrieval.rerank._rerank_request",
+            "retrieval.rerank._score",
             new_callable=AsyncMock,
             return_value=mock_api_results,
         ):
@@ -725,8 +725,7 @@ class TestReranker:
         ]
 
         with patch(
-            "retrieval.rerank._rerank_request",
-            new_callable=AsyncMock,
+            "retrieval.rerank._get_reranker",
             side_effect=RuntimeError("API down"),
         ):
             from retrieval.rerank import rerank_dicts

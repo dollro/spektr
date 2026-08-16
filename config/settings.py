@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from typing import Literal, Self
 
-from pydantic import model_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from config.constants import DENSE_COLLECTION, MULTIVEC_COLLECTION
 from config.embedding_models import EmbeddingModel, EmbeddingRoute, spec
+from config.rerank_models import RerankRoute
+from config.rerank_models import spec as rerank_spec
 
 
 class Settings(BaseSettings):
@@ -143,8 +145,23 @@ class Settings(BaseSettings):
     sparse_model: str = "Qdrant/minicoil-v1"
     rrf_k: int = 60
     rerank_model: str = "jina-reranker-v3.5"
+    # Empty -> the model's default_route. Changing RERANK_MODEL alone is
+    # therefore enough; pin this only to override the registry's choice.
+    rerank_route: RerankRoute | Literal[""] = ""
+    # Both empty -> resolved per route (see the rerank_endpoint property).
+    # Kept separate from JINA_API_KEY so the reranker stops being hostage to
+    # the embedding model's vendor: RERANK_ENABLED defaults true while
+    # EMBEDDING_MODEL defaults to gemini-2, so a by-the-book deployment used
+    # to 401 on every query and degrade silently.
+    rerank_api_key: str = ""
+    rerank_api_url: str = ""
     rerank_candidates: int = 50  # fused candidates sent to the reranker
-    rerank_score_floor: float = 0.0  # v3.5 scores are unbounded; <0 means judged irrelevant
+    # None -> the model's default_score_floor. 0.0 CANNOT be the unset
+    # sentinel: it is a legitimate floor on the logit scale (and is exactly
+    # jina-reranker-v3.5's default), so a falsy check would make an explicit
+    # 0.0 indistinguishable from "not set" — the bug the embedding registry
+    # avoids only because 0 dimensions is meaningless.
+    rerank_score_floor: float | None = None
     retry_enabled: bool = True
     retry_limit_multiplier: int = 3  # candidate-pool widening on gated retry
     decompose_enabled: bool = True
@@ -223,6 +240,50 @@ class Settings(BaseSettings):
         """True when embed_image is implemented for this model+route."""
         return self.embedding_route in spec(self.embedding_model).image_routes
 
+    @field_validator("rerank_score_floor", mode="before")
+    @classmethod
+    def _blank_floor_means_unset(cls, value: object) -> object:
+        """Treat `RERANK_SCORE_FLOOR=` as unset rather than as a parse error.
+
+        Every other "leave empty for the default" key in `.env` is a str or an
+        int where `""`/`0` is a usable sentinel. This one is `float | None`,
+        and pydantic rejects `""` as a float outright — so without this, the
+        documented way to adopt the model's default fails at startup.
+        """
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @property
+    def resolved_score_floor(self) -> float:
+        """Relevance-gate floor: explicit override, else the model's default.
+
+        Read this rather than `rerank_score_floor` — the raw field is None
+        when unset, and a floor is only interpretable alongside the
+        `score_scale` of the model that produced the score.
+        """
+        if self.rerank_score_floor is not None:
+            return self.rerank_score_floor
+        return rerank_spec(self.rerank_model).default_score_floor
+
+    @property
+    def rerank_endpoint(self) -> tuple[str, str]:
+        """(base_url, api_key) for the active rerank model+route pair.
+
+        Falls back to the Jina credentials on the native route so existing
+        `.env` files that only set `JINA_API_KEY` keep working — that was the
+        sole source before this slot existed. The local route deliberately
+        does NOT fall back: a self-hosted endpoint has no sensible default
+        host, and silently pointing it at api.jina.ai would be worse than
+        failing.
+        """
+        if self.rerank_route == "local":
+            return self.rerank_api_url, self.rerank_api_key
+        return (
+            self.rerank_api_url or self.jina_api_url,
+            self.rerank_api_key or self.jina_api_key,
+        )
+
     @model_validator(mode="after")
     def _validate_embedding_selection(self) -> Self:
         if self.embedding_provider:
@@ -296,6 +357,88 @@ class Settings(BaseSettings):
             )
             raise ValueError(msg)
         return self
+
+    @model_validator(mode="after")
+    def _validate_rerank_selection(self) -> Self:
+        """Resolve the rerank route and reject a slot that cannot be reached.
+
+        The failure this exists for is silent, not loud. `retrieval/rerank.py`
+        used to read `settings.jina_api_key` unconditionally, while
+        `RERANK_ENABLED` defaults true and `EMBEDDING_MODEL` defaults to
+        gemini-2 — so a deployment that followed `.env.example` sent every
+        rerank call with an empty bearer token, caught the 401, appended
+        "rerank" to `degraded`, and returned RRF-ordered results forever.
+        Nothing raised, and the only symptom was a key in the response.
+        """
+        s = rerank_spec(self.rerank_model)
+        # Resolve before checking, so an unset value adopts the model's
+        # default rather than failing as an illegal pair. Done even when
+        # reranking is off, so `settings.rerank_route` is never the empty
+        # string at runtime — readers should not have to know whether the
+        # feature flag happened to be set.
+        if not self.rerank_route:
+            self.rerank_route = s.default_route
+
+        if not self.rerank_enabled:
+            # Nothing is reached, so credentials need not resolve. The model
+            # and route are still validated above rather than left to rot.
+            return self
+
+        if self.rerank_route not in s.routes:
+            msg = (
+                f"RERANK_MODEL={self.rerank_model} is not served via "
+                f"RERANK_ROUTE={self.rerank_route}. "
+                f"Available routes: {', '.join(s.routes)}."
+            )
+            raise ValueError(msg)
+
+        base_url, api_key = self.rerank_endpoint
+        if not base_url:
+            msg = (
+                f"RERANK_ENABLED=true with RERANK_MODEL={self.rerank_model} via "
+                f"{self.rerank_route} needs RERANK_API_URL — a self-hosted "
+                "reranker has no default host. Set it, or RERANK_ENABLED=false."
+            )
+            raise ValueError(msg)
+        # A local TEI container is normally unauthenticated, so an empty key
+        # is legitimate there and only the hosted routes require one.
+        if self.rerank_route != "local" and not api_key:
+            msg = (
+                f"RERANK_ENABLED=true with RERANK_MODEL={self.rerank_model} needs "
+                "an API key: set RERANK_API_KEY (or JINA_API_KEY, which it falls "
+                "back to). Reranking is independent of EMBEDDING_MODEL, so this "
+                "is required even when embedding through another provider. "
+                "Set RERANK_ENABLED=false to retrieve without reranking."
+            )
+            raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def _validate_graph_llm_selection(self) -> Self:
+        """Reject a graph engine that cannot reach the configured LLM.
+
+        `ingestion/graphiti_client.py` builds `OpenAIGenericClient` and
+        `OpenAIRerankerClient` unconditionally — Graphiti speaks only the
+        OpenAI wire format — and an empty base_url resolves to
+        https://api.openai.com/v1 inside the OpenAI SDK. So `anthropic` plus
+        an empty LLM_BASE_URL does not fall back to Anthropic; it ships an
+        Anthropic key and a Claude model id to OpenAI, and every episode
+        fails mid-ingest instead of at startup.
+        """
+        if not (self.graph_enabled and self.graph_engine == "graphiti"):
+            return self
+        if self.llm_api_type.lower() == "openai" or self.llm_base_url:
+            return self
+        msg = (
+            f"GRAPH_ENGINE=graphiti with LLM_API_TYPE={self.llm_api_type} and an "
+            "empty LLM_BASE_URL cannot work: Graphiti only speaks the OpenAI wire "
+            f"format, so it would send LLM_MODEL={self.llm_model} to "
+            f"https://api.openai.com/v1 carrying a key issued for {self.llm_api_type}. Either "
+            "set LLM_BASE_URL to an OpenAI-compatible gateway serving that model "
+            "(e.g. https://openrouter.ai/api/v1), or set GRAPH_ENGINE=gliner to "
+            "extract entities locally on CPU instead."
+        )
+        raise ValueError(msg)
 
 
 settings = Settings()  # type: ignore[call-arg]  # required fields supplied via .env

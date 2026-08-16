@@ -24,14 +24,13 @@ from config.settings import settings
 os.environ.setdefault("EMBEDDING_DIM", str(settings.dense_dimensions))
 
 from graphiti_core import Graphiti  # noqa: E402
-from graphiti_core.cross_encoder.openai_reranker_client import (  # noqa: E402
-    OpenAIRerankerClient,
-)
+from graphiti_core.cross_encoder.client import CrossEncoderClient  # noqa: E402
 from graphiti_core.embedder.client import EmbedderClient  # noqa: E402
 from graphiti_core.llm_client import LLMConfig  # noqa: E402
 from graphiti_core.llm_client.openai_generic_client import OpenAIGenericClient  # noqa: E402
 
 from ingestion.embedder import create_embedder  # noqa: E402
+from retrieval.rerank import create_reranker  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -67,13 +66,52 @@ class _JinaGraphitiEmbedder(EmbedderClient):
         await self._embedder.close()
 
 
+class _SlotCrossEncoder(CrossEncoderClient):
+    """Adapts the configured rerank slot to Graphiti's CrossEncoderClient.
+
+    Graphiti previously took `OpenAIRerankerClient`, which made it a SECOND
+    hosted reranker in the stack — unaffected by `RERANK_MODEL`, and pointed
+    at OpenAI regardless of what the retrieval path was told to use. Routing
+    it through the same slot means one reranker choice is honoured everywhere,
+    and a self-hosted deployment does not leak graph queries to a vendor it
+    thought it had switched away from.
+
+    Mirrors what `_JinaGraphitiEmbedder` above does for the embedder.
+    """
+
+    def __init__(self) -> None:
+        self._reranker = create_reranker()
+
+    async def rank(self, query: str, passages: list[str]) -> list[tuple[str, float]]:
+        """Return (passage, score) pairs, most relevant first.
+
+        Graphiti wants the passage text back, not its position, so the
+        adapter resolves indices here. Degrading rather than raising is
+        deliberate: entity resolution is a *ranking* refinement, and failing
+        the whole ingest because a reranker was unreachable would be a far
+        worse outcome than falling back to the input order.
+        """
+        if not passages:
+            return []
+        try:
+            ranked = await self._reranker.rerank(query, passages, top_n=len(passages))
+        except Exception:
+            logger.exception("Graph cross-encoder failed; falling back to input order")
+            return [(passage, 0.0) for passage in passages]
+        return [(passages[index], score) for index, score in ranked]
+
+    async def close(self) -> None:
+        await self._reranker.close()
+
+
 _client: Graphiti | None = None
 _graphiti_embedder: _JinaGraphitiEmbedder | None = None
+_graphiti_cross_encoder: _SlotCrossEncoder | None = None
 
 
 async def get_graphiti() -> Graphiti:
     """Return (and lazily initialise) the shared Graphiti client."""
-    global _client, _graphiti_embedder  # noqa: PLW0603
+    global _client, _graphiti_embedder, _graphiti_cross_encoder  # noqa: PLW0603
     if _client is None:
         os.environ.setdefault("SEMAPHORE_LIMIT", str(settings.graph_semaphore_limit))
         llm_config = LLMConfig(
@@ -82,13 +120,14 @@ async def get_graphiti() -> Graphiti:
             base_url=settings.llm_base_url or None,
         )
         _graphiti_embedder = _JinaGraphitiEmbedder()
+        _graphiti_cross_encoder = _SlotCrossEncoder()
         _client = Graphiti(
             settings.neo4j_uri,
             settings.neo4j_user,
             settings.neo4j_password,
             llm_client=OpenAIGenericClient(config=llm_config),
             embedder=_graphiti_embedder,
-            cross_encoder=OpenAIRerankerClient(config=llm_config),
+            cross_encoder=_graphiti_cross_encoder,
         )
         await _client.build_indices_and_constraints()
         logger.info("Graphiti client initialised")
@@ -97,10 +136,13 @@ async def get_graphiti() -> Graphiti:
 
 async def close_graphiti() -> None:
     """Shut down the shared Graphiti client."""
-    global _client, _graphiti_embedder  # noqa: PLW0603
+    global _client, _graphiti_embedder, _graphiti_cross_encoder  # noqa: PLW0603
     if _graphiti_embedder is not None:
         await _graphiti_embedder.close()
         _graphiti_embedder = None
+    if _graphiti_cross_encoder is not None:
+        await _graphiti_cross_encoder.close()
+        _graphiti_cross_encoder = None
     if _client is not None:
         await _client.close()
         _client = None
