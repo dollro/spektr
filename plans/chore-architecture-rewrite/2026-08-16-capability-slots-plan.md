@@ -256,6 +256,14 @@ class Reranker(Protocol):
 
 ---
 
+## Follow-ups found during the test ingest
+
+- [ ] **D10 — `*_MAX_CONCURRENT` bounds concurrency per event loop, not per process.** Every provider client creates its RPM/TPM `TokenBucket`s once in `__init__` (process-wide) but its `asyncio.Semaphore` inside `_ensure_loop_resources` (per loop), because a semaphore is loop-bound. CocoIndex runs file components on several worker threads each with its own loop, so the effective ceiling is roughly `*_MAX_CONCURRENT x PIPELINE_MAX_CONCURRENT_FILES`. Observed live: `JINA_MAX_CONCURRENT=4` with 4 in-flight files drew `RATE_CONCURRENCY_LIMIT_EXCEEDED: 2/2 concurrent` from Jina 6 times and 12 twenty-second all-limiter pauses — four minutes of pure stalling before the first document finished. Documented in `ingestion/embedder.py` and `.env.example` for now; the real fix is a cross-loop concurrency gate (the `TokenBucket` pattern already is loop-agnostic — `asyncio.sleep` works on any loop — so concurrency could follow it), which is a careful piece of work with deadlock risk and does not belong in a config commit. Affects `jina.py`, `voyage.py`, `openrouter.py` and `local.py` identically.
+
+- [ ] **The Docling -> PyMuPDF fallback is invisible in the corpus.** Observed live: `libxcb.so.1` was missing, so `cv2` failed to import inside docling's table model and every PDF fell back to PyMuPDF. `file_processor.py` logs ERROR, but the file still *succeeds*, so the run reported `0 errored files` and produced a full 173-point corpus — chunked by the fallback path, which segments differently from docling's `HybridChunker`. Nothing in Qdrant records which processor produced a point, so `task doctor` cannot see it and the golden set (built against docling chunks) silently stops matching. Suggest a `processor: docling|pymupdf` payload field, and a doctor check that flags a corpus with mixed values or an unexpected one. Note this also means the fallback is a *quality* cliff that a green ingest hides.
+
+- [ ] **Corpus/config drift is not detected at startup.** The dev `.env` said `EMBEDDING_MODEL=jina-v4` (512d) while `documents_dense` was 768d holding `google/gemini-embedding-2` points. `create_dense_collection` is idempotent and *skips* an existing collection, so nothing complained — the mismatch only surfaces as per-point Qdrant rejections at write time, or via `task doctor`. Consider having `ensure_collections` compare the live collection's vector size against `settings.dense_dimensions` and fail loudly with the re-index instruction.
+
 ## Phase 5 — Documentation
 
 - [x] `docs/ingestion/embeddings.md` — restructure around the three slots. The provider comparison table becomes per-slot. Add the local route, its prefix contract, and the client-side truncation note.
