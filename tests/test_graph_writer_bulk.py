@@ -235,9 +235,12 @@ class TestGraphitiWriterBulkResume:
         Episode names are content-independent, so an unbounded resume query
         would find the prior run's episode and skip reprocessing it -- the
         graph would silently keep the old content forever. The fixture below
-        stands in for Neo4j: it only returns episodes whose `created_at` is
-        at or after the `since` bound passed in the query, exactly as the
-        real `e.created_at >= $since` predicate would.
+        stands in for a real Neo4j driver: `since` defaults to `None` (as an
+        unbounded query, i.e. one issued with no `$since` parameter, would
+        happily accept), in which case every episode matches regardless of
+        its `created_at` -- exactly the old, unbounded behaviour. Only when
+        `since` is actually provided does the fixture apply the
+        `e.created_at >= $since` bound, exactly as the real predicate would.
         """
         from ingestion.graph_writer import GraphitiWriter
 
@@ -251,9 +254,15 @@ class TestGraphitiWriterBulkResume:
             ("test.pdf:p1:c0", stale_episode_created_at),
         ]
 
-        async def fake_execute_query(_query: str, *, src: str, since: datetime) -> tuple:
+        async def fake_execute_query(
+            _query: str, *, src: str, since: datetime | None = None
+        ) -> tuple:
             del src
-            matching = [name for name, created_at in episodes_in_graph if created_at >= since]
+            matching = [
+                name
+                for name, created_at in episodes_in_graph
+                if since is None or created_at >= since
+            ]
             return ([{"name": name} for name in matching], None, None)
 
         mock_client = AsyncMock()
