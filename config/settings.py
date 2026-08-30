@@ -220,6 +220,13 @@ class Settings(BaseSettings):
     graph_enabled: bool = True
     graph_semaphore_limit: int = 10  # SEMAPHORE_LIMIT for Graphiti LLM concurrency
     graph_episode_target_size: int = 1500  # Target chars per Graphiti episode
+    # Graphiti tags per-node dedupe/attribute and per-edge resolution calls
+    # with ModelSize.small -- 62% of all calls on the 2026-08-30 baseline.
+    # OpenAIGenericClient ignores that tag and sends LLM_MODEL for everything.
+    # Naming a cheaper model here routes those calls to it. Empty keeps the
+    # single-model behaviour. The model MUST support
+    # `response_format: json_schema` or every dedupe call fails.
+    graph_small_model: str = ""
     graph_engine: Literal["graphiti", "gliner"] = "graphiti"
     # graphiti-core posts an event to us.i.posthog.com on every client
     # initialisation, reporting which LLM / embedder / reranker / database

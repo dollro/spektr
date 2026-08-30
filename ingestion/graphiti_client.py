@@ -34,9 +34,9 @@ from graphiti_core import Graphiti  # noqa: E402
 from graphiti_core.cross_encoder.client import CrossEncoderClient  # noqa: E402
 from graphiti_core.embedder.client import EmbedderClient  # noqa: E402
 from graphiti_core.llm_client import LLMConfig  # noqa: E402
-from graphiti_core.llm_client.openai_generic_client import OpenAIGenericClient  # noqa: E402
 
 from ingestion.embedder import create_embedder  # noqa: E402
+from ingestion.graphiti_llm import SizeAwareGenericClient  # noqa: E402
 from retrieval.rerank import create_reranker  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -161,7 +161,10 @@ async def get_graphiti() -> Graphiti:
             settings.neo4j_uri,
             settings.neo4j_user,
             settings.neo4j_password,
-            llm_client=OpenAIGenericClient(config=llm_config),
+            llm_client=SizeAwareGenericClient(
+                config=llm_config,
+                small_model=settings.graph_small_model,
+            ),
             embedder=_graphiti_embedder,
             cross_encoder=_graphiti_cross_encoder,
         )
