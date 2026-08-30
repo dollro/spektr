@@ -268,3 +268,38 @@ The pipeline uses `get_graph_engine()` to obtain the singleton engine instance:
 4. At pipeline end, `close_graph_engine()` shuts down the singleton
 
 See also: [Pipeline Overview](overview.md) | [File Processing](file-processing.md) | [Architecture Data Flow](../architecture/data-flow.md)
+
+## Cost
+
+Graphiti bills roughly **one LLM call per extracted entity plus one per edge**,
+not per page. Cost therefore tracks how much structure the text contains, not
+how much text you fed it — an entity-dense academic paper is the worst case.
+
+A measured run (three PDFs, 28 pages, ~23k tokens of source text) produced
+**5.31M LLM tokens — 228x amplification**. Two defects accounted for roughly
+half of it, both fixed:
+
+- `OpenAIGenericClient` ignores graphiti's `ModelSize.small` tag, so the 62% of
+  calls upstream marks cheap-model-safe ran on the full model.
+  `SizeAwareGenericClient` (`ingestion/graphiti_llm.py`) routes them to
+  **`GRAPH_SMALL_MODEL`**. Empty keeps single-model behaviour. The model must
+  support `response_format: json_schema` or every dedupe call fails; verified
+  working: `google/gemini-2.5-flash-lite`. Graphiti's own defaults are
+  `gpt-4.1-nano` (OpenAI clients) and `gemini-2.5-flash-lite` (Gemini client) —
+  prefer one of those, since upstream's "small is safe here" judgement was
+  calibrated against them.
+- A failed `add_episode_bulk` used to restart the document, reprocessing
+  episodes already committed (measured: 64 of 71) and duplicating Episodic
+  nodes. `ingest_bulk` now resumes, bounding the lookup by `created_at` so it
+  matches only the failed call's own writes.
+
+Re-running the same corpus with both fixes: **22 minutes and ~709 LLM calls,
+against 2h49m and 2,920** — with more entities (912 vs 818) and zero duplicate
+entity names, facts, or episodes.
+
+**Throughput is a separate problem from cost.** At ~47 s/page this is not a
+sane default for large corpora however cheap the calls get. `GRAPH_ENGINE=gliner`
+removes the LLM from bulk extraction entirely; keep Graphiti for Path B live
+sessions, where volume is small and its temporal reasoning earns its price. On
+the measured run exactly **1 edge of 1,038** carried `expired_at`, so on static
+documents that machinery is paid for and unused.
