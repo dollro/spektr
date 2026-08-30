@@ -205,7 +205,84 @@ Relevant config at time of writing: `GRAPH_ENGINE=gliner`,
 
 ---
 
-## 8. Other findings from the same session (context, not the investigation)
+## 8. Prior art — read this before "fixing" the relation extraction
+
+Researched 2026-08-30. This matters because it reframes the question: a sparse,
+cheaply-built graph is not automatically a broken one. Two of these findings
+argue the current design may be closer to the state of the art than to a bug.
+
+**LazyGraphRAG (Microsoft Research)** is the most directly relevant. Its
+indexing cost is **identical to plain vector RAG — 0.1% of GraphRAG's** — with
+comparable answer quality and >700x lower query cost than GraphRAG global
+search. It achieves that by doing **no LLM extraction and no summarisation at
+index time at all**: it uses NLP noun-phrase extraction to find concepts, builds
+a **co-occurrence** graph, refines it with graph statistics, and defers all LLM
+reasoning to query time.
+
+Read that against our situation. We are asking *extraction time* to produce
+semantically typed edges — expensively under Graphiti, and apparently not at all
+under GLiNER. LazyGraphRAG's claim is that you should not do that work at index
+time in the first place. If it is right, the fix for our sparse graph is not
+"make GLiNER predict more relations" but "stop needing predicted relations" —
+build the cheap co-occurrence layer deterministically (see H3, which needs no
+model whatsoever) and let query-time reasoning do the rest.
+
+**GraphRAG-Bench (ICLR'26, "When to use Graphs in RAG")** is the sobering one:
+*"GraphRAG frequently underperforms vanilla RAG on many real-world tasks."*
+Graphs pay off for hierarchical knowledge retrieval and deep multi-hop
+reasoning, and their value scales with query complexity. For fact lookup, plain
+hybrid retrieval often wins outright.
+
+**So establish whether the graph channel matters before investing in it.** Our
+ablation numbers were only ever measured on the Graphiti corpus. Re-run
+`task eval-retrieval` on the GLiNER graph: if recall/nDCG/MRR are unchanged
+against a 19-edge graph, the graph channel was contributing nothing to
+retrieval even when it had 1,038 edges — and this whole investigation is
+optional. That is a one-command experiment and it should come first.
+
+**Other approaches worth knowing:** HippoRAG 2 (personalised PageRank over the
+graph, ~10-30x cheaper multi-hop), PathRAG (flow-based pruning, 44% context
+reduction at equal accuracy), LightRAG (dual-level retrieval, lightweight
+index).
+
+### The GLiNER-extracts / Graphiti-stores hybrid
+
+If typed, temporal edges do turn out to be worth having, there is a path that
+keeps GLiNER's speed. **Verified by reading the installed graphiti-core 0.28.1
+source**, not from documentation:
+
+`Graphiti.add_triplet()` (`graphiti.py:1450`) skips node extraction, edge
+extraction, node attribute extraction and summarisation entirely. What remains:
+
+- **Node dedupe** fires only when `EntityNode.get_by_uuid` misses. Give nodes
+  **deterministic UUIDs** and the LLM call never happens. Spektr already does
+  exactly this for Qdrant point ids (uuid5), so the pattern is established.
+- **Edge resolution** (`resolve_extracted_edge`) **short-circuits to zero LLM
+  calls** when `related_edges` and `existing_edges` are both empty and no custom
+  edge attributes are declared (`edge_operations.py:492`). On a populated graph
+  the `existing_edges` hybrid search usually returns something, so budget ~1
+  small-model call per edge for contradiction checking.
+
+So: GLiNER extracts on CPU → `add_triplet` writes → Graphiti supplies temporal
+invalidation and provenance. This is precisely what
+[graphiti issue #1193](https://github.com/getzep/graphiti/issues/1193) requests
+("bring your own extraction, let Graphiti do temporal logic") and it is already
+possible in the pinned version. Cost would be ~1 small call per edge instead of
+the ~44 calls per episode the full pipeline charges.
+
+Weigh it against the measured fact that **1 edge of 1,038 ever carried
+`expired_at`** on this corpus. The temporal layer is what you would be buying,
+and on static PDFs it did essentially nothing.
+
+**Sources:**
+[LazyGraphRAG](https://www.microsoft.com/en-us/research/blog/lazygraphrag-setting-a-new-standard-for-quality-and-cost/) ·
+[GraphRAG-Bench paper](https://arxiv.org/abs/2506.05690) ·
+[GraphRAG-Bench repo](https://github.com/GraphRAG-Bench/GraphRAG-Benchmark) ·
+[RAG vs GraphRAG systematic evaluation](https://arxiv.org/html/2502.11371v3) ·
+[graphiti issue #1193](https://github.com/getzep/graphiti/issues/1193) ·
+[Zep: custom entity and edge types](https://help.getzep.com/graphiti/core-concepts/custom-entity-and-edge-types)
+
+## 9. Other findings from the same session (context, not the investigation)
 
 These are settled and shipped; recorded so a future reader knows why the code
 looks the way it does.
