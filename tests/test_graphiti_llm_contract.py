@@ -38,3 +38,18 @@ def test_upstream_still_ignores_model_size() -> None:
     src = inspect.getsource(OpenAIGenericClient._generate_response)
     assert "model=self.model or DEFAULT_MODEL" in src
     assert "_get_model_for_size" not in src
+
+
+def test_generate_response_still_calls_generate_response_underscore() -> None:
+    """generate_response must still dispatch through _generate_response.
+
+    Pinning `_generate_response`'s signature and body (above) is only useful
+    while `generate_response` actually calls it. If upstream keeps
+    `_generate_response` around but routes `generate_response` through a new
+    helper instead, both tests above would keep passing while
+    SizeAwareGenericClient's override silently stops being invoked at all --
+    every call would revert to the expensive model with no test failure to
+    flag it.
+    """
+    src = inspect.getsource(OpenAIGenericClient.generate_response)
+    assert "_generate_response" in src

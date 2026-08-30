@@ -160,6 +160,7 @@ class GraphitiWriter:
         ]
 
         t0 = time.monotonic()
+        bulk_started_at = datetime.now(tz=UTC)
         try:
             await client.add_episode_bulk(episodes)
             duration_s = round(time.monotonic() - t0, 1)
@@ -191,7 +192,7 @@ class GraphitiWriter:
         # also skip episodes left by an earlier run of an since-edited
         # document. Filtering after a failure keeps the meaning exact: skip
         # what this call already wrote.
-        committed = await self._existing_episode_names(client, source_key)
+        committed = await self._existing_episode_names(client, source_key, bulk_started_at)
         pending = [episode for episode in episodes if episode.name not in committed]
         if committed:
             logger.info(
@@ -216,8 +217,17 @@ class GraphitiWriter:
                 )
 
     @staticmethod
-    async def _existing_episode_names(client: Graphiti, source_key: str) -> set[str]:
-        """Episode names already in the graph for *source_key*.
+    async def _existing_episode_names(
+        client: Graphiti, source_key: str, since: datetime
+    ) -> set[str]:
+        """Episode names for *source_key* created at or after *since*.
+
+        Episode names are content-independent (`{source_key}:p{page}:c{chunk}`),
+        so an unbounded query would also match episodes left by an earlier,
+        since-edited run of the same document -- wrongly treating stale
+        content as "already committed" and skipping it during resume. Bounding
+        by `created_at` restricts the match to episodes written by the bulk
+        call that just failed.
 
         Returns an empty set on any failure. The resume path is an
         optimisation: it must never promote a recoverable bulk failure into a
@@ -226,8 +236,10 @@ class GraphitiWriter:
         try:
             records, _, _ = await client.driver.execute_query(
                 "MATCH (e:Episodic) WHERE e.source_description = $src "
+                "AND e.created_at >= $since "
                 "RETURN e.name AS name",
                 src=source_key,
+                since=since,
             )
         except Exception:
             logger.warning(

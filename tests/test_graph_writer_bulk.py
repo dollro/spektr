@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -225,6 +226,51 @@ class TestGraphitiWriterBulkResume:
             await GraphitiWriter().ingest_bulk(chunks=chunks, source_key="test.pdf")
 
         assert mock_client.add_episode.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_fallback_reprocesses_episode_from_prior_run(self) -> None:
+        """A stale episode from an earlier (since-edited) run must not be
+        mistaken for output of the bulk call that just failed.
+
+        Episode names are content-independent, so an unbounded resume query
+        would find the prior run's episode and skip reprocessing it -- the
+        graph would silently keep the old content forever. The fixture below
+        stands in for Neo4j: it only returns episodes whose `created_at` is
+        at or after the `since` bound passed in the query, exactly as the
+        real `e.created_at >= $since` predicate would.
+        """
+        from ingestion.graph_writer import GraphitiWriter
+
+        chunks = [
+            TextChunk(text="a" * 2000, chunk_index=0, page_number=1),
+            TextChunk(text="b" * 2000, chunk_index=1, page_number=2),
+        ]
+
+        stale_episode_created_at = datetime.now(tz=UTC) - timedelta(days=1)
+        episodes_in_graph: list[tuple[str, datetime]] = [
+            ("test.pdf:p1:c0", stale_episode_created_at),
+        ]
+
+        async def fake_execute_query(_query: str, *, src: str, since: datetime) -> tuple:
+            del src
+            matching = [name for name, created_at in episodes_in_graph if created_at >= since]
+            return ([{"name": name} for name in matching], None, None)
+
+        mock_client = AsyncMock()
+        mock_client.add_episode_bulk = AsyncMock(side_effect=RuntimeError("402"))
+        mock_client.driver.execute_query = AsyncMock(side_effect=fake_execute_query)
+
+        with (
+            patch("ingestion.graph_writer.get_graphiti", return_value=mock_client),
+            patch("ingestion.graph_writer.settings") as mock_settings,
+        ):
+            mock_settings.graph_episode_target_size = 1500
+            await GraphitiWriter().ingest_bulk(chunks=chunks, source_key="test.pdf")
+
+        # The stale episode (from a prior run) was not committed by *this*
+        # bulk call, so it must be reprocessed alongside the untouched one.
+        names = {c.kwargs["name"] for c in mock_client.add_episode.call_args_list}
+        assert names == {"test.pdf:p1:c0", "test.pdf:p2:c1"}
 
     @pytest.mark.asyncio
     async def test_resume_query_failure_degrades_to_full_reprocess(self) -> None:

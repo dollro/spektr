@@ -43,6 +43,8 @@ class SizeAwareGenericClient(OpenAIGenericClient):
                     api_key=config.api_key,
                     model=small_model,
                     base_url=config.base_url,
+                    temperature=config.temperature,
+                    max_tokens=config.max_tokens,
                 )
             )
 
