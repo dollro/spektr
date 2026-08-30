@@ -175,3 +175,76 @@ class TestGraphitiWriterBulk:
         # 10 chunks of ~80 chars → should be grouped (fewer than 10 episodes)
         assert len(episodes) < 10
         assert len(episodes) >= 1
+
+
+class TestGraphitiWriterBulkResume:
+    @pytest.mark.asyncio
+    async def test_fallback_skips_episodes_already_committed(self) -> None:
+        """A failed bulk call leaves episodes behind; the fallback must skip them."""
+        from ingestion.graph_writer import GraphitiWriter
+
+        chunks = [
+            TextChunk(text="a" * 2000, chunk_index=0, page_number=1),
+            TextChunk(text="b" * 2000, chunk_index=1, page_number=2),
+        ]
+
+        mock_client = AsyncMock()
+        mock_client.add_episode_bulk = AsyncMock(side_effect=RuntimeError("402"))
+        mock_client.driver.execute_query = AsyncMock(
+            return_value=([{"name": "test.pdf:p1:c0"}], None, None)
+        )
+
+        with (
+            patch("ingestion.graph_writer.get_graphiti", return_value=mock_client),
+            patch("ingestion.graph_writer.settings") as mock_settings,
+        ):
+            mock_settings.graph_episode_target_size = 1500
+            await GraphitiWriter().ingest_bulk(chunks=chunks, source_key="test.pdf")
+
+        names = [c.kwargs["name"] for c in mock_client.add_episode.call_args_list]
+        assert names == ["test.pdf:p2:c1"]
+
+    @pytest.mark.asyncio
+    async def test_fallback_processes_all_when_nothing_committed(self) -> None:
+        from ingestion.graph_writer import GraphitiWriter
+
+        chunks = [
+            TextChunk(text="a" * 2000, chunk_index=0, page_number=1),
+            TextChunk(text="b" * 2000, chunk_index=1, page_number=2),
+        ]
+
+        mock_client = AsyncMock()
+        mock_client.add_episode_bulk = AsyncMock(side_effect=RuntimeError("402"))
+        mock_client.driver.execute_query = AsyncMock(return_value=([], None, None))
+
+        with (
+            patch("ingestion.graph_writer.get_graphiti", return_value=mock_client),
+            patch("ingestion.graph_writer.settings") as mock_settings,
+        ):
+            mock_settings.graph_episode_target_size = 1500
+            await GraphitiWriter().ingest_bulk(chunks=chunks, source_key="test.pdf")
+
+        assert mock_client.add_episode.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_resume_query_failure_degrades_to_full_reprocess(self) -> None:
+        """The optimisation must never turn a recoverable failure into a hard one."""
+        from ingestion.graph_writer import GraphitiWriter
+
+        chunks = [
+            TextChunk(text="a" * 2000, chunk_index=0, page_number=1),
+            TextChunk(text="b" * 2000, chunk_index=1, page_number=2),
+        ]
+
+        mock_client = AsyncMock()
+        mock_client.add_episode_bulk = AsyncMock(side_effect=RuntimeError("402"))
+        mock_client.driver.execute_query = AsyncMock(side_effect=RuntimeError("neo4j down"))
+
+        with (
+            patch("ingestion.graph_writer.get_graphiti", return_value=mock_client),
+            patch("ingestion.graph_writer.settings") as mock_settings,
+        ):
+            mock_settings.graph_episode_target_size = 1500
+            await GraphitiWriter().ingest_bulk(chunks=chunks, source_key="test.pdf")
+
+        assert mock_client.add_episode.await_count == 2

@@ -12,6 +12,7 @@ import logging
 import time
 from datetime import UTC, datetime
 
+from graphiti_core import Graphiti
 from graphiti_core.nodes import EpisodeType
 from graphiti_core.utils.bulk_utils import RawEpisode
 
@@ -178,8 +179,29 @@ class GraphitiWriter:
                 exc_info=True,
             )
 
-        # Sequential fallback
-        for episode in episodes:
+        # Sequential fallback, resuming rather than restarting.
+        # add_episode_bulk commits incrementally, so a mid-run failure leaves
+        # part of the document in the graph and reports nothing about which
+        # part. Reprocessing the full list pays the whole extraction pipeline
+        # again for episodes already written -- measured 2026-08-30: 64 of 71
+        # episodes duplicated, roughly half the run's LLM spend.
+        #
+        # The filter runs here rather than before the bulk call on purpose.
+        # Episode names are content-independent, so filtering up front would
+        # also skip episodes left by an earlier run of an since-edited
+        # document. Filtering after a failure keeps the meaning exact: skip
+        # what this call already wrote.
+        committed = await self._existing_episode_names(client, source_key)
+        pending = [episode for episode in episodes if episode.name not in committed]
+        if committed:
+            logger.info(
+                "Resuming %s: %d of %d episodes already committed",
+                source_key,
+                len(episodes) - len(pending),
+                len(episodes),
+            )
+
+        for episode in pending:
             try:
                 await client.add_episode(
                     name=episode.name,
@@ -192,6 +214,29 @@ class GraphitiWriter:
                     "Sequential fallback failed for episode %s",
                     episode.name,
                 )
+
+    @staticmethod
+    async def _existing_episode_names(client: Graphiti, source_key: str) -> set[str]:
+        """Episode names already in the graph for *source_key*.
+
+        Returns an empty set on any failure. The resume path is an
+        optimisation: it must never promote a recoverable bulk failure into a
+        hard one, so the worst case is the previous behaviour.
+        """
+        try:
+            records, _, _ = await client.driver.execute_query(
+                "MATCH (e:Episodic) WHERE e.source_description = $src "
+                "RETURN e.name AS name",
+                src=source_key,
+            )
+        except Exception:
+            logger.warning(
+                "Could not read committed episodes for %s; reprocessing all",
+                source_key,
+                exc_info=True,
+            )
+            return set()
+        return {record["name"] for record in records}
 
     async def close(self) -> None:
         """Close the underlying Graphiti client."""
