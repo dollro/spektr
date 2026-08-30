@@ -23,6 +23,13 @@ from config.settings import settings
 # which is the only reason the stale value stayed harmless.
 os.environ.setdefault("EMBEDDING_DIM", str(settings.dense_dimensions))
 
+# graphiti-core reads GRAPHITI_TELEMETRY_ENABLED (upstream default "true") and
+# posts an init event to us.i.posthog.com naming the configured LLM, embedder,
+# reranker and database providers. Set unconditionally rather than via
+# setdefault: `GRAPHITI_TELEMETRY` is the project's knob, and letting a stray
+# environment value win would make a sovereign deployment leak silently.
+os.environ["GRAPHITI_TELEMETRY_ENABLED"] = "true" if settings.graphiti_telemetry else "false"
+
 from graphiti_core import Graphiti  # noqa: E402
 from graphiti_core.cross_encoder.client import CrossEncoderClient  # noqa: E402
 from graphiti_core.embedder.client import EmbedderClient  # noqa: E402

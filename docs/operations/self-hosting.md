@@ -105,5 +105,6 @@ Even on Option A, check these before claiming an air gap:
 - `LLM_API_TYPE` / `LLM_BASE_URL` — used by query decomposition (`hybrid_search`), schema induction and VLM captioning. `GRAPH_ENGINE=gliner` removes the LLM from *ingestion*, not from the whole system. Set `DECOMPOSE_ENABLED=false` and `SCHEMA_INDUCTION_ENABLED=false`, or point `LLM_BASE_URL` at a local vLLM.
 - `DOCUMENT_SOURCE=s3` — AWS, obviously.
 - `LOGFIRE_TOKEN` — leave `OBSERVABILITY_LOCAL_ONLY=true` (the default) and nothing ships.
+- **`graphiti-core` telemetry.** Found by running a real ingest and watching the network: on every client initialisation it posts an event to `us.i.posthog.com` naming the configured LLM, embedder, reranker and database providers. Upstream defaults it **on**. Spektr sets `GRAPHITI_TELEMETRY=false` by default, which is a deliberate override of a dependency's default — set it `true` to opt back in. Worth knowing it exists: a stack that has moved every model in-house was, by default, still announcing exactly that to a US analytics endpoint.
 
 See also: [Embeddings](../ingestion/embeddings.md) | [Reranking](../ingestion/reranking.md) | [Re-indexing](reindex.md)

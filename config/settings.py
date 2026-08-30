@@ -221,6 +221,18 @@ class Settings(BaseSettings):
     graph_semaphore_limit: int = 10  # SEMAPHORE_LIMIT for Graphiti LLM concurrency
     graph_episode_target_size: int = 1500  # Target chars per Graphiti episode
     graph_engine: Literal["graphiti", "gliner"] = "graphiti"
+    # graphiti-core posts an event to us.i.posthog.com on every client
+    # initialisation, reporting which LLM / embedder / reranker / database
+    # providers are configured. Upstream defaults this ON
+    # (`GRAPHITI_TELEMETRY_ENABLED`, default "true").
+    #
+    # Defaulted OFF here because it contradicts the project's stated goal: a
+    # deployment that has moved every model in-house should not still be
+    # announcing that fact to a US analytics endpoint. Set true to opt back
+    # in — this is a deliberate override of a dependency's default, not a
+    # silent one, which is why it is a setting rather than a hidden
+    # os.environ.setdefault.
+    graphiti_telemetry: bool = False
 
     # Live ingestion
     live_ingest_port: int = 8001
