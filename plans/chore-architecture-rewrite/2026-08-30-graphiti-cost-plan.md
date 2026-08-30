@@ -646,7 +646,7 @@ per edge, so cost tracks extracted structure rather than page count.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add docs/ingestion/knowledge-graph.md .env.example .env.prod
+git add docs/ingestion/knowledge-graph.md .env.example
 git commit -m "docs(ingestion): record Graphiti's cost model and the small-model slot"
 ```
 
