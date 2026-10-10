@@ -159,6 +159,18 @@ task restore -- --from backups/<ts> --target all --yes-i-know-this-wipes-things
 
 **Access Points:** Qdrant http://localhost:6333 | Neo4j http://localhost:7474 | MCP http://localhost:8080
 
+## Sandbox
+
+Developed with Docker Sandboxes (`sbx`); the kit lives in `.sbx/spektr/`. Start: `sbx run claude --kit ./.sbx/spektr`.
+
+- **In the sandbox (agent):** edits, git, `task lint` / `format` / `typecheck` / `test` (unit tests need no Docker).
+- **On the host (human):** `task up` / `down`, `task ingest`, `task serve`, `task backup` / `restore`, `task test-integration` and the eval suites (Testcontainers needs Docker), everything `prod:*`. The agent names the host command and asks.
+- **Host services from the sandbox:** `http://host.docker.internal:<port>`, each with a `localhost:<port>` allow rule. 8090 (spektr MCP, `SPEKTR_MCP_URL`) is in the kit; others (6333 Qdrant, 7687 Neo4j) via `sbx policy allow network localhost:<port>`.
+- The kit sets `STATE_DIR=/home/agent/spektr-state`, so the sandbox never touches the host's ledger in `state/` (see Pipeline state).
+- Serena writes `.serena/` into the repo: run it on one side only (sandbox or host), not both.
+- Never mount the host Docker socket into a sandbox.
+- `task` exports the host `UID`/`GID`; dev compose ports bind to `127.0.0.1` only.
+
 ## Code Standards
 
 **Style & tooling:**

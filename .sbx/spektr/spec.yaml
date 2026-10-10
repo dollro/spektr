@@ -1,8 +1,8 @@
-schemaVersion: "1"
+schemaVersion: "2"
 kind: mixin
 name: spektr-stack
 displayName: Spektr dev stack
-description: uv/uvx toolchain plus network allowlist for the project MCP servers.
+description: uv/uvx toolchain, pinned MCP servers and model caches, plus network allowlist.
 
 environment:
   variables:
@@ -11,24 +11,35 @@ environment:
     # lives on the host, so override it here. This is what keeps a single
     # server entry working in both places.
     SPEKTR_MCP_URL: "http://host.docker.internal:8090/mcp"
+    # Mutable runtime state (CocoIndex LMDB ledger, failure DB, SharePoint
+    # delta token) lives outside the shared workspace, so the sandbox never
+    # touches the host's ledger in state/. The process environment beats
+    # .env in pydantic-settings, so this wins over STATE_DIR=state.
+    # /home/agent is the sbx agent user's home.
+    STATE_DIR: "/home/agent/spektr-state"
+    # The host's .venv sits in the shared workspace; a venv records absolute
+    # interpreter paths, so the sandbox keeps its own outside the repo and
+    # `uv run`/`uv sync` here never rebuild the host's.
+    UV_PROJECT_ENVIRONMENT: "/home/agent/spektr-venv"
 
-commands:
+setup:
   install:
-    - user: "1000"
-      description: Install uv
+    - description: Install go-task
+      user: "0"
+      command: "npm install -g @go-task/cli"
+    - description: Install uv
+      user: "1000"
       command: |
         curl -LsSf https://astral.sh/uv/install.sh | sh
-    - user: "1000"
-      description: Pre-warm the Serena venv
+    - description: Pre-warm pinned MCP servers (same versions as .mcp.json)
+      user: "1000"
       command: |
         export PATH="$HOME/.local/bin:$PATH"
-        uvx --from git+https://github.com/oraios/serena serena --help || true
-    - user: "1000"
-      description: Install go-task
-      command: |
-        sudo npm install -g @go-task/cli
-    - user: "1000"
-      description: Pre-warm model caches
+        uvx --from git+https://github.com/oraios/serena@v1.7.0 serena --help || true
+        npx -y mcp-remote@0.14.3 --help >/dev/null 2>&1 || true
+        npx -y chrome-devtools-mcp@1.6.0 --help >/dev/null 2>&1 || true
+    - description: Pre-warm model caches
+      user: "1000"
       command: |
         export PATH="$HOME/.local/bin:$PATH"
         export HF_HUB_DISABLE_PROGRESS_BARS=1
@@ -55,27 +66,31 @@ commands:
         ])
         " || true
 
-network:
-  allowedDomains:
-    - "astral.sh:443"
-    - "pypi.org:443"
-    - "files.pythonhosted.org:443"
-    - "github.com:443"
-    - "codeload.github.com:443"
-    - "objects.githubusercontent.com:443"
-    - "registry.npmjs.org:443"
-    - "mcp.context7.com:443"
-    - "mcp.grep.app:443"
-    - "git.dolltons.com:443"
-    - "localhost:8090"
-    - "host.docker.internal:8090"   # the spektr MCP server, seen from inside the sandbox
-    # Runtime APIs the integration suite actually calls.
-    - "api.jina.ai:443"          # EMBEDDING_PROVIDER=jina + jina-reranker-v3.5
-    - "openrouter.ai:443"        # LLM_BASE_URL — extraction, schema induction, decomposition
-    # Model weights: Qdrant/minicoil-v1 (sparse), fastino/gliner2-base-v1,
-    # jinaai/jina-embeddings-v4 tokenizer, docling layout models. The apex is
-    # listed separately because a "*." wildcard does not match it, and weights
-    # redirect to both cdn-lfs.huggingface.co and cdn-lfs-*.hf.co.
-    - "huggingface.co:443"
-    - "*.huggingface.co:443"
-    - "*.hf.co:443"
+permissions:
+  network:
+    allow:
+      # toolchain
+      - "astral.sh:443"
+      - "pypi.org:443"
+      - "files.pythonhosted.org:443"
+      - "github.com:443"
+      - "codeload.github.com:443"
+      - "objects.githubusercontent.com:443"
+      - "registry.npmjs.org:443"
+      # git host
+      - "git.dolltons.com:443"
+      # MCP endpoints
+      - "mcp.context7.com:443"
+      - "mcp.grep.app:443"
+      # host services (agent calls host.docker.internal:<port>)
+      - "localhost:8090"           # the spektr MCP server
+      # Runtime APIs the integration suite actually calls.
+      - "api.jina.ai:443"          # EMBEDDING_PROVIDER=jina + jina-reranker-v3.5
+      - "openrouter.ai:443"        # LLM_BASE_URL — extraction, schema induction, decomposition
+      # Model weights: Qdrant/minicoil-v1 (sparse), fastino/gliner2-base-v1,
+      # jinaai/jina-embeddings-v4 tokenizer, docling layout models. The apex is
+      # listed separately because a "*." wildcard does not match it, and weights
+      # redirect to both cdn-lfs.huggingface.co and cdn-lfs-*.hf.co.
+      - "huggingface.co:443"
+      - "*.huggingface.co:443"
+      - "*.hf.co:443"

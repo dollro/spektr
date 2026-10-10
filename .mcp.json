@@ -14,7 +14,7 @@
         "tool",
         "run",
         "--from",
-        "git+https://github.com/oraios/serena",
+        "git+https://github.com/oraios/serena@v1.7.0",
         "serena",
         "start-mcp-server",
         "--context",
@@ -29,7 +29,7 @@
     "grep.app": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "mcp-remote", "https://mcp.grep.app"]
+      "args": ["-y", "mcp-remote@0.14.3", "https://mcp.grep.app"]
     },
     "chrome-devtools": {
       "type": "stdio",

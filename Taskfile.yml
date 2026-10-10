@@ -7,6 +7,12 @@ version: '3'
 #   task --list              full alphabetical list
 #   task --summary <name>    what one task does, when to use it, and its gotchas
 
+# Real host IDs for docker compose (bash's UID is not exported, GID is unset),
+# so containers writing into the repo can run as the host user.
+env:
+  UID: { sh: id -u }
+  GID: { sh: id -g }
+
 tasks:
   default:
     desc: "Grouped command overview (same as `task help`)"

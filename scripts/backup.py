@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -138,11 +139,17 @@ def backup_neo4j(dest: Path, compose_file: str | None = None) -> dict[str, Any]:
                 compose_file,
                 "run", "--rm", "-T", "--no-deps",
                 "-v", f"{out_abs}:/export",
-                "--entrypoint", "neo4j-admin",
+                "--entrypoint", "sh",
                 "neo4j",
-                "database", "dump", "neo4j",
-                "--to-path=/export",
-                "--overwrite-destination=true",
+                "-c",
+                # The override entrypoint runs as root (the image drops to the
+                # neo4j user only in its own entrypoint). `--user <host uid>`
+                # is not an option: neo4j-admin must take the store lock in
+                # /data, which belongs to the neo4j user. So dump as root,
+                # then hand the export back to the host user.
+                "neo4j-admin database dump neo4j --to-path=/export"
+                " --overwrite-destination=true"
+                f" && chown -R {os.getuid()}:{os.getgid()} /export",
             ),
             capture_output=True, text=True, check=False,
         )
