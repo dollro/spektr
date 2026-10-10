@@ -32,7 +32,6 @@ from config.constants import (
     DENSE_COLLECTION,
     DENSE_VECTOR_NAME,
     MULTIVEC_COLLECTION,
-    MULTIVEC_DIM,
     SPARSE_VECTOR_NAME,
 )
 from config.settings import settings
@@ -73,7 +72,12 @@ async def build_multivec_schema() -> qdrant.CollectionSchema:
     return await qdrant.CollectionSchema.create(
         vectors={
             "colbert": qdrant.QdrantVectorDef(
-                schema=MultiVectorSchema(vector_schema=_float32(MULTIVEC_DIM)),
+                # From the active slot's model, not a constant: the width is
+                # a property of the late-interaction model, and this schema
+                # must agree with what qdrant_setup provisioned or CocoIndex
+                # declares points the collection rejects. Only reached when
+                # the slot is filled (see ingestion/app.py).
+                schema=MultiVectorSchema(vector_schema=_float32(settings.multivec_dimensions)),
                 distance="cosine",
                 multivector_comparator="max_sim",
             ),

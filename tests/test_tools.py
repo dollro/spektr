@@ -6,6 +6,7 @@ seeded Qdrant and Neo4j instances.
 
 from __future__ import annotations
 
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -351,7 +352,7 @@ class TestHybridSearch:
                 mock_pipeline,
             ),
             patch(
-                "server.tools.hybrid_search.graph_search",
+                "server.tools.hybrid_search.search_graph",
                 mock_graph,
             ),
         ):
@@ -386,7 +387,7 @@ class TestHybridSearch:
                 mock_pipeline,
             ),
             patch(
-                "server.tools.hybrid_search.graph_search",
+                "server.tools.hybrid_search.search_graph",
                 mock_graph,
             ),
         ):
@@ -423,7 +424,7 @@ class TestMCPServer:
         } <= tool_names
         from config.settings import settings
 
-        if settings.multivec_enabled:
+        if settings.multivec_slot_filled:
             assert "visual_search" in tool_names
         else:
             assert "visual_search" not in tool_names
@@ -691,13 +692,13 @@ class TestReranker:
             {"score": 0.5, "text": "first doc"},
             {"score": 0.3, "text": "second doc"},
         ]
-        mock_api_results = [
-            {"index": 1, "relevance_score": 0.9},
-            {"index": 0, "relevance_score": 0.7},
-        ]
+        # `_score` normalises every protocol's envelope to (index, score)
+        # pairs, so the vendor-specific `relevance_score`/`score` key names
+        # stop at the adapter boundary — see retrieval/rerankers/.
+        mock_api_results = [(1, 0.9), (0, 0.7)]
 
         with patch(
-            "retrieval.rerank._rerank_request",
+            "retrieval.rerank._score",
             new_callable=AsyncMock,
             return_value=mock_api_results,
         ):
@@ -725,8 +726,7 @@ class TestReranker:
         ]
 
         with patch(
-            "retrieval.rerank._rerank_request",
-            new_callable=AsyncMock,
+            "retrieval.rerank._get_reranker",
             side_effect=RuntimeError("API down"),
         ):
             from retrieval.rerank import rerank_dicts
@@ -805,13 +805,16 @@ class TestLiveIngestModels:
         """LiveChunk validates required fields."""
         from server.models import LiveChunk
 
+        # The string is deliberate: this is the shape the HTTP layer sends,
+        # and the point of the test is that pydantic coerces it to datetime.
         chunk = LiveChunk(
             session_id="session-1",
             text="text content one",
-            timestamp="2026-03-06T14:30:00Z",
+            timestamp="2026-03-06T14:30:00Z",  # type: ignore[arg-type]
         )
         assert chunk.session_id == "session-1"
         assert chunk.text == "text content one"
+        assert isinstance(chunk.timestamp, datetime), "ISO-8601 string is coerced"
 
     def test_session_start_request(self) -> None:
         """SessionStartRequest validates fields."""
@@ -1086,7 +1089,7 @@ class TestSessionAwareHybridSearch:
 
         with (
             patch("server.tools.hybrid_search.smart_pipeline", mock_pipeline),
-            patch("server.tools.hybrid_search.graph_search", mock_graph),
+            patch("server.tools.hybrid_search.search_graph", mock_graph),
         ):
             from server.tools.hybrid_search import hybrid_search
 
@@ -1139,7 +1142,7 @@ class TestSessionAwareHybridSearch:
 
         with (
             patch("server.tools.hybrid_search.smart_pipeline", mock_pipeline),
-            patch("server.tools.hybrid_search.graph_search", mock_graph),
+            patch("server.tools.hybrid_search.search_graph", mock_graph),
         ):
             from server.tools.hybrid_search import hybrid_search
 

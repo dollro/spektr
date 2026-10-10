@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -175,3 +176,130 @@ class TestGraphitiWriterBulk:
         # 10 chunks of ~80 chars → should be grouped (fewer than 10 episodes)
         assert len(episodes) < 10
         assert len(episodes) >= 1
+
+
+class TestGraphitiWriterBulkResume:
+    @pytest.mark.asyncio
+    async def test_fallback_skips_episodes_already_committed(self) -> None:
+        """A failed bulk call leaves episodes behind; the fallback must skip them."""
+        from ingestion.graph_writer import GraphitiWriter
+
+        chunks = [
+            TextChunk(text="a" * 2000, chunk_index=0, page_number=1),
+            TextChunk(text="b" * 2000, chunk_index=1, page_number=2),
+        ]
+
+        mock_client = AsyncMock()
+        mock_client.add_episode_bulk = AsyncMock(side_effect=RuntimeError("402"))
+        mock_client.driver.execute_query = AsyncMock(
+            return_value=([{"name": "test.pdf:p1:c0"}], None, None)
+        )
+
+        with (
+            patch("ingestion.graph_writer.get_graphiti", return_value=mock_client),
+            patch("ingestion.graph_writer.settings") as mock_settings,
+        ):
+            mock_settings.graph_episode_target_size = 1500
+            await GraphitiWriter().ingest_bulk(chunks=chunks, source_key="test.pdf")
+
+        names = [c.kwargs["name"] for c in mock_client.add_episode.call_args_list]
+        assert names == ["test.pdf:p2:c1"]
+
+    @pytest.mark.asyncio
+    async def test_fallback_processes_all_when_nothing_committed(self) -> None:
+        from ingestion.graph_writer import GraphitiWriter
+
+        chunks = [
+            TextChunk(text="a" * 2000, chunk_index=0, page_number=1),
+            TextChunk(text="b" * 2000, chunk_index=1, page_number=2),
+        ]
+
+        mock_client = AsyncMock()
+        mock_client.add_episode_bulk = AsyncMock(side_effect=RuntimeError("402"))
+        mock_client.driver.execute_query = AsyncMock(return_value=([], None, None))
+
+        with (
+            patch("ingestion.graph_writer.get_graphiti", return_value=mock_client),
+            patch("ingestion.graph_writer.settings") as mock_settings,
+        ):
+            mock_settings.graph_episode_target_size = 1500
+            await GraphitiWriter().ingest_bulk(chunks=chunks, source_key="test.pdf")
+
+        assert mock_client.add_episode.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_fallback_reprocesses_episode_from_prior_run(self) -> None:
+        """A stale episode from an earlier (since-edited) run must not be
+        mistaken for output of the bulk call that just failed.
+
+        Episode names are content-independent, so an unbounded resume query
+        would find the prior run's episode and skip reprocessing it -- the
+        graph would silently keep the old content forever. The fixture below
+        stands in for a real Neo4j driver: `since` defaults to `None` (as an
+        unbounded query, i.e. one issued with no `$since` parameter, would
+        happily accept), in which case every episode matches regardless of
+        its `created_at` -- exactly the old, unbounded behaviour. Only when
+        `since` is actually provided does the fixture apply the
+        `e.created_at >= $since` bound, exactly as the real predicate would.
+        """
+        from ingestion.graph_writer import GraphitiWriter
+
+        chunks = [
+            TextChunk(text="a" * 2000, chunk_index=0, page_number=1),
+            TextChunk(text="b" * 2000, chunk_index=1, page_number=2),
+        ]
+
+        stale_episode_created_at = datetime.now(tz=UTC) - timedelta(days=1)
+        episodes_in_graph: list[tuple[str, datetime]] = [
+            ("test.pdf:p1:c0", stale_episode_created_at),
+        ]
+
+        async def fake_execute_query(
+            _query: str, *, src: str, since: datetime | None = None
+        ) -> tuple:
+            del src
+            matching = [
+                name
+                for name, created_at in episodes_in_graph
+                if since is None or created_at >= since
+            ]
+            return ([{"name": name} for name in matching], None, None)
+
+        mock_client = AsyncMock()
+        mock_client.add_episode_bulk = AsyncMock(side_effect=RuntimeError("402"))
+        mock_client.driver.execute_query = AsyncMock(side_effect=fake_execute_query)
+
+        with (
+            patch("ingestion.graph_writer.get_graphiti", return_value=mock_client),
+            patch("ingestion.graph_writer.settings") as mock_settings,
+        ):
+            mock_settings.graph_episode_target_size = 1500
+            await GraphitiWriter().ingest_bulk(chunks=chunks, source_key="test.pdf")
+
+        # The stale episode (from a prior run) was not committed by *this*
+        # bulk call, so it must be reprocessed alongside the untouched one.
+        names = {c.kwargs["name"] for c in mock_client.add_episode.call_args_list}
+        assert names == {"test.pdf:p1:c0", "test.pdf:p2:c1"}
+
+    @pytest.mark.asyncio
+    async def test_resume_query_failure_degrades_to_full_reprocess(self) -> None:
+        """The optimisation must never turn a recoverable failure into a hard one."""
+        from ingestion.graph_writer import GraphitiWriter
+
+        chunks = [
+            TextChunk(text="a" * 2000, chunk_index=0, page_number=1),
+            TextChunk(text="b" * 2000, chunk_index=1, page_number=2),
+        ]
+
+        mock_client = AsyncMock()
+        mock_client.add_episode_bulk = AsyncMock(side_effect=RuntimeError("402"))
+        mock_client.driver.execute_query = AsyncMock(side_effect=RuntimeError("neo4j down"))
+
+        with (
+            patch("ingestion.graph_writer.get_graphiti", return_value=mock_client),
+            patch("ingestion.graph_writer.settings") as mock_settings,
+        ):
+            mock_settings.graph_episode_target_size = 1500
+            await GraphitiWriter().ingest_bulk(chunks=chunks, source_key="test.pdf")
+
+        assert mock_client.add_episode.await_count == 2

@@ -39,7 +39,7 @@ Before modifying or exploring ANY module, you MUST first read the corresponding 
 - **Ingestion (Path A — Bulk):** CocoIndex v1 app (`ingestion/app.py` — one memoized component per file, Qdrant points *declared* on native collection targets) + Docling/PyMuPDF for file processing, embeddings selected by `EMBEDDING_MODEL` x `EMBEDDING_ROUTE` (see `config/embedding_models.py`), pluggable `GraphEngine` for entity/relation extraction. Document source is selected by `DOCUMENT_SOURCE` (`local` default, or `s3` / `sharepoint`). Live mode: `localfs` is a real watcher; S3 is scan-only in v1, so `ingestion/sqs_trigger.py` uses SQS as a *trigger* for a debounced catch-up scan (plus an interval and a startup sweep). Without `--live`, runs as one-shot batch. The `ingest-live` prod service is this daemon — not an HTTP endpoint.
 - **Pipeline state:** CocoIndex v1 keeps its target-state ledger, memoization cache and component tree in a local **LMDB directory** (`COCOINDEX_DB_PATH`, default `state/cocoindex.db`). No PostgreSQL anywhere in the stack.
 - **Ingestion (Path B — Live):** FastAPI HTTP endpoint (`live_ingest.py`, port 8001) for streaming text, configured embedding provider, Graphiti for temporal episodic memory
-- **Vector Store:** Qdrant (dense + optional ColBERT multi-vector, Jina-only). Both paths write to `documents_dense`; live data tagged with `session_id` and `is_live`
+- **Vector Store:** Qdrant (dense + optional ColBERT multi-vector). Both paths write to `documents_dense`; live data tagged with `session_id` and `is_live`. Late interaction is its own slot (`MULTIVEC_MODEL`), independent of the dense model — it was `MULTIVEC_ENABLED`, gated on `jina-v4`, until that coupling was removed
 - **Knowledge Graph:** Neo4j with two pluggable engines for Path A — **Graphiti is the default** (`GRAPH_ENGINE=graphiti`, LLM-based temporal episodes); **GLiNER2 is opt-in** (`GRAPH_ENGINE=gliner`, schema-driven CPU extraction). Path B always uses Graphiti directly, regardless of `GRAPH_ENGINE`. Both engines coexist in the same Neo4j instance.
 - **MCP Server:** FastMCP (streamable-http default, SSE legacy, stdio) exposing seven tools: five search (`vector_search`, `visual_search`, `graph_search`, `multi_search`, `hybrid_search`) and two listing (`list_documents`, `list_document_chunks`). `multi_search` and `hybrid_search` share a fused dense+sparse retrieval core (`retrieval/`); `hybrid_search` adds query decomposition and a relevance-gated retry. Bearer auth via `MCP_API_KEY`.
 - **Agent:** Pydantic AI agent with MCP tool access
@@ -193,7 +193,10 @@ These are load-bearing invariants introduced by the `feat/prod-hardening` work. 
 - `QDRANT_DB` / `_PROVIDER_NAME` context-key strings are part of persistent tracking keys. Renaming them orphans the ledger and re-declares everything.
 
 **Pipeline state:**
-- CocoIndex v1 stores its ledger, memo cache and component tree in an LMDB directory (`COCOINDEX_DB_PATH`, default `state/cocoindex.db`). No PostgreSQL, no `DATABASE_URL`, no `ragingestion__cocoindex_tracking` table.
+- `STATE_DIR` (default `state/`) is the single root for ALL mutable runtime state: the CocoIndex LMDB ledger, the poison-pill failure DB and the SharePoint delta token. `COCOINDEX_DB_PATH` / `FAILURE_DB_PATH` / `SHAREPOINT_STATE_DIR` derive from it when empty and are resolved in place by a validator, so consumers always read a concrete path.
+- **Point `STATE_DIR` outside the repo whenever the working tree is shared** — a container sandbox, CI, or a second worktree. The default lives inside the (gitignored) tree because local dev runs the app on the host via uv, which means a shared tree hands another process your ledger. Losing it costs a full reprocess, not data loss.
+- The prod `ingest_state` volume must stay a **named** volume, never a bind mount: LMDB is mmap-based and Docker Desktop's file sharing on macOS/Windows does not give correct mmap semantics.
+- CocoIndex v1 stores its ledger, memo cache and component tree in an LMDB directory. No PostgreSQL, no `DATABASE_URL`, no `ragingestion__cocoindex_tracking` table.
 - `PIPELINE_MAX_CONCURRENT_FILES` (default 4) caps `max_inflight_components`; CocoIndex's own default of 1024 would blow past embedding rate limits.
 - Forcing reprocessing = `task ingest -- --full-reprocess`, or deleting the state directory. Losing that directory costs a full reprocess, not data loss (point ids are deterministic uuid5).
 
@@ -214,6 +217,13 @@ These are load-bearing invariants introduced by the `feat/prod-hardening` work. 
   the loop and are the primary gate for retrieval work; RAGAS remains the
   gate for generation quality.
 
+**Capability slots** (`config/embedding_models.py`, `config/multivec_models.py`, `config/rerank_models.py`):
+- Retrieval has **three independently selectable models**: dense (text+image), multivec (late interaction), and rerank. Do not re-couple them. Text and image stay one slot because both write the named vector `dense`; the other two never shared a vector space with anything.
+- A reranker's **score scale is part of its registry entry**. `RERANK_SCORE_FLOOR` is meaningless without it: `jina-reranker-v3.5` emits unbounded logits where `0.0` is a real boundary, a TEI cross-encoder emits `[0,1]` where `0.0` can never be crossed. A floor carried across a model switch does not mistune the relevance gate, it **disables it silently**. Leave the setting empty to adopt the model's default; an explicitly unreachable value is rejected at startup.
+- The unset sentinel for `RERANK_SCORE_FLOOR` is `None`, not `0.0`, because `0.0` is a legitimate logit floor.
+- Retired keys (`EMBEDDING_PROVIDER`, `MULTIVEC_ENABLED`) stay declared on `Settings` **solely to raise a migration error** — `extra="ignore"` would otherwise drop them and boot with a different capability set. They must NOT appear in `.env.example`.
+- Changing rerank costs no re-ingest; multivec re-indexes `documents_multivec` only; dense is a full re-ingest.
+
 **Retrieval pipeline** (`retrieval/`):
 - `retrieval/` must not import from `server/` or `fastmcp`. It is composed by
   MCP adapters and knows nothing about transport.
@@ -222,6 +232,11 @@ These are load-bearing invariants introduced by the `feat/prod-hardening` work. 
   stages" contract is broken and the ablation matrix stops being meaningful.
 - Every pipeline stage degrades rather than raising. A stage failure appends
   its name to `degraded` and the tool still returns results.
+- A stage reached by `multi_search`/`hybrid_search` must **raise** on failure —
+  `run_graph` marks a channel degraded by catching, so a stage that returns an
+  error value instead is invisible to it. That is why `graph_search` (caught,
+  dict-shaped, for direct MCP callers) and `search_graph` (raises, for fused
+  callers) are separate entry points.
 
 **Observability** (`config/observability.py`):
 - Every process entrypoint calls `setup_observability()` (idempotent). FastAPI apps additionally call `instrument_fastapi(app)`.

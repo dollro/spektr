@@ -79,9 +79,7 @@ async def _drain(sqs: Any, queue_url: str) -> list[dict[str, Any]]:
     return drained
 
 
-async def _delete_messages(
-    sqs: Any, queue_url: str, messages: list[dict[str, Any]]
-) -> None:
+async def _delete_messages(sqs: Any, queue_url: str, messages: list[dict[str, Any]]) -> None:
     """Delete handled messages in batches of ten (the SQS API limit)."""
     for start in range(0, len(messages), _DELETE_BATCH_SIZE):
         chunk = messages[start : start + _DELETE_BATCH_SIZE]

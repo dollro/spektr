@@ -41,7 +41,8 @@ nav:
   - Ingestion Pipeline:
     - Overview: ingestion/overview.md
     - File Processing: ingestion/file-processing.md
-    - Embeddings (Jina v4): ingestion/embeddings.md
+    - Embeddings: ingestion/embeddings.md
+    - Reranking: ingestion/reranking.md
     - Knowledge Graph: ingestion/knowledge-graph.md
     - CocoIndex Pipeline: ingestion/cocoindex.md
     - S3 + SQS Setup: ingestion/s3-sqs-setup.md
@@ -71,6 +72,7 @@ nav:
     - Observability: operations/observability.md
     - Backup & Restore: operations/backup-restore.md
     - Re-indexing: operations/reindex.md
+    - Self-Hosting: operations/self-hosting.md
   - Evaluation:
     - Golden Set: eval/golden-set.md
   - Resources:

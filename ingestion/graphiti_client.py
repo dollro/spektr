@@ -23,21 +23,45 @@ from config.settings import settings
 # which is the only reason the stale value stayed harmless.
 os.environ.setdefault("EMBEDDING_DIM", str(settings.dense_dimensions))
 
+# graphiti-core reads GRAPHITI_TELEMETRY_ENABLED (upstream default "true") and
+# posts an init event to us.i.posthog.com naming the configured LLM, embedder,
+# reranker and database providers. Set unconditionally rather than via
+# setdefault: `GRAPHITI_TELEMETRY` is the project's knob, and letting a stray
+# environment value win would make a sovereign deployment leak silently.
+os.environ["GRAPHITI_TELEMETRY_ENABLED"] = "true" if settings.graphiti_telemetry else "false"
+
 from graphiti_core import Graphiti  # noqa: E402
-from graphiti_core.cross_encoder.openai_reranker_client import (  # noqa: E402
-    OpenAIRerankerClient,
-)
+from graphiti_core.cross_encoder.client import CrossEncoderClient  # noqa: E402
 from graphiti_core.embedder.client import EmbedderClient  # noqa: E402
 from graphiti_core.llm_client import LLMConfig  # noqa: E402
-from graphiti_core.llm_client.openai_generic_client import OpenAIGenericClient  # noqa: E402
 
 from ingestion.embedder import create_embedder  # noqa: E402
+from ingestion.graphiti_llm import SizeAwareGenericClient  # noqa: E402
+from retrieval.rerank import create_reranker  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
 
 class _JinaGraphitiEmbedder(EmbedderClient):
-    """Adapts our JinaV4Embedder to Graphiti's EmbedderClient interface."""
+    """Adapts the configured embedder to Graphiti's EmbedderClient interface.
+
+    Named for Jina because that was the only provider when it was written; it
+    delegates to whatever `create_embedder()` returns, so graph embeddings
+    share the project's rate limiters and API quota rather than opening a
+    second client.
+
+    **Both methods pass `task="query"`, including the indexing one.** That is
+    deliberate, and it is the opposite of the passage/query asymmetry this
+    codebase treats as load-bearing elsewhere (see `_INPUT_TYPE` in
+    `ingestion/embedders/openrouter.py`, where the two modes differ by cos
+    0.82). Graphiti compares a search query against stored *entity names*, so
+    both sides want the same short-text encoding — an asymmetric pair would
+    compare a query-mode vector against a passage-mode one and lose
+    similarity. It is symmetric on purpose, not by omission.
+
+    Changing it re-embeds every `name_embedding` in the graph, so it is not a
+    drop-in adjustment.
+    """
 
     def __init__(self) -> None:
         self._embedder = create_embedder()
@@ -49,12 +73,23 @@ class _JinaGraphitiEmbedder(EmbedderClient):
         if isinstance(input_data, str):
             texts = [input_data]
         elif isinstance(input_data, list) and input_data and isinstance(input_data[0], str):
-            texts = input_data  # type: ignore[assignment]
+            texts = input_data
         else:
-            texts = [str(i) for i in input_data if i is not None]  # type: ignore[union-attr]
+            texts = [str(i) for i in input_data if i is not None]
 
         if not texts:
             return []
+        # Graphiti's EmbedderClient.create contract returns ONE vector, so a
+        # multi-item input can only yield the first. Embedding just texts[0]
+        # would be cheaper, but the extra items are what a caller passing a
+        # list expects to influence the result — warn rather than silently
+        # discard, so a misuse is visible instead of merely wrong.
+        if len(texts) > 1:
+            logger.warning(
+                "Graphiti embedder received %d inputs but returns one vector; "
+                "using the first and discarding the rest",
+                len(texts),
+            )
         vectors = await self._embedder.embed_text(texts, task="query")
         return vectors[0]
 
@@ -67,13 +102,52 @@ class _JinaGraphitiEmbedder(EmbedderClient):
         await self._embedder.close()
 
 
+class _SlotCrossEncoder(CrossEncoderClient):
+    """Adapts the configured rerank slot to Graphiti's CrossEncoderClient.
+
+    Graphiti previously took `OpenAIRerankerClient`, which made it a SECOND
+    hosted reranker in the stack — unaffected by `RERANK_MODEL`, and pointed
+    at OpenAI regardless of what the retrieval path was told to use. Routing
+    it through the same slot means one reranker choice is honoured everywhere,
+    and a self-hosted deployment does not leak graph queries to a vendor it
+    thought it had switched away from.
+
+    Mirrors what `_JinaGraphitiEmbedder` above does for the embedder.
+    """
+
+    def __init__(self) -> None:
+        self._reranker = create_reranker()
+
+    async def rank(self, query: str, passages: list[str]) -> list[tuple[str, float]]:
+        """Return (passage, score) pairs, most relevant first.
+
+        Graphiti wants the passage text back, not its position, so the
+        adapter resolves indices here. Degrading rather than raising is
+        deliberate: entity resolution is a *ranking* refinement, and failing
+        the whole ingest because a reranker was unreachable would be a far
+        worse outcome than falling back to the input order.
+        """
+        if not passages:
+            return []
+        try:
+            ranked = await self._reranker.rerank(query, passages, top_n=len(passages))
+        except Exception:
+            logger.exception("Graph cross-encoder failed; falling back to input order")
+            return [(passage, 0.0) for passage in passages]
+        return [(passages[index], score) for index, score in ranked]
+
+    async def close(self) -> None:
+        await self._reranker.close()
+
+
 _client: Graphiti | None = None
 _graphiti_embedder: _JinaGraphitiEmbedder | None = None
+_graphiti_cross_encoder: _SlotCrossEncoder | None = None
 
 
 async def get_graphiti() -> Graphiti:
     """Return (and lazily initialise) the shared Graphiti client."""
-    global _client, _graphiti_embedder  # noqa: PLW0603
+    global _client, _graphiti_embedder, _graphiti_cross_encoder  # noqa: PLW0603
     if _client is None:
         os.environ.setdefault("SEMAPHORE_LIMIT", str(settings.graph_semaphore_limit))
         llm_config = LLMConfig(
@@ -82,13 +156,17 @@ async def get_graphiti() -> Graphiti:
             base_url=settings.llm_base_url or None,
         )
         _graphiti_embedder = _JinaGraphitiEmbedder()
+        _graphiti_cross_encoder = _SlotCrossEncoder()
         _client = Graphiti(
             settings.neo4j_uri,
             settings.neo4j_user,
             settings.neo4j_password,
-            llm_client=OpenAIGenericClient(config=llm_config),
+            llm_client=SizeAwareGenericClient(
+                config=llm_config,
+                small_model=settings.graph_small_model,
+            ),
             embedder=_graphiti_embedder,
-            cross_encoder=OpenAIRerankerClient(config=llm_config),
+            cross_encoder=_graphiti_cross_encoder,
         )
         await _client.build_indices_and_constraints()
         logger.info("Graphiti client initialised")
@@ -97,10 +175,13 @@ async def get_graphiti() -> Graphiti:
 
 async def close_graphiti() -> None:
     """Shut down the shared Graphiti client."""
-    global _client, _graphiti_embedder  # noqa: PLW0603
+    global _client, _graphiti_embedder, _graphiti_cross_encoder  # noqa: PLW0603
     if _graphiti_embedder is not None:
         await _graphiti_embedder.close()
         _graphiti_embedder = None
+    if _graphiti_cross_encoder is not None:
+        await _graphiti_cross_encoder.close()
+        _graphiti_cross_encoder = None
     if _client is not None:
         await _client.close()
         _client = None

@@ -130,9 +130,7 @@ async def _cleanup_session(qdrant_client):
 class TestLiveIngestRealE2E:
     """Full live ingestion e2e with real services — no mocks."""
 
-    async def test_full_live_lifecycle(
-        self, qdrant_client, _cleanup_session
-    ) -> None:
+    async def test_full_live_lifecycle(self, qdrant_client, _cleanup_session) -> None:
         """Ingest real live chunks, verify vector + graph, search, archive."""
         from ingestion.live_ingest import app
 
@@ -202,6 +200,7 @@ class TestLiveIngestRealE2E:
                 gid=SESSION_ID,
             )
             record = await result.single()
+            assert record is not None, "count() always returns a row"
             episode_count = record["cnt"]
         await driver.close()
 
@@ -227,9 +226,7 @@ class TestLiveIngestRealE2E:
 
             assert len(results) >= 1
             live_results = [
-                r
-                for r in results
-                if r.get("metadata", {}).get("source_type") == "live"
+                r for r in results if r.get("metadata", {}).get("source_type") == "live"
             ]
             assert len(live_results) >= 1, f"No live results found in {results}"
             logger.info(
@@ -243,9 +240,7 @@ class TestLiveIngestRealE2E:
         # --- 6. Graph search with session_id (Graphiti temporal facts) ---
         from server.tools.graph_search import graph_search
 
-        graph_results = await graph_search(
-            "database migration", session_id=SESSION_ID
-        )
+        graph_results = await graph_search("database migration", session_id=SESSION_ID)
         # Graphiti should have extracted some facts about the session
         graphiti_facts = [r for r in graph_results if "error" not in r]
         logger.info("Graph search: %d facts returned", len(graphiti_facts))

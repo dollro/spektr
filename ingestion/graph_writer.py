@@ -12,6 +12,7 @@ import logging
 import time
 from datetime import UTC, datetime
 
+from graphiti_core import Graphiti
 from graphiti_core.nodes import EpisodeType
 from graphiti_core.utils.bulk_utils import RawEpisode
 
@@ -159,6 +160,7 @@ class GraphitiWriter:
         ]
 
         t0 = time.monotonic()
+        bulk_started_at = datetime.now(tz=UTC)
         try:
             await client.add_episode_bulk(episodes)
             duration_s = round(time.monotonic() - t0, 1)
@@ -178,8 +180,29 @@ class GraphitiWriter:
                 exc_info=True,
             )
 
-        # Sequential fallback
-        for episode in episodes:
+        # Sequential fallback, resuming rather than restarting.
+        # add_episode_bulk commits incrementally, so a mid-run failure leaves
+        # part of the document in the graph and reports nothing about which
+        # part. Reprocessing the full list pays the whole extraction pipeline
+        # again for episodes already written -- measured 2026-08-30: 64 of 71
+        # episodes duplicated, roughly half the run's LLM spend.
+        #
+        # The filter runs here rather than before the bulk call on purpose.
+        # Episode names are content-independent, so filtering up front would
+        # also skip episodes left by an earlier run of an since-edited
+        # document. Filtering after a failure keeps the meaning exact: skip
+        # what this call already wrote.
+        committed = await self._existing_episode_names(client, source_key, bulk_started_at)
+        pending = [episode for episode in episodes if episode.name not in committed]
+        if committed:
+            logger.info(
+                "Resuming %s: %d of %d episodes already committed",
+                source_key,
+                len(episodes) - len(pending),
+                len(episodes),
+            )
+
+        for episode in pending:
             try:
                 await client.add_episode(
                     name=episode.name,
@@ -192,6 +215,40 @@ class GraphitiWriter:
                     "Sequential fallback failed for episode %s",
                     episode.name,
                 )
+
+    @staticmethod
+    async def _existing_episode_names(
+        client: Graphiti, source_key: str, since: datetime
+    ) -> set[str]:
+        """Episode names for *source_key* created at or after *since*.
+
+        Episode names are content-independent (`{source_key}:p{page}:c{chunk}`),
+        so an unbounded query would also match episodes left by an earlier,
+        since-edited run of the same document -- wrongly treating stale
+        content as "already committed" and skipping it during resume. Bounding
+        by `created_at` restricts the match to episodes written by the bulk
+        call that just failed.
+
+        Returns an empty set on any failure. The resume path is an
+        optimisation: it must never promote a recoverable bulk failure into a
+        hard one, so the worst case is the previous behaviour.
+        """
+        try:
+            records, _, _ = await client.driver.execute_query(
+                "MATCH (e:Episodic) WHERE e.source_description = $src "
+                "AND e.created_at >= $since "
+                "RETURN e.name AS name",
+                src=source_key,
+                since=since,
+            )
+        except Exception:
+            logger.warning(
+                "Could not read committed episodes for %s; reprocessing all",
+                source_key,
+                exc_info=True,
+            )
+            return set()
+        return {record["name"] for record in records}
 
     async def close(self) -> None:
         """Close the underlying Graphiti client."""
@@ -210,6 +267,7 @@ from neo4j.exceptions import (  # noqa: E402
     TransientError,
 )
 from tenacity import (  # noqa: E402
+    RetryCallState,
     retry,
     retry_if_exception_type,
     stop_after_attempt,
@@ -218,17 +276,31 @@ from tenacity import (  # noqa: E402
 
 from ingestion.entity_extractor import Entity, ExtractionResult  # noqa: E402
 
+
+def _log_neo4j_retry(retry_state: RetryCallState) -> None:
+    """Log a Neo4j retry attempt.
+
+    ``RetryCallState.outcome`` is ``Future | None`` — it is None until the
+    first attempt has finished. tenacity only calls ``before_sleep`` after a
+    failed attempt, so it is set in practice, but an unguarded
+    ``.exception()`` would turn any deviation into an AttributeError raised
+    from inside the retry path, masking the original Neo4j error.
+    """
+    outcome = retry_state.outcome
+    logger.warning(
+        "Neo4j retry attempt %d after %s",
+        retry_state.attempt_number,
+        outcome.exception() if outcome is not None else "unknown error",
+    )
+
+
 _NEO4J_RETRY = retry(
     wait=wait_exponential(multiplier=1, min=1, max=15),
     stop=stop_after_attempt(settings.max_retries),
     retry=retry_if_exception_type(
         (ServiceUnavailable, TransientError, OSError),
     ),
-    before_sleep=lambda rs: logger.warning(
-        "Neo4j retry attempt %d after %s",
-        rs.attempt_number,
-        rs.outcome.exception(),
-    ),
+    before_sleep=_log_neo4j_retry,
 )
 
 

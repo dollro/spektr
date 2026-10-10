@@ -1,5 +1,53 @@
 # Embeddings
 
+## Three capability slots
+
+Retrieval has three independently selectable models. They were once one
+choice — `EMBEDDING_MODEL` had to supply text embedding, image embedding
+*and* ColBERT, and the reranker was hard-wired to Jina — which is why a
+self-hosted deployment was unreachable by construction: no self-hostable
+model supplies all three.
+
+|Slot|Keys|Changing it costs|
+|-|-|-|
+|**dense** — text **+** image|`EMBEDDING_MODEL` x `EMBEDDING_ROUTE`|Full re-ingest + collection recreate|
+|**multivec** — late interaction|`MULTIVEC_MODEL` x `MULTIVEC_ROUTE`|Re-index of `documents_multivec` only|
+|**rerank**|`RERANK_MODEL` x `RERANK_ROUTE`|**Nothing** — query-time only|
+
+Text and image stay **one** slot on purpose: both write the named vector
+`dense` on `documents_dense`, so two models would mean two vector spaces in
+one field. Multivector and rerank never had that constraint —
+`documents_multivec` has its own collection, dimensionality and MaxSim
+comparator, and a reranker is not a vector at all.
+
+See [Reranking](reranking.md) for the rerank slot, including the score-scale
+trap that makes its registry more than a base URL.
+
+### The self-hosted configuration
+
+```bash
+EMBEDDING_MODEL=qwen3-embedding-8b   # Apache 2.0
+EMBEDDING_ROUTE=local
+LOCAL_EMBED_API_URL=http://localhost:8080
+IMAGE_EMBED_STRATEGY=none            # required: text-only dense model
+MULTIVEC_MODEL=colqwen2.5            # images reach search through here instead
+RERANK_MODEL=qwen3-reranker
+RERANK_ROUTE=local
+RERANK_API_URL=http://localhost:8081
+GRAPH_ENGINE=gliner                  # local CPU extraction, no LLM
+```
+
+**Know the cost before committing to it.** Cross-modal retrieval from one
+shared vector space is a `gemini-2` privilege. A text-only dense model means
+images leave `documents_dense` entirely and are reachable only through
+`visual_search`, not through the ordinary dense channel. The validator
+enforces that (`IMAGE_EMBED_STRATEGY` must be `none`) so the switch fails at
+startup rather than silently dropping pages.
+
+---
+
+## Dense slot
+
 Spektr selects embeddings on **two orthogonal axes**, because they genuinely are orthogonal — the same model can be reachable through more than one endpoint:
 
 - `EMBEDDING_MODEL` — **which model**: `jina-v4`, `voyage-4`, or `gemini-2`. Determines capabilities and dimensionality.
@@ -128,7 +176,7 @@ Uses two separate endpoints:
 - Text: `${VOYAGE_API_URL}/v1/embeddings` with `voyage-4-large`
 - Images: `${VOYAGE_API_URL}/v1/multimodalembeddings` with `voyage-multimodal-3.5`
 
-ColBERT multi-vector methods raise `NotImplementedError`. The settings validator rejects `MULTIVEC_ENABLED=true` unless the active model+route pair lists that capability — only `jina-v4` via `native` does.
+ColBERT multi-vector methods raise `NotImplementedError` on this client. That no longer constrains anything: late interaction is its own slot (`MULTIVEC_MODEL`), so `visual_search` is available regardless of which model fills the dense slot.
 
 ## OpenRouter
 
@@ -180,7 +228,6 @@ Images bill on a separate meter (\$0.45/M for gemini-2) and use a 120s timeout r
 
 The settings validator rejects `IMAGE_EMBED_STRATEGY` other than `none` when the active pair has no image implementation, so a misconfiguration fails at startup instead of silently dropping pages.
 
-The settings validator rejects `MULTIVEC_ENABLED=true` on this route.
 
 ### Rate limits
 
@@ -257,7 +304,7 @@ When Graphiti is used for the knowledge graph, it requires its own embedder inte
 
 - Graph embeddings share the same rate limiters as document ingestion
 - No duplicate HTTP clients or separate API quota consumption
-- `graphiti_client.py` sets `EMBEDDING_DIM=512` in `os.environ` at import time so Graphiti's vector index sizing matches its internal expectations
+- `graphiti_client.py` sets `EMBEDDING_DIM` to `settings.dense_dimensions` in `os.environ` at import time, before `graphiti_core` is imported, so Graphiti sizes any vector index it creates to the active model. It was a hard-coded `512` — the Jina-era default — which would have sized an index for 512 while `name_embedding` held 768 floats, silently matching nothing. No such index exists today (cosine is computed per node), which is the only reason the stale value stayed harmless
 
 ## Sparse Channel (miniCOIL)
 
@@ -296,7 +343,7 @@ Retrieval reads these named vectors directly with `query_points(..., using="dens
 1. Create `ingestion/embedders/<provider>.py` implementing all `Embedder` protocol methods (including `model_name`/`dim`)
 2. Add provider settings to `config/settings.py` and `.env.example`, and extend `Settings.dense_dimensions`
 3. Add a branch to `create_embedder()` in `ingestion/embedder.py`
-4. Update the model validator in `Settings` if the provider can't support `MULTIVEC_ENABLED=true`
+4. Update the model validator in `Settings` if the model has capability constraints (image support, dimension set)
 5. Add tests in `tests/test_<provider>_embedder.py`
 
 See also: [Pipeline Overview](overview.md) | [CocoIndex Pipeline](cocoindex.md) | [Architecture Data Flow](../architecture/data-flow.md)

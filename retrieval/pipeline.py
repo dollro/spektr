@@ -141,7 +141,10 @@ async def _run_channel_set(
         return results, degraded, False
 
     top_score = results[0].score if results else None
-    if not should_retry(results, settings.rerank_score_floor):
+    # `resolved_score_floor`, not the raw setting: the latter is None when
+    # unset and the floor only means anything paired with the active model's
+    # score_scale (config/rerank_models.py).
+    if not should_retry(results, settings.resolved_score_floor):
         log_gate_decision(fired=False, top_score=top_score, degraded=degraded)
         return results, degraded, False
 

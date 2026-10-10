@@ -4,6 +4,7 @@ import asyncio
 import base64
 import threading
 import time
+from collections.abc import AsyncGenerator
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -518,9 +519,9 @@ class TestTokenCounter:
 @pytest.mark.integration
 class TestEmbedderIntegration:
     @pytest.fixture
-    async def live_embedder(self) -> JinaV4Embedder:
+    async def live_embedder(self) -> AsyncGenerator[JinaV4Embedder]:
         embedder = JinaV4Embedder()
-        yield embedder  # type: ignore[misc]
+        yield embedder
         await embedder.close()
 
     async def test_embed_text_returns_2048d(self, live_embedder: JinaV4Embedder) -> None:
@@ -539,7 +540,7 @@ class TestEmbedderIntegration:
         assert len(result) == DIMS
 
     @pytest.mark.skipif(
-        not __import__("config.settings", fromlist=["settings"]).settings.multivec_enabled,
+        not __import__("config.settings", fromlist=["settings"]).settings.multivec_slot_filled,
         reason="multivec_enabled=False (requires jina-colbert-v2)",
     )
     async def test_embed_multi_vector_returns_128d(
@@ -551,7 +552,7 @@ class TestEmbedderIntegration:
         assert all(len(v) == 128 for v in result)
 
     @pytest.mark.skipif(
-        not __import__("config.settings", fromlist=["settings"]).settings.multivec_enabled,
+        not __import__("config.settings", fromlist=["settings"]).settings.multivec_slot_filled,
         reason="multivec_enabled=False (requires jina-colbert-v2)",
     )
     async def test_embed_query_multi_vector_structure(

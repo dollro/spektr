@@ -36,9 +36,7 @@ Question: {question}
 Answer:"""
 
 
-def _filter_golden(
-    golden: list[dict[str, Any]], ingested: set[str]
-) -> list[dict[str, Any]]:
+def _filter_golden(golden: list[dict[str, Any]], ingested: set[str]) -> list[dict[str, Any]]:
     """Drop items whose required_source isn't currently ingested."""
     return [item for item in golden if item.get("required_source") in ingested]
 
@@ -138,9 +136,7 @@ def _score_with_ragas(rows: list[dict[str, Any]]) -> dict[str, float]:
         ResponseRelevancy,
     )
 
-    ds_rows = [
-        {k: v for k, v in r.items() if not k.startswith("_")} for r in rows
-    ]
+    ds_rows = [{k: v for k, v in r.items() if not k.startswith("_")} for r in rows]
     dataset = Dataset.from_list(ds_rows)
 
     llm = _build_ragas_llm()
@@ -166,11 +162,7 @@ def _score_with_ragas(rows: list[dict[str, Any]]) -> dict[str, float]:
     if scores:
         keys = scores[0].keys()
         for k in keys:
-            vals = [
-                s[k]
-                for s in scores
-                if k in s and isinstance(s[k], int | float)
-            ]
+            vals = [s[k] for s in scores if k in s and isinstance(s[k], int | float)]
             if vals:
                 metric_means[k] = sum(vals) / len(vals)
     return metric_means

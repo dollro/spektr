@@ -254,6 +254,7 @@ class TestBuildChunkPoint:
 
         assert DENSE_VECTOR_NAME in point.vector
         assert SPARSE_VECTOR_NAME in point.vector
+        assert point.payload is not None
         assert point.payload["text_content"] == "hello"
 
 

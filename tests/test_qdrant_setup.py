@@ -3,7 +3,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
-from qdrant_client import models
+from qdrant_client import QdrantClient, models
 
 from config.constants import (
     DENSE_COLLECTION,
@@ -70,7 +70,26 @@ class TestCreateDenseCollection:
 
 
 class TestCreateMultivecCollection:
+    @pytest.fixture(autouse=True)
+    def _filled_slot(self):  # type: ignore[no-untyped-def]
+        """Size the collection from the slot's model, not a constant.
+
+        `MULTIVEC_DIM` used to be a module constant, so these tests needed no
+        configuration. It is now `MultivecSpec.dimensions`, because the width
+        is a property of the model — a constant could not vary with the model
+        it was sizing. Provisioning therefore requires a filled slot, which
+        `ensure_collections` guarantees in production.
+        """
+        from config.multivec_models import spec
+
+        with patch("ingestion.qdrant_setup.settings") as mock_settings:
+            mock_settings.multivec_dimensions = spec("jina-v4-colbert").dimensions
+            mock_settings.multivec_slot_filled = True
+            yield mock_settings
+
     def test_creates_collection_with_colbert_config(self, mock_client: MagicMock) -> None:
+        from config.multivec_models import spec
+
         create_multivec_collection(mock_client)
 
         mock_client.create_collection.assert_called_once()
@@ -79,7 +98,7 @@ class TestCreateMultivecCollection:
         vec_config = call_kwargs.kwargs["vectors_config"]
         assert "colbert" in vec_config
         colbert = vec_config["colbert"]
-        assert colbert.size == MULTIVEC_DIM
+        assert colbert.size == spec("jina-v4-colbert").dimensions
         assert colbert.distance == models.Distance.COSINE
         assert colbert.multivector_config.comparator == models.MultiVectorComparator.MAX_SIM
 
@@ -97,9 +116,9 @@ class TestCreateMultivecCollection:
 
 
 class TestEnsureCollections:
-    def test_creates_dense_only_when_multivec_disabled(self, mock_client: MagicMock) -> None:
+    def test_creates_dense_only_when_slot_empty(self, mock_client: MagicMock) -> None:
         with patch("ingestion.qdrant_setup.settings") as mock_settings:
-            mock_settings.multivec_enabled = False
+            mock_settings.multivec_slot_filled = False
             mock_settings.dense_dimensions = settings.dense_dimensions
             ensure_collections(mock_client)
 
@@ -109,9 +128,9 @@ class TestEnsureCollections:
         assert MULTIVEC_COLLECTION not in names
         assert mock_client.create_collection.call_count == 1
 
-    def test_creates_both_when_multivec_enabled(self, mock_client: MagicMock) -> None:
+    def test_creates_both_when_multivec_slot_filled(self, mock_client: MagicMock) -> None:
         with patch("ingestion.qdrant_setup.settings") as mock_settings:
-            mock_settings.multivec_enabled = True
+            mock_settings.multivec_slot_filled = True
             mock_settings.dense_dimensions = settings.dense_dimensions
             ensure_collections(mock_client)
 
@@ -125,14 +144,17 @@ class TestEnsureCollections:
 @pytest.mark.integration
 class TestQdrantSetupIntegration:
     @pytest.fixture
-    def qdrant_client(self) -> MagicMock:
-        from qdrant_client import QdrantClient
+    def qdrant_client(self) -> QdrantClient:
+        """A REAL client — this class is integration-marked, not mocked.
 
+        The annotation said MagicMock, which is what the unit fixtures above
+        return; that made the two look interchangeable when they are not.
+        """
         from config.settings import settings
 
         return QdrantClient(url=settings.qdrant_url)
 
-    def test_create_and_verify_dense(self, qdrant_client: MagicMock) -> None:
+    def test_create_and_verify_dense(self, qdrant_client: QdrantClient) -> None:
         # Cleanup if exists
         if qdrant_client.collection_exists(DENSE_COLLECTION):
             qdrant_client.delete_collection(DENSE_COLLECTION)
@@ -152,7 +174,7 @@ class TestQdrantSetupIntegration:
         # Cleanup
         qdrant_client.delete_collection(DENSE_COLLECTION)
 
-    def test_create_and_verify_multivec(self, qdrant_client: MagicMock) -> None:
+    def test_create_and_verify_multivec(self, qdrant_client: QdrantClient) -> None:
         if qdrant_client.collection_exists(MULTIVEC_COLLECTION):
             qdrant_client.delete_collection(MULTIVEC_COLLECTION)
 

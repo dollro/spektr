@@ -4,37 +4,95 @@ import pytest
 from pydantic import ValidationError
 
 
-class TestSettingsValidation:
-    def test_voyage_with_multivec_raises(self) -> None:
-        """Voyage + multivec_enabled=True is an invalid combination."""
+class TestMultivecSlot:
+    """The late-interaction slot is independent of the dense model.
+
+    These replace two tests that asserted the opposite — that
+    `MULTIVEC_ENABLED=true` was legal with `jina-v4` and illegal with
+    `voyage-4`. That coupling was the defect: the two share no vector space
+    (`documents_multivec` has its own collection, dimensionality and MaxSim
+    comparator), so gating one on the other meant changing the text embedder
+    silently removed the `visual_search` tool.
+    """
+
+    def test_retired_flag_raises_with_migration_path(self) -> None:
+        """A stale MULTIVEC_ENABLED must fail loudly, not be ignored.
+
+        `extra="ignore"` would drop it and boot with the slot unfilled —
+        visual_search dark on a deployment that believed it was on.
+        """
         from config.settings import Settings
 
-        with pytest.raises(ValidationError, match="[Vv]oyage.*ColBERT|multivec"):
+        with pytest.raises(ValidationError, match="MULTIVEC_ENABLED has been replaced"):
             Settings(
                 jina_api_key="test",
                 neo4j_password="test",
-                embedding_model="voyage-4",
-                embedding_route="native",
-                voyage_api_key="test",
                 multivec_enabled=True,
+                rerank_enabled=False,
                 _env_file=None,
             )
 
-    def test_jina_with_multivec_is_valid(self) -> None:
-        """Jina + multivec_enabled=True is fine."""
+    def test_slot_is_independent_of_the_dense_model(self) -> None:
+        """The combination the old validator rejected outright.
+
+        A gemini-2 dense slot with a jina-v4-colbert multivector slot is
+        exactly what the coupling made inexpressible, and there is nothing
+        wrong with it: different models, different collections.
+        """
         from config.settings import Settings
 
         s = Settings(
             jina_api_key="test",
             neo4j_password="test",
-            embedding_model="jina-v4",
-            embedding_route="native",
-            multivec_enabled=True,
-            image_embed_strategy="none",
+            openrouter_api_key="test",
+            embedding_model="gemini-2",
+            embedding_route="openrouter",
+            multivec_model="jina-v4-colbert",
+            rerank_enabled=False,
             _env_file=None,
         )
-        assert s.multivec_enabled is True
+        assert s.multivec_slot_filled is True
+        assert s.multivec_route == "native", "unset route adopts the model's default"
+        assert s.multivec_dimensions == 128
 
+    def test_empty_model_means_slot_unfilled(self) -> None:
+        from config.settings import Settings
+
+        s = Settings(
+            jina_api_key="test",
+            neo4j_password="test",
+            rerank_enabled=False,
+            _env_file=None,
+        )
+        assert s.multivec_slot_filled is False
+
+    def test_illegal_route_for_model_is_rejected(self) -> None:
+        from config.settings import Settings
+
+        with pytest.raises(ValidationError, match="is not served via"):
+            Settings(
+                jina_api_key="test",
+                neo4j_password="test",
+                multivec_model="colqwen2.5",
+                multivec_route="native",
+                rerank_enabled=False,
+                _env_file=None,
+            )
+
+    def test_unknown_model_fails_loudly(self) -> None:
+        from config.settings import Settings
+
+        with pytest.raises(ValidationError, match="Unknown multivector model"):
+            Settings(
+                jina_api_key="test",
+                neo4j_password="test",
+                multivec_model="not-a-model",
+                rerank_enabled=False,
+                _env_file=None,
+            )
+
+
+class TestSettingsValidation:
     def test_live_ingest_port_default(self) -> None:
         """LIVE_INGEST_PORT defaults to 8001."""
         from config.settings import Settings
@@ -89,7 +147,7 @@ class TestSettingsValidation:
             embedding_model="voyage-4",
             embedding_route="native",
             voyage_api_key="test",
-            multivec_enabled=False,
+            rerank_enabled=False,
             # conftest's load_dotenv() leaks the developer's
             # EMBEDDING_DIMENSIONS into os.environ, and 768 is not one of
             # voyage-4's four sizes. Pin it so this asserts the code, not .env.
@@ -112,6 +170,9 @@ def test_retrieval_defaults(monkeypatch):  # type: ignore[no-untyped-def]
     from config.settings import Settings
 
     monkeypatch.delenv("LLM_MODEL", raising=False)
+    # Same leak, same fix: the developer's .env pins RERANK_SCORE_FLOOR, and
+    # os.environ beats _env_file=None.
+    monkeypatch.delenv("RERANK_SCORE_FLOOR", raising=False)
     s = Settings(
         neo4j_password="test",
         _env_file=None,
@@ -121,7 +182,10 @@ def test_retrieval_defaults(monkeypatch):  # type: ignore[no-untyped-def]
     assert s.rrf_k == 60
     assert s.rerank_model == "jina-reranker-v3.5"
     assert s.rerank_candidates == 50
-    assert s.rerank_score_floor == 0.0
+    # Unset, because the floor is only meaningful paired with the active
+    # model's score_scale; `resolved_score_floor` is what callers read.
+    assert s.rerank_score_floor is None
+    assert s.resolved_score_floor == 0.0  # jina-reranker-v3.5's logit default
     assert s.retry_enabled is True
     assert s.retry_limit_multiplier == 3
     assert s.decompose_enabled is True
@@ -279,3 +343,67 @@ class TestEmbeddingSelection:
         """extra=ignore would otherwise boot prod on the wrong model."""
         with pytest.raises(ValidationError, match="EMBEDDING_PROVIDER has been replaced"):
             self._settings(embedding_provider="openrouter")
+
+
+class TestGraphEngineLlmSelection:
+    """Graphiti only speaks OpenAI; the config must not promise otherwise."""
+
+    def _settings(self, **kw: object):  # type: ignore[no-untyped-def]
+        from config.settings import Settings
+
+        # Every LLM/graph field is pinned: conftest's load_dotenv() leaks the
+        # developer's .env into os.environ, which _env_file=None does not
+        # shadow, and these four fields are exactly what is under test.
+        base = dict(
+            neo4j_password="test",
+            openrouter_api_key="test",
+            image_embed_strategy="none",
+            embedding_dimensions=0,
+            graph_enabled=True,
+            graph_engine="graphiti",
+            llm_api_type="anthropic",
+            llm_model="claude-haiku-4.5",
+            llm_base_url="",
+            _env_file=None,
+        )
+        base.update(kw)
+        return Settings(**base)  # type: ignore[arg-type]
+
+    def test_graphiti_requires_openai_compatible_llm(self) -> None:
+        """The shipped default combination is a silent cross-provider call.
+
+        graphiti_client builds OpenAIGenericClient unconditionally and an
+        empty base_url resolves to api.openai.com inside the OpenAI SDK, so
+        this would post a Claude model id there with an Anthropic key.
+        """
+        with pytest.raises(ValidationError) as exc:
+            self._settings()
+        message = str(exc.value)
+        assert "GRAPH_ENGINE=graphiti" in message
+        assert "LLM_API_TYPE=anthropic" in message
+        # Both escape hatches must be named, or the error is not actionable.
+        assert "LLM_BASE_URL" in message
+        assert "GRAPH_ENGINE=gliner" in message
+
+    @pytest.mark.parametrize(
+        ("overrides", "reason"),
+        [
+            ({"graph_engine": "gliner"}, "local CPU extraction needs no LLM"),
+            ({"graph_enabled": False}, "no graph, no Graphiti LLM calls"),
+            ({"llm_api_type": "openai"}, "the OpenAI client is the right client"),
+            (
+                {"llm_base_url": "https://openrouter.ai/api/v1"},
+                "an OpenAI-compatible gateway can serve a Claude model id",
+            ),
+        ],
+    )
+    def test_valid_combinations_still_pass(
+        self, overrides: dict[str, object], reason: str
+    ) -> None:
+        s = self._settings(**overrides)
+        assert s.neo4j_password == "test", reason
+
+    def test_api_type_match_is_case_insensitive(self) -> None:
+        """get_llm_client() lowercases llm_api_type; this must agree with it."""
+        s = self._settings(llm_api_type="OpenAI")
+        assert s.llm_api_type == "OpenAI"

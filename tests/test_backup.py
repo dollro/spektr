@@ -147,9 +147,7 @@ class TestRestore:
 
     def test_fails_on_missing_manifest(self, tmp_backup_root: Path) -> None:
         src = tmp_backup_root / "none"
-        rc = restore.main(
-            ["--from", str(src), "--yes-i-know-this-wipes-things"]
-        )
+        rc = restore.main(["--from", str(src), "--yes-i-know-this-wipes-things"])
         assert rc == 2
 
     def test_qdrant_restore_uploads_snapshot(self, tmp_backup_root: Path) -> None:

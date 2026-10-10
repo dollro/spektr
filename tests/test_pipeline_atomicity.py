@@ -12,6 +12,7 @@ Covers the contract, unchanged in effect across the CocoIndex v0 -> v1 move:
 
 from __future__ import annotations
 
+from collections.abc import Generator
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -65,7 +66,7 @@ class TestIngestFileAtomicity:
     """Pipeline wiring: re-raise until poison, then swallow."""
 
     @pytest.fixture
-    def isolated_tracker(self, tmp_path: Path) -> FailureTracker:
+    def isolated_tracker(self, tmp_path: Path) -> Generator[FailureTracker]:
         t = FailureTracker(db_path=tmp_path / "failures.db")
         with patch("ingestion.pipeline.get_tracker", return_value=t):
             yield t
@@ -100,9 +101,7 @@ class TestIngestFileAtomicity:
             except Exception as raised:  # noqa: BLE001
                 return raised
 
-    async def test_re_raises_under_threshold(
-        self, isolated_tracker: FailureTracker
-    ) -> None:
+    async def test_re_raises_under_threshold(self, isolated_tracker: FailureTracker) -> None:
         for _ in range(2):
             result = await self._run_ingest_with_failure(RuntimeError("boom"))
             assert isinstance(result, RuntimeError)
@@ -129,9 +128,7 @@ class TestIngestFileAtomicity:
         assert isinstance(result, TimeoutError)
         assert isolated_tracker.fail_count("poison.txt") == 1
 
-    async def test_success_resets_the_counter(
-        self, isolated_tracker: FailureTracker
-    ) -> None:
+    async def test_success_resets_the_counter(self, isolated_tracker: FailureTracker) -> None:
         await self._run_ingest_with_failure(RuntimeError("boom"))
         assert isolated_tracker.fail_count("poison.txt") == 1
 

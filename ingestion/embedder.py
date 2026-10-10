@@ -16,6 +16,21 @@ class TokenBucket:
     """Simple async token-bucket rate limiter.
 
     Not thread-safe — designed for use within a single asyncio event loop.
+
+    NOTE on scoping, because the two limiter kinds differ and it matters:
+    every provider client builds its ``TokenBucket``s once in ``__init__``,
+    so RPM/TPM are bounded **process-wide**. The concurrency
+    ``asyncio.Semaphore`` beside them is built per event loop (an
+    ``asyncio.Semaphore`` is loop-bound and cannot be shared across loops),
+    so ``*_MAX_CONCURRENT`` bounds requests **per loop, not per process**.
+
+    CocoIndex runs file components on multiple worker threads, each with its
+    own loop, so the real ceiling is roughly
+    ``*_MAX_CONCURRENT x PIPELINE_MAX_CONCURRENT_FILES``. Size the setting
+    against that product, not against the provider's limit directly —
+    observed live: ``JINA_MAX_CONCURRENT=4`` with 4 in-flight files drew
+    ``RATE_CONCURRENCY_LIMIT_EXCEEDED: 2/2`` from Jina and cost a 20s
+    all-limiter pause per occurrence.
     """
 
     def __init__(self, tokens_per_sec: float, burst: int) -> None:
@@ -127,6 +142,14 @@ def create_embedder(api_key: str | None = None) -> Embedder:
         from ingestion.embedders.openrouter import OpenRouterEmbedder
 
         return OpenRouterEmbedder(api_key=api_key)
+
+    if route == "local":
+        # Self-hosted OpenAI-compatible endpoint (TEI / vLLM / Infinity).
+        # One client for every model on this route: unlike `native`, the
+        # route really is the protocol here.
+        from ingestion.embedders.local import LocalEmbedder
+
+        return LocalEmbedder(api_key=api_key)
 
     # route == "native": one client per vendor API.
     if settings.embedding_model == "jina-v4":

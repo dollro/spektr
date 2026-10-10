@@ -165,8 +165,10 @@ def _extract_text_docling(image_bytes: bytes) -> str:
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
             f.write(image_bytes)
             tmp_path = f.name
-        result = converter.convert(tmp_path)
-        return result.document.export_to_markdown()
+        # `_get_docling_converter()` returns `object | None` on purpose:
+        # docling is an optional import, so its types are not named here.
+        result = converter.convert(tmp_path)  # type: ignore[attr-defined]
+        return result.document.export_to_markdown()  # type: ignore[no-any-return]
     except Exception:
         logger.exception("Docling extraction failed")
         return ""
@@ -188,8 +190,9 @@ def _convert_pdf_docling(content: bytes) -> object | None:
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
             f.write(content)
             tmp_path = f.name
-        result = converter.convert(tmp_path)
-        return result.document
+        # See `_extract_text_docling`: the converter is deliberately `object`.
+        result = converter.convert(tmp_path)  # type: ignore[attr-defined]
+        return result.document  # type: ignore[no-any-return]
     except Exception:
         logger.exception("Docling PDF conversion failed")
         return None
@@ -208,7 +211,9 @@ def _pdf_to_pages(content: bytes) -> FileProcessingResult:
     doc = pymupdf.open(stream=content, filetype="pdf")
     pages: list[Page] = []
 
-    for i, fitz_page in enumerate(doc):
+    # pymupdf's `Document.__iter__` is unannotated, so mypy infers an
+    # `Iterable[Never]` and cannot type the loop variable.
+    for i, fitz_page in enumerate(doc):  # type: ignore[var-annotated,arg-type]
         text = fitz_page.get_text("text").strip()
 
         mat = pymupdf.Matrix(150 / 72, 150 / 72)
@@ -311,7 +316,9 @@ def docling_chunk(doc: object | None) -> list[TextChunk]:
         if chunker is None:
             return []
 
-        raw_chunks = chunker.chunk(dl_doc=doc)
+        # `_get_hybrid_chunker()` returns `object | None` on purpose: docling
+        # is an optional import, so its types are not named here.
+        raw_chunks = chunker.chunk(dl_doc=doc)  # type: ignore[attr-defined]
         result: list[TextChunk] = []
         for idx, chunk in enumerate(raw_chunks):
             page_no = 1
@@ -327,7 +334,7 @@ def docling_chunk(doc: object | None) -> list[TextChunk]:
 
             ctx_text: str | None = None
             try:
-                ctx_text = chunker.contextualize(chunk)
+                ctx_text = chunker.contextualize(chunk)  # type: ignore[attr-defined]
             except Exception:
                 logger.warning(
                     "contextualize() failed for chunk %d, using raw text",

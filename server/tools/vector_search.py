@@ -107,7 +107,10 @@ async def vector_search(
             results.append(
                 SearchResult(
                     score=point.score,
-                    text=payload.get("text_content", payload.get("text", "")),
+                    # A payload can carry an explicit `null` text, in which
+                    # case `.get(key, default)` returns None and SearchResult
+                    # (text: str) raises. Same `or ""` guard as _dual_query.
+                    text=payload.get("text_content", payload.get("text", "")) or "",
                     source_file=payload.get("source_file", ""),
                     page_number=payload.get("page_number", 0),
                     content_type=payload.get("content_type", ""),

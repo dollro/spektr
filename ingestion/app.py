@@ -166,7 +166,7 @@ def _source_items() -> Any:
 async def app_main() -> None:
     """Mount the targets, then one processing component per source file."""
     dense = await mount_dense_target()
-    multivec = await mount_multivec_target() if settings.multivec_enabled else None
+    multivec = await mount_multivec_target() if settings.multivec_slot_filled else None
 
     await coco.mount_each(process_file, _source_items(), dense, multivec)
 
