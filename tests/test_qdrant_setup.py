@@ -15,10 +15,23 @@ from config.constants import (
 )
 from config.settings import settings
 from ingestion.qdrant_setup import (
+    CollectionMismatchError,
     create_dense_collection,
     create_multivec_collection,
     ensure_collections,
 )
+
+
+def _existing(vectors: object) -> MagicMock:
+    """A client whose collection already exists with the given vectors config."""
+    client = MagicMock()
+    client.collection_exists.return_value = True
+    client.get_collection.return_value.config.params.vectors = vectors
+    return client
+
+
+def _dense(size: int) -> dict[str, models.VectorParams]:
+    return {DENSE_VECTOR_NAME: models.VectorParams(size=size, distance=models.Distance.COSINE)}
 
 
 @pytest.fixture
@@ -63,10 +76,39 @@ class TestCreateDenseCollection:
         for c in index_calls:
             assert c.kwargs["field_schema"] == models.PayloadSchemaType.KEYWORD
 
-    def test_idempotent_skips_existing(self, mock_client: MagicMock) -> None:
-        mock_client.collection_exists.return_value = True
-        create_dense_collection(mock_client)
-        mock_client.create_collection.assert_not_called()
+    def test_idempotent_skips_existing(self) -> None:
+        client = _existing(_dense(settings.dense_dimensions))
+        create_dense_collection(client)
+        client.create_collection.assert_not_called()
+
+    def test_existing_collection_with_other_size_fails_loudly(self) -> None:
+        """A model switch without a re-index must not boot.
+
+        Otherwise every write is rejected point by point by Qdrant, and a
+        query embedding of the wrong size fails only at search time.
+        """
+        stale = settings.dense_dimensions + 256
+        client = _existing(_dense(stale))
+
+        with pytest.raises(CollectionMismatchError) as exc:
+            create_dense_collection(client)
+
+        msg = str(exc.value)
+        assert str(stale) in msg
+        assert str(settings.dense_dimensions) in msg
+        assert "EMBEDDING_MODEL" in msg
+        assert "--full-reprocess" in msg
+        client.create_collection.assert_not_called()
+
+    def test_existing_collection_without_named_dense_vector_fails(self) -> None:
+        client = _existing(
+            models.VectorParams(
+                size=settings.dense_dimensions, distance=models.Distance.COSINE
+            )
+        )
+
+        with pytest.raises(CollectionMismatchError, match="named vector"):
+            create_dense_collection(client)
 
 
 class TestCreateMultivecCollection:
@@ -109,10 +151,24 @@ class TestCreateMultivecCollection:
         assert len(index_calls) == 1
         assert index_calls[0].kwargs["field_name"] == "source_file"
 
-    def test_idempotent_skips_existing(self, mock_client: MagicMock) -> None:
-        mock_client.collection_exists.return_value = True
-        create_multivec_collection(mock_client)
-        mock_client.create_collection.assert_not_called()
+    def test_idempotent_skips_existing(self, _filled_slot: MagicMock) -> None:
+        size = _filled_slot.multivec_dimensions
+        client = _existing(
+            {"colbert": models.VectorParams(size=size, distance=models.Distance.COSINE)}
+        )
+        create_multivec_collection(client)
+        client.create_collection.assert_not_called()
+
+    def test_existing_collection_with_other_size_fails_loudly(
+        self, _filled_slot: MagicMock
+    ) -> None:
+        stale = _filled_slot.multivec_dimensions * 2
+        client = _existing(
+            {"colbert": models.VectorParams(size=stale, distance=models.Distance.COSINE)}
+        )
+
+        with pytest.raises(CollectionMismatchError, match="MULTIVEC_MODEL"):
+            create_multivec_collection(client)
 
 
 class TestEnsureCollections:

@@ -15,15 +15,55 @@ from config.settings import settings
 logger = logging.getLogger(__name__)
 
 
+class CollectionMismatchError(RuntimeError):
+    """An existing collection does not match the configured model."""
+
+
+def _check_existing(
+    client: QdrantClient, collection: str, vector: str, expected: int, model_key: str
+) -> None:
+    """Fail fast if an existing collection was sized for a different model.
+
+    Creation is skipped for an existing collection, so without this a model
+    switch boots cleanly and then has every write rejected point by point.
+    """
+    vectors = client.get_collection(collection).config.params.vectors
+    if not isinstance(vectors, dict) or vector not in vectors:
+        raise CollectionMismatchError(
+            f"Collection {collection} has no named vector {vector!r}; it predates the "
+            f"named-vector schema. Drop it and run `task ingest -- --full-reprocess`."
+        )
+    actual = vectors[vector].size
+    if actual != expected:
+        live = (
+            " Dropping it also deletes live-session points, which Path A cannot rebuild."
+            if collection == DENSE_COLLECTION
+            else ""
+        )
+        raise CollectionMismatchError(
+            f"Collection {collection} holds {actual}-d {vector!r} vectors, but "
+            f"{model_key} resolves to {expected}-d. Either restore the {model_key} "
+            f"the collection was built with, or re-index: drop {collection} and run "
+            f"`task ingest -- --full-reprocess`.{live}"
+        )
+
+
 def create_dense_collection(client: QdrantClient) -> None:
     """Create documents_dense collection.
 
     Named vectors: "dense" (dimensions from settings, provider-dependent,
     COSINE) and "sparse" (miniCOIL, IDF modifier).
     Payload indexes: source_file (KEYWORD), content_type (KEYWORD).
-    Idempotent — skips if collection already exists.
+    Idempotent — skips an existing collection after checking its vector size.
     """
     if client.collection_exists(DENSE_COLLECTION):
+        _check_existing(
+            client,
+            DENSE_COLLECTION,
+            DENSE_VECTOR_NAME,
+            settings.dense_dimensions,
+            "EMBEDDING_MODEL/EMBEDDING_DIMENSIONS",
+        )
         logger.info("Collection %s already exists, skipping.", DENSE_COLLECTION)
         return
 
@@ -60,9 +100,16 @@ def create_multivec_collection(client: QdrantClient) -> None:
 
     Named vector 'colbert': size=128, distance=COSINE, MaxSim comparator.
     Payload index: source_file (KEYWORD).
-    Idempotent — skips if collection already exists.
+    Idempotent — skips an existing collection after checking its vector size.
     """
     if client.collection_exists(MULTIVEC_COLLECTION):
+        _check_existing(
+            client,
+            MULTIVEC_COLLECTION,
+            "colbert",
+            settings.multivec_dimensions,
+            "MULTIVEC_MODEL",
+        )
         logger.info("Collection %s already exists, skipping.", MULTIVEC_COLLECTION)
         return
 

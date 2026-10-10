@@ -102,6 +102,8 @@ The predecessor setting `EMBEDDING_PROVIDER` conflated these axes and could not 
 
 The Qdrant `documents_dense` collection is sized at provisioning time using `settings.dense_dimensions`, which returns the active provider's configured value. Switching providers therefore requires recreating the collection.
 
+Provisioning (`ensure_collections`, run at the start of every ingest) skips an existing collection but first compares its `dense` vector size with `settings.dense_dimensions`, and `documents_multivec`'s `colbert` size with the multivec model's. On a mismatch the ingest stops with `CollectionMismatchError`, naming both sizes and the way out: restore the old model, or drop the collection and run `task ingest -- --full-reprocess`. Without this check a model switch booted cleanly and then had every point rejected by Qdrant at write time.
+
 ## Embedder Protocol
 
 All providers implement the `Embedder` protocol defined in `ingestion/embedder.py`:
