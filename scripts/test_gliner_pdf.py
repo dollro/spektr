@@ -42,7 +42,7 @@ def main(pdf_path: str) -> None:
         print(f"Semantic chunks (fallback): {len(chunks)}")
 
     # 3. Merge chunks (same logic as GLiNEREngine)
-    merged = GLiNEREngine._merge_chunks(chunks)
+    merged = GLiNEREngine._extraction_texts(chunks)
     avg = sum(len(t) for t in merged) // max(len(merged), 1)
     print(f"Merged page texts: {len(merged)} (avg {avg} chars)")
 

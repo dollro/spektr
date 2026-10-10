@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import TYPE_CHECKING, Protocol
 
 from ingestion.file_processor import TextChunk
@@ -20,6 +21,18 @@ if TYPE_CHECKING:
     from ingestion.schema_inducer import MergedSchema
 
 logger = logging.getLogger(__name__)
+
+# A chunk whose heading line is a bibliography heading. Reference lists are
+# dense with names, years and venues, and GLiNER turns them into junk edges
+# (`Smith 20 -scheduled_for-> 20`).
+_REFERENCE_HEADING = re.compile(
+    r"^\s*(\d+(\.\d+)*\.?\s+)?(references|bibliography|works cited)\s*$", re.IGNORECASE
+)
+
+
+def _normalize_name(name: str) -> str:
+    """Collapse all whitespace, including line breaks from PDF layout, and title-case."""
+    return " ".join(name.split()).title()
 
 
 class GraphEngine(Protocol):
@@ -200,22 +213,29 @@ class GLiNEREngine:
         return self._driver
 
     @staticmethod
-    def _merge_chunks(chunks: list[TextChunk], min_chars: int = 200) -> list[str]:
-        """Merge small consecutive chunks into page-level texts.
+    def _extraction_texts(
+        chunks: list[TextChunk], min_chars: int = 200, max_chars: int = 1000
+    ) -> list[str]:
+        """Pack consecutive chunks into texts of at most ``max_chars``.
 
-        GLiNER needs substantial context; tiny fragments yield no entities.
-        Groups by page_number, concatenates, then splits any text exceeding
-        max_chars on page boundaries.
+        GLiNER2 returns only a handful of relations per input, so whole pages
+        starve the graph; chunk-sized inputs yield ~3x the distinct edges.
+        Tiny chunks are still merged because fragments yield no entities.
+        Chunks under a bibliography heading are skipped.
         """
-        pages: dict[int, str] = {}
+        texts: list[str] = []
+        current = ""
         for chunk in chunks:
             text = (chunk.contextualized_text or chunk.text).strip()
-            if not text:
+            if not text or _REFERENCE_HEADING.match(text.split("\n", 1)[0]):
                 continue
-            page = chunk.page_number or 0
-            pages[page] = f"{pages.get(page, '')} {text}".strip()
-
-        return [text for text in pages.values() if len(text) >= min_chars]
+            if current and len(current) + 1 + len(text) > max_chars:
+                texts.append(current)
+                current = text
+            else:
+                current = f"{current} {text}".strip()
+        texts.append(current)
+        return [text for text in texts if len(text) >= min_chars]
 
     def _is_noise(self, name: str) -> bool:
         """Return True if the entity name is too short or a stopword."""
@@ -245,7 +265,7 @@ class GLiNEREngine:
         if not chunks:
             return
 
-        merged_texts = self._merge_chunks(chunks)
+        merged_texts = self._extraction_texts(chunks)
         if not merged_texts:
             return
 
@@ -270,13 +290,13 @@ class GLiNEREngine:
                 name_types: dict[str, set[str]] = {}
                 for entity_type, names in entities.items():
                     for name in names:
-                        normalized = name.strip().title()
+                        normalized = _normalize_name(name)
                         name_types.setdefault(normalized, set()).add(entity_type)
 
                 # Upsert entities — MERGE on name only, accumulate types
                 for entity_type, names in entities.items():
                     for name in names:
-                        normalized = name.strip().title()
+                        normalized = _normalize_name(name)
                         if not normalized or self._is_noise(normalized):
                             continue
                         await session.run(
@@ -300,8 +320,8 @@ class GLiNEREngine:
                 for rel_type, pairs in relations.items():
                     rel_key = rel_type.lower().replace(" ", "_")
                     for head, tail in pairs:
-                        head_norm = head.strip().title()
-                        tail_norm = tail.strip().title()
+                        head_norm = _normalize_name(head)
+                        tail_norm = _normalize_name(tail)
                         if not head_norm or not tail_norm:
                             continue
                         if head_norm == tail_norm:
