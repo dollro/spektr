@@ -630,3 +630,111 @@ class TestGLiNEREngineDynamicSchema:
 
         # Should use base schema (self._schema), not create_schema
         mock_extractor.extract.assert_called_once_with(long_text, base_schema)
+
+
+def _gliner_engine(extract_result: dict[str, object]) -> tuple[object, AsyncMock]:
+    """A GLiNEREngine with a mock extractor and a mock Neo4j session."""
+    from ingestion.graph_engine import GLiNEREngine
+
+    session = AsyncMock()
+    session.__aenter__ = AsyncMock(return_value=session)
+    session.__aexit__ = AsyncMock(return_value=False)
+    driver = MagicMock()
+    driver.session.return_value = session
+
+    engine = GLiNEREngine.__new__(GLiNEREngine)
+    engine._extractor = MagicMock()
+    engine._extractor.extract.return_value = extract_result
+    engine._driver = driver
+    engine._schema = MagicMock()
+    return engine, session
+
+
+class TestGLiNERExtractionTexts:
+    """GLiNER2 emits a near-fixed handful of relations per input, so the unit
+    of extraction decides how many relations a document can yield."""
+
+    def test_full_chunks_on_one_page_are_extracted_separately(self) -> None:
+        from ingestion.graph_engine import GLiNEREngine
+
+        chunks = [
+            TextChunk(text=f"{i} " + "x" * 600, chunk_index=i, page_number=1) for i in range(3)
+        ]
+
+        assert len(GLiNEREngine._extraction_texts(chunks)) == 3
+
+    def test_small_consecutive_chunks_are_merged(self) -> None:
+        from ingestion.graph_engine import GLiNEREngine
+
+        chunks = [
+            TextChunk(text="a" * 120, chunk_index=0, page_number=1),
+            TextChunk(text="b" * 120, chunk_index=1, page_number=1),
+        ]
+
+        assert GLiNEREngine._extraction_texts(chunks) == ["a" * 120 + " " + "b" * 120]
+
+    def test_text_below_min_chars_is_dropped(self) -> None:
+        from ingestion.graph_engine import GLiNEREngine
+
+        chunks = [TextChunk(text="too short", chunk_index=0, page_number=1)]
+
+        assert GLiNEREngine._extraction_texts(chunks) == []
+
+    @pytest.mark.parametrize("heading", ["References", "7 References", "BIBLIOGRAPHY"])
+    def test_reference_section_chunks_are_skipped(self, heading: str) -> None:
+        from ingestion.graph_engine import GLiNEREngine
+
+        body = "Smith, J. (2020). A paper title. Venue 12, 1-10. " * 10
+        chunks = [
+            TextChunk(
+                text="y" * 300,
+                chunk_index=0,
+                page_number=1,
+                contextualized_text="Results\n" + "y" * 300,
+            ),
+            TextChunk(
+                text=body,
+                chunk_index=1,
+                page_number=9,
+                contextualized_text=f"{heading}\n{body}",
+            ),
+        ]
+
+        assert GLiNEREngine._extraction_texts(chunks) == ["Results\n" + "y" * 300]
+
+
+class TestGLiNERNameNormalization:
+    @pytest.mark.asyncio
+    async def test_internal_whitespace_is_collapsed(self) -> None:
+        """A line break inside a PDF name must not create a second node."""
+        engine, session = _gliner_engine(
+            {
+                "entities": {"metric": ["MMTEB\nleaderboard"]},
+                "relation_extraction": {},
+            }
+        )
+
+        await engine.ingest(  # type: ignore[attr-defined]
+            [TextChunk(text="z" * 300, chunk_index=0, page_number=1)], "doc.pdf"
+        )
+
+        names = [c.kwargs.get("name") for c in session.run.call_args_list]
+        assert names == ["Mmteb Leaderboard"]
+
+    @pytest.mark.asyncio
+    async def test_relation_endpoints_use_the_same_normalization(self) -> None:
+        engine, session = _gliner_engine(
+            {
+                "entities": {"person": ["Jun\nXu"], "document": ["MSR-VTT"]},
+                "relation_extraction": {"created_by": [("MSR-VTT", "Jun\nXu")]},
+            }
+        )
+
+        await engine.ingest(  # type: ignore[attr-defined]
+            [TextChunk(text="z" * 300, chunk_index=0, page_number=1)], "doc.pdf"
+        )
+
+        rel_calls = [c for c in session.run.call_args_list if "relation" in c.kwargs]
+        assert [(c.kwargs["source"], c.kwargs["target"]) for c in rel_calls] == [
+            ("Msr-Vtt", "Jun Xu")
+        ]

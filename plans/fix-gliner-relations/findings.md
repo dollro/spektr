@@ -46,3 +46,14 @@ No GLiNER knob turns this into a knowledge graph. The cheap fixes (extract per
 chunk, whitespace normalisation, skip reference sections) buy ~3x edges at
 ~40% precision. A graph of facts needs an LLM in the relation step — see the
 hybrid in §8 of the handoff.
+
+## Result of the cheap fixes (same Docling chunks, base schema, threshold 0.5)
+
+| extraction unit | texts | raw relations | distinct kept edges |
+|-|-|-|-|
+| per page (old `_merge_chunks`) | 26 | 53 | 8 |
+| packed chunks <= 1000 chars, references skipped | 95 | 210 | 23 |
+
+Precision on a hand-checked sample is unchanged (~40%): the graph grows, it
+does not get cleaner.
+

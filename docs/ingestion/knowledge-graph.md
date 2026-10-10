@@ -130,6 +130,30 @@ The `gliner2` package is lazy-imported only when `GRAPH_ENGINE=gliner`, so Graph
 - **NER quality:** 0.59 F1 on CrossNER (matches GPT-4o zero-shot)
 - **Inference:** ~130ms per chunk on CPU
 
+### Extraction unit
+
+GLiNER2 returns only a handful of relations per input regardless of its
+length, so the unit of extraction caps how many relations a document can
+yield. `GLiNEREngine._extraction_texts` packs consecutive chunks into texts of
+at most 1,000 characters (tiny chunks are merged, because fragments yield no
+entities; texts under 200 characters are dropped). On the dev corpus, whole
+pages gave 53 raw relations and 8 distinct edges; chunk-sized texts give 210
+and 23.
+
+Chunks whose heading line is `References`, `Bibliography` or `Works cited`
+are skipped: reference lists are dense with names, years and venues and turn
+into junk edges (`Smith 20 -scheduled_for-> 20`). Detection relies on Docling's
+heading-prefixed `contextualized_text`; the paragraph-chunker fallback has no
+headings and skips nothing.
+
+Entity and relation endpoint names are normalised by collapsing all
+whitespace and title-casing, so a PDF line break inside a name
+(`"MMTEB\nleaderboard"`) does not create a second node.
+
+**Precision is low.** A hand check of chunk-level edges found roughly 40%
+correct. GLiNER2 gives an entity index with a thin relation layer, not a graph
+of facts; a fact graph needs an LLM in the relation step (Graphiti).
+
 ### Schema
 
 #### Base schema
