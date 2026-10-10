@@ -1,9 +1,9 @@
 {
   "extraKnownMarketplaces": {
-    "held-marketplace": {
+    "held-plugins": {
       "source": {
         "source": "github",
-        "repo": "dollro/held-skills-marketplace"
+        "repo": "dollro/held-plugins"
       },
       "autoUpdate": true
     },
@@ -20,24 +20,24 @@
     "frontend-design@claude-plugins-official": true,
     "skill-creator@claude-plugins-official": true,
     "superpowers@claude-plugins-official": true,
-    "agent-team@held-marketplace": true,
-    "ai-dev@held-marketplace": true,
-    "braindump2spec@held-marketplace": true,
-    "brainstorming@held-marketplace": true,
-    "branch@held-marketplace": true,
-    "code-review@held-marketplace": true,
-    "design-parity@held-marketplace": true,
-    "electron-dev@held-marketplace": true,
-    "equity-research@held-marketplace": true,
-    "fullstack-dev@held-marketplace": true,
-    "investment-memo@held-marketplace": true,
-    "pencil-pen-generator@held-marketplace": true,
-    "prompt-engineering@held-marketplace": true,
-    "spec2plan@held-marketplace": true,
-    "uiux-design-penpot@held-marketplace": true,
-    "uiux-design-system@held-marketplace": true,
-    "uiux-design-tailwindv4@held-marketplace": true,
-    "uiux-design-vue3@held-marketplace": true,
-    "uiux-image2design@held-marketplace": true
+    "agent-team@held-plugins": true,
+    "agentic-engineering@held-plugins": true,
+    "braindump2prd@held-plugins": true,
+    "brainstorming@held-plugins": true,
+    "engineering-standards@held-plugins": true,
+    "code-review@claude-plugins-official": true,
+    "design-parity@held-plugins": true,
+    "electron-dev@held-plugins": true,
+    "equity-research@held-plugins": true,
+    "fullstack-engineering@held-plugins": true,
+    "investment-memo@held-plugins": true,
+    "pencil-pen-generator@held-plugins": true,
+    "prompt-engineering@held-plugins": true,
+    "prd2issues@held-plugins": true,
+    "uiux-design-penpot@held-plugins": true,
+    "uiux-design-system@held-plugins": true,
+    "uiux-design-tailwindv4@held-plugins": true,
+    "uiux-design-vue3@held-plugins": true,
+    "uiux-image2design@held-plugins": true
   }
 }
