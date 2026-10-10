@@ -12,8 +12,8 @@ page texts are cached next to this script so reruns skip Docling.
 """
 
 import json
-import textwrap
 import sys
+import textwrap
 from collections import Counter
 from pathlib import Path
 
